@@ -77,6 +77,35 @@ export const signIn = async (req: Request, res: Response) => {
     return res.status(500).json({ message: 'Lỗi hệ thống' })
   }
 }
+export const refresh = async (req: Request, res: Response) => {
+  try {
+    //lay refresh token từ cookie
+    const refreshToken = req.cookies.refreshToken
+    if (!refreshToken) {
+      return res.status(401).json({ message: 'không tìm thấy refresh token' })
+    }
+    //tim session trong db với refresh token
+    const session = await prisma.session.findUnique({ where: { refreshToken } })
+
+    //kiem tra session có tồn tại và chưa hết hạn
+    if (!session || session.expiresAt < new Date()) {
+      return res
+        .status(401)
+        .json({ message: 'Refresh token không hợp lệ hoặc đã hết hạn' })
+    }
+    //tạo access token
+    const accessToken = jwt.sign(
+      { userId: session.userId },
+      process.env.ACCESS_TOKEN_SECRET as string,
+      { expiresIn: '15m' }
+    )
+    //trả access về trong res
+    return res.status(200).json({ accessToken })
+  } catch (error) {
+    console.error('Lỗi làm mới access token:', error)
+    return res.status(500).json({ message: 'Lỗi hệ thống' })
+  }
+}
 export const signOut = async (req: Request, res: Response) => {
   try {
     //lay refresh token từ cookie
