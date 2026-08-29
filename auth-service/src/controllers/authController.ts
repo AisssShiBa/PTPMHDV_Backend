@@ -3,10 +3,11 @@ import { prisma } from '../config/prisma'
 import bcrypt from 'bcrypt'
 import crypto from 'crypto'
 import jwt from 'jsonwebtoken'
+const ACCESS_TOKEN_EXPIRATION = '15m'
 const REFRESH_TOKEN_EXPIRATION = 14 * 24 * 60 * 60 * 1000 // 14 ngày
 export const signUp = async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body
+    const { email, password, username, firstName, lastName } = req.body
     if (!email || !password) {
       return res.status(400).json({ message: 'Email và mật khẩu là bắt buộc' })
     }
@@ -17,6 +18,9 @@ export const signUp = async (req: Request, res: Response) => {
     const hashedPassword = await bcrypt.hash(password, 10)
     await prisma.user.create({
       data: {
+        username,
+        firstName,
+        lastName,
         email,
         password: hashedPassword
       }
@@ -30,14 +34,16 @@ export const signUp = async (req: Request, res: Response) => {
 export const signIn = async (req: Request, res: Response) => {
   try {
     // Lấy thông tin đăng nhập từ request
-    const { email, password } = req.body
-    if (!email || !password) {
-      return res.status(400).json({ message: 'Email và mật khẩu là bắt buộc' })
+    const { username, password } = req.body
+    if (!username || !password) {
+      return res
+        .status(400)
+        .json({ message: 'username và mật khẩu là bắt buộc' })
     }
     //lấy hasspassword so với password
-    const user = await prisma.user.findUnique({ where: { email } })
+    const user = await prisma.user.findUnique({ where: { username } })
     if (!user) {
-      return res.status(401).json({ message: 'email không tìm thấy' })
+      return res.status(401).json({ message: 'username  không tìm thấy' })
     }
     const passwordCorrect = await bcrypt.compare(password, user.password)
     if (!passwordCorrect) {
@@ -47,7 +53,7 @@ export const signIn = async (req: Request, res: Response) => {
     const accessToken = jwt.sign(
       { userId: user.id },
       process.env.ACCESS_TOKEN_SECRET as string,
-      { expiresIn: '15m' }
+      { expiresIn: ACCESS_TOKEN_EXPIRATION }
     )
     //tạo refreshtoken
     const refreshToken = crypto.randomBytes(64).toString('hex')
@@ -97,7 +103,7 @@ export const refresh = async (req: Request, res: Response) => {
     const accessToken = jwt.sign(
       { userId: session.userId },
       process.env.ACCESS_TOKEN_SECRET as string,
-      { expiresIn: '15m' }
+      { expiresIn: ACCESS_TOKEN_EXPIRATION }
     )
     //trả access về trong res
     return res.status(200).json({ accessToken })
@@ -123,5 +129,38 @@ export const signOut = async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Lỗi đăng xuất người dùng:', error)
     return res.status(500).json({ message: 'Lỗi hệ thống' })
+  }
+}
+export const refreshToken = async (req: Request, res: Response) => {
+  try {
+    //lay refresh token từ cookie
+    const token = req.cookies?.refreshToken as string | undefined
+    if (!token) {
+      return res.status(401).json({ message: 'token không tồn tại' })
+    }
+    //so sanh refresh token trong cookie với refresh token trong db
+    const session = await prisma.session.findUnique({
+      where: { refreshToken: token }
+    })
+    if (!session) {
+      return res.status(401).json({ message: 'token hết hạn' })
+    }
+    //kiem tra refresh het han
+    if (session.expiresAt < new Date()) {
+      return res
+        .status(401)
+        .json({ message: 'token không hợp lệ hoặc hết hạn' })
+    }
+    // tao access token moi
+    const accessToken = jwt.sign(
+      { userId: session.userId },
+      process.env.ACCESS_TOKEN_SECRET as string,
+      { expiresIn: ACCESS_TOKEN_EXPIRATION }
+    )
+    //return access token moi
+    return res.status(200).json({ accessToken })
+  } catch (error) {
+    console.error('"Lỗi refresh token người dùng:', error)
+    return res.status(403).json({ message: 'Lỗi hệ thống' })
   }
 }
