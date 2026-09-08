@@ -16,6 +16,7 @@ model User {
   password  String
   createdAt DateTime  @default(now())
   sessions  Session[]
+  wallet    Wallet?
 }
 
 model Session {
@@ -27,4 +28,48 @@ model Session {
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model Wallet {
+  id               Int                 @id @default(autoincrement())
+  userId           Int                 @unique
+  balance          Decimal             @default(0) @db.Decimal(20, 2)
+  currency         String              @default("VND") @db.VarChar(3)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions     WalletTransaction[]
+  idempotencyKeys  WalletIdempotency[]
+
+  @@index([userId])
+}
+
+model WalletTransaction {
+  id           Int      @id @default(autoincrement())
+  walletId     Int
+  type         String   @db.VarChar(16)
+  amount       Decimal  @db.Decimal(20, 2)
+  balanceAfter Decimal  @db.Decimal(20, 2)
+  refId        String   @db.VarChar(255)
+  createdAt    DateTime @default(now())
+  wallet       Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  idempotency  WalletIdempotency?
+
+  @@index([walletId, createdAt])
+}
+
+model WalletIdempotency {
+  id            Int               @id @default(autoincrement())
+  key           String            @unique @db.VarChar(255)
+  walletId      Int
+  operation     String            @db.VarChar(16)
+  amount        Decimal           @db.Decimal(20, 2)
+  refId         String            @db.VarChar(255)
+  balance       Decimal           @db.Decimal(20, 2)
+  transactionId Int               @unique
+  createdAt     DateTime          @default(now())
+  wallet        Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  transaction   WalletTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, operation])
 }
