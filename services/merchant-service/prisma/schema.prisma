@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Merchant {
+  id           String         @id @default(uuid())
+  ownerId      String         @map("owner_id")
+  businessName String         @map("business_name")
+  taxId        String?        @map("tax_id")
+  bankAccount  String?        @map("bank_account")
+  status       MerchantStatus @default(PENDING)
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  deletedAt    DateTime?      @map("deleted_at")
+
+  @@index([status])
+  @@index([ownerId])
+  @@map("merchants")
+}
+
+enum MerchantStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}

@@ -1,0 +1,33 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String    @id @default(uuid())
+  authUserId  String    @unique @map("auth_user_id")
+  email       String    @unique
+  fullName    String?   @map("full_name")
+  phone       String?
+  address     String?
+  kycStatus   KycStatus @default(NONE) @map("kyc_status")
+  idNumber    String?   @map("id_number")
+  idImageUrl  String?   @map("id_image_url")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  @@index([authUserId])
+  @@map("users")
+}
+
+enum KycStatus {
+  NONE
+  PENDING
+  APPROVED
+  REJECTED
+}
