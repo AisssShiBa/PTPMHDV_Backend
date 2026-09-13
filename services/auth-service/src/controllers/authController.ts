@@ -3,32 +3,96 @@ import { prisma } from '../config/prisma'
 import bcrypt from 'bcrypt'
 import crypto from 'crypto'
 import jwt from 'jsonwebtoken'
+import { fail, success } from '../utils/response'
+import { internalApi } from '../lib/internalApi'
+import { signUpSchema } from '../validations/authValidation'
 const ACCESS_TOKEN_EXPIRATION = '15m'
 const REFRESH_TOKEN_EXPIRATION = 14 * 24 * 60 * 60 * 1000 // 14 ngày
 export const signUp = async (req: Request, res: Response) => {
   try {
-    const { email, password, username, firstName, lastName } = req.body
-    if (!email || !password) {
-      return res.status(400).json({ message: 'Email và mật khẩu là bắt buộc' })
+    const parsed = signUpSchema.safeParse(req.body)
+    if (!parsed.success) {
+      const firstError = parsed.error.issues[0]
+      return fail(res, 400, 'VALIDATION_ERROR', firstError.message)
     }
-    const duplicateUser = await prisma.user.findUnique({ where: { email } })
+
+    const { email, password, username, firstName, lastName } = parsed.data
+
+    // Kiểm tra trùng lặp Email hoặc Username
+    const duplicateUser = await prisma.user.findFirst({
+      where: { OR: [{ email }, { username }] }
+    })
+
     if (duplicateUser) {
-      return res.status(409).json({ message: 'Người dùng đã tồn tại' })
+      const field = duplicateUser.email === email ? 'Email' : 'Tên đăng nhập'
+      return fail(res, 409, 'DUPLICATE_RESOURCE', `${field} đã được sử dụng`)
     }
+
+    // Mã hóa mật khẩu
     const hashedPassword = await bcrypt.hash(password, 10)
-    await prisma.user.create({
-      data: {
-        username,
-        firstName,
-        lastName,
-        email,
-        password: hashedPassword
+
+    // Tạo Auth User trong DB của auth-service
+    const newUser = await prisma.user.create({
+      data: { username, firstName, lastName, email, password: hashedPassword }
+    })
+
+    // Lấy Correlation ID từ Middleware
+    const requestId = (req as any).requestId
+
+    // Gọi song song sang user-service (Port 3002) và wallet-service (Port 3004)
+    const results = await Promise.allSettled([
+      internalApi.post(
+        `${process.env.USER_SERVICE_URL || 'http://localhost:3002'}/api/users`,
+        { authUserId: newUser.id, email, fullName: `${firstName} ${lastName}` },
+        { headers: { 'X-Request-Id': requestId }, timeout: 2000 }
+      ),
+      internalApi.post(
+        `${process.env.WALLET_SERVICE_URL || 'http://localhost:3004'}/api/wallets`,
+        { userId: newUser.id },
+        { headers: { 'X-Request-Id': requestId }, timeout: 2000 }
+      )
+    ])
+
+    // Kiểm tra log lỗi nếu có service chưa bật hoặc bị timeout
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        const serviceName = i === 0 ? 'user-service' : 'wallet-service'
+        console.error(
+          `[SYNC ERROR] Không thể tạo dữ liệu tại ${serviceName}:`,
+          r.reason?.message,
+          '| RequestId:',
+          requestId
+        )
       }
     })
-    return res.status(200).json({ message: 'Đăng ký thành công' })
-  } catch (error) {
+
+    return success(
+      res,
+      201,
+      {
+        userId: newUser.id,
+        user: {
+          id: newUser.id,
+          username: newUser.username,
+          email: newUser.email,
+          firstName: newUser.firstName,
+          lastName: newUser.lastName,
+          role: newUser.role
+        }
+      },
+      'Đăng ký thành công'
+    )
+  } catch (error: any) {
+    if (error.code === 'P2002') {
+      return fail(
+        res,
+        409,
+        'DUPLICATE_RESOURCE',
+        'Email hoặc tên đăng nhập đã được sử dụng'
+      )
+    }
     console.error('Lỗi đăng ký người dùng:', error)
-    return res.status(500).json({ message: 'Lỗi hệ thống' })
+    return fail(res, 500, 'INTERNAL_ERROR', 'Lỗi hệ thống')
   }
 }
 export const signIn = async (req: Request, res: Response) => {
@@ -36,22 +100,26 @@ export const signIn = async (req: Request, res: Response) => {
     // Lấy thông tin đăng nhập từ request
     const { username, password } = req.body
     if (!username || !password) {
-      return res
-        .status(400)
-        .json({ message: 'username và mật khẩu là bắt buộc' })
+      return fail(
+        res,
+        400,
+        'VALIDATION_ERROR',
+        'Username và mật khẩu là bắt buộc'
+      )
     }
     //lấy hasspassword so với password
     const user = await prisma.user.findUnique({ where: { username } })
+
     if (!user) {
-      return res.status(401).json({ message: 'username  không tìm thấy' })
+      return fail(res, 401, 'USER_NOT_FOUND', 'Username không tìm thấy')
     }
     const passwordCorrect = await bcrypt.compare(password, user.password)
     if (!passwordCorrect) {
-      return res.status(401).json({ message: 'Mật khẩu không đúng' })
+      return fail(res, 401, 'INVALID_CREDENTIALS', 'Mật khẩu không đúng')
     }
     //nếu khớp tạo access token với jwt
     const accessToken = jwt.sign(
-      { userId: user.id },
+      { userId: user.id, role: user.role },
       process.env.ACCESS_TOKEN_SECRET as string,
       { expiresIn: ACCESS_TOKEN_EXPIRATION }
     )
@@ -73,14 +141,26 @@ export const signIn = async (req: Request, res: Response) => {
       sameSite: 'strict',
       maxAge: REFRESH_TOKEN_EXPIRATION
     })
-    return res.status(200).json({
-      message: 'Đăng nhập thành công',
-      accessToken
-    })
+    return success(
+      res,
+      200,
+      {
+        accessToken,
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          role: user.role
+        }
+      },
+      'Đăng nhập thành công'
+    )
     //trả access về trong res
   } catch (error) {
     console.error('Lỗi đăng nhập người dùng:', error)
-    return res.status(500).json({ message: 'Lỗi hệ thống' })
+    return fail(res, 500, 'INTERNAL_SERVER_ERROR', 'Lỗi hệ thống')
   }
 }
 export const refresh = async (req: Request, res: Response) => {
@@ -88,28 +168,54 @@ export const refresh = async (req: Request, res: Response) => {
     //lay refresh token từ cookie
     const refreshToken = req.cookies.refreshToken
     if (!refreshToken) {
-      return res.status(401).json({ message: 'không tìm thấy refresh token' })
+      return fail(
+        res,
+        401,
+        'REFRESH_TOKEN_NOT_FOUND',
+        'không tìm thấy refresh token'
+      )
     }
     //tim session trong db với refresh token
-    const session = await prisma.session.findUnique({ where: { refreshToken } })
+    const session = await prisma.session.findUnique({
+      where: { refreshToken },
+      include: { user: true }
+    })
 
     //kiem tra session có tồn tại và chưa hết hạn
     if (!session || session.expiresAt < new Date()) {
-      return res
-        .status(401)
-        .json({ message: 'Refresh token không hợp lệ hoặc đã hết hạn' })
+      return fail(
+        res,
+        401,
+        'INVALID_REFRESH_TOKEN',
+        'Refresh token không hợp lệ hoặc đã hết hạn'
+      )
     }
     //tạo access token
     const accessToken = jwt.sign(
-      { userId: session.userId },
+      { userId: session.userId, role: session.user.role },
       process.env.ACCESS_TOKEN_SECRET as string,
       { expiresIn: ACCESS_TOKEN_EXPIRATION }
     )
     //trả access về trong res
-    return res.status(200).json({ accessToken })
+    return success(
+      res,
+      200,
+      {
+        accessToken,
+        user: {
+          id: session.user.id,
+          username: session.user.username,
+          email: session.user.email,
+          firstName: session.user.firstName,
+          lastName: session.user.lastName,
+          role: session.user.role
+        }
+      },
+      'Làm mới token thành công'
+    )
   } catch (error) {
     console.error('Lỗi làm mới access token:', error)
-    return res.status(500).json({ message: 'Lỗi hệ thống' })
+    return fail(res, 500, 'INTERNAL_SERVER_ERROR', 'Lỗi hệ thống')
   }
 }
 export const signOut = async (req: Request, res: Response) => {
@@ -128,39 +234,6 @@ export const signOut = async (req: Request, res: Response) => {
     return res.sendStatus(204)
   } catch (error) {
     console.error('Lỗi đăng xuất người dùng:', error)
-    return res.status(500).json({ message: 'Lỗi hệ thống' })
-  }
-}
-export const refreshToken = async (req: Request, res: Response) => {
-  try {
-    //lay refresh token từ cookie
-    const token = req.cookies?.refreshToken as string | undefined
-    if (!token) {
-      return res.status(401).json({ message: 'token không tồn tại' })
-    }
-    //so sanh refresh token trong cookie với refresh token trong db
-    const session = await prisma.session.findUnique({
-      where: { refreshToken: token }
-    })
-    if (!session) {
-      return res.status(401).json({ message: 'token hết hạn' })
-    }
-    //kiem tra refresh het han
-    if (session.expiresAt < new Date()) {
-      return res
-        .status(401)
-        .json({ message: 'token không hợp lệ hoặc hết hạn' })
-    }
-    // tao access token moi
-    const accessToken = jwt.sign(
-      { userId: session.userId },
-      process.env.ACCESS_TOKEN_SECRET as string,
-      { expiresIn: ACCESS_TOKEN_EXPIRATION }
-    )
-    //return access token moi
-    return res.status(200).json({ accessToken })
-  } catch (error) {
-    console.error('"Lỗi refresh token người dùng:', error)
-    return res.status(403).json({ message: 'Lỗi hệ thống' })
+    return fail(res, 500, 'INTERNAL_SERVER_ERROR', 'Lỗi hệ thống')
   }
 }
