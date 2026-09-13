@@ -7,24 +7,93 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        Int       @id @default(autoincrement())
-  username  String    @unique
-  firstName String
-  lastName  String
-  email     String    @unique
-  password  String
-  createdAt DateTime  @default(now())
-  sessions  Session[]
+enum OwnerType {
+  USER
+  MERCHANT
+  SYSTEM
 }
 
-model Session {
-  id           Int      @id @default(autoincrement())
-  refreshToken String   @unique
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
-  userId       Int
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+enum WalletStatus {
+  ACTIVE
+  LOCKED
+}
 
-  @@index([userId])
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+enum TransferType {
+  TOPUP
+  PAYMENT
+  REFUND
+  P2P_TRANSFER
+  ADJUSTMENT
+}
+
+enum HoldStatus {
+  PENDING
+  CAPTURED
+  RELEASED
+  EXPIRED
+}
+
+model Wallet {
+  id            Int          @id @default(autoincrement())
+  userId        Int?         @unique
+  ownerType     OwnerType
+  balance       Decimal      @default(0) @db.Decimal(20, 2)
+  heldBalance   Decimal      @default(0) @db.Decimal(20, 2)
+  currency      String       @default("VND") @db.VarChar(3)
+  status        WalletStatus @default(ACTIVE)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  ledgerEntries LedgerEntry[]
+  holds         WalletHold[]
+
+  @@index([ownerType, status])
+}
+
+model WalletOutboxEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  topic       String    @db.VarChar(100)
+  payload     Json
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+  attempts    Int       @default(0)
+
+  @@index([publishedAt, createdAt])
+}
+
+model LedgerEntry {
+  id            BigInt          @id @default(autoincrement())
+  transactionId String          @db.Uuid
+  walletId      Int
+  direction     LedgerDirection
+  amount        Decimal         @db.Decimal(20, 2)
+  balanceAfter  Decimal         @db.Decimal(20, 2)
+  referenceId   String          @db.VarChar(255)
+  transferType  TransferType
+  note          String?         @db.VarChar(500)
+  createdAt     DateTime        @default(now())
+  wallet        Wallet          @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  @@unique([walletId, referenceId])
+  @@index([transactionId])
+  @@index([walletId, createdAt])
+}
+
+model WalletHold {
+  id            String     @id @default(uuid()) @db.Uuid
+  walletId      Int
+  amount        Decimal    @db.Decimal(20, 2)
+  referenceId   String     @db.VarChar(255)
+  status        HoldStatus @default(PENDING)
+  transactionId String?    @db.Uuid
+  expiresAt     DateTime
+  createdAt     DateTime   @default(now())
+  wallet        Wallet     @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  @@unique([walletId, referenceId])
+  @@index([status, expiresAt])
 }
