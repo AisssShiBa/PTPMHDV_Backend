@@ -14,5 +14,39 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
 
+  user-service:
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile
+    container_name: finvault-user-service
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=user_service
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+    depends_on:
+      - postgres
+
+  merchant-service:
+    build:
+      context: ./services/merchant-service
+      dockerfile: Dockerfile
+    container_name: finvault-merchant-service
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=merchant_service
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+    depends_on:
+      - postgres
+
 volumes:
   postgres_data:
