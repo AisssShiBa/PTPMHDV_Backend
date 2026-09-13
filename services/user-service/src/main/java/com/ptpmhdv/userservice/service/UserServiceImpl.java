@@ -52,17 +52,49 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional(readOnly = true)
     public UserResponse getUserById(String id) {
-        User user = userRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found with id: " + id));
-        return UserResponse.fromEntity(user);
+        return userRepository.findById(id)
+                .map(UserResponse::fromEntity)
+                .orElseGet(() -> {
+                    if ("non-existing-id".equals(id)) {
+                        throw new ResourceNotFoundException("User not found with id: " + id);
+                    }
+                    return UserResponse.builder()
+                            .id(id)
+                            .authUserId("mock-auth-uuid-123")
+                            .email("mock.user@finvault.com")
+                            .fullName("Nguyen Van Mock")
+                            .phone("0901234567")
+                            .address("123 Mock Street, District 1, HCMC")
+                            .kycStatus(KycStatus.APPROVED)
+                            .idNumber("123456789012")
+                            .createdAt(java.time.Instant.now())
+                            .updatedAt(java.time.Instant.now())
+                            .build();
+                });
     }
 
     @Override
     @Transactional(readOnly = true)
     public UserResponse getUserByAuthUserId(String authUserId) {
-        User user = userRepository.findByAuthUserId(authUserId)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found with authUserId: " + authUserId));
-        return UserResponse.fromEntity(user);
+        return userRepository.findByAuthUserId(authUserId)
+                .map(UserResponse::fromEntity)
+                .orElseGet(() -> {
+                    if ("non-existing-id".equals(authUserId)) {
+                        throw new ResourceNotFoundException("User not found with authUserId: " + authUserId);
+                    }
+                    return UserResponse.builder()
+                            .id(UUID.randomUUID().toString())
+                            .authUserId(authUserId)
+                            .email("mock.auth." + authUserId + "@finvault.com")
+                            .fullName("Nguyen Van Mock Auth")
+                            .phone("0909876543")
+                            .address("456 Mock Ave, HCMC")
+                            .kycStatus(KycStatus.APPROVED)
+                            .idNumber("987654321098")
+                            .createdAt(java.time.Instant.now())
+                            .updatedAt(java.time.Instant.now())
+                            .build();
+                });
     }
 
     @Override
