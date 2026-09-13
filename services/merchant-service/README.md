@@ -1,104 +1,72 @@
-# `merchant-service` — Hướng Dẫn Phát Triển, Chạy & Kiểm Thử Độc Lập
+# `merchant-service` — Hướng Dẫn Phát Triển & Khởi Chạy (Node.js / Express / Prisma)
 
 Dịch vụ `merchant-service` quản lý thông tin cửa hàng/đối tác (Merchant Profile), quy trình đăng ký, xét duyệt và cung cấp API xác minh trạng thái hoạt động cho dịch vụ thanh toán (`payment-service`).
 
 ---
 
-## 🚀 1. Cách Chạy Riêng Lẻ Dịch Vụ (Không Cần Docker)
+## 🚀 1. Cách Khởi Chạy Dịch Vụ (Local Development)
 
 ### Yêu cầu môi trường
-- **Java 17+** (Khuyên dùng OpenJDK 21)
-- **PostgreSQL 15+** đang chạy trên máy cục bộ (mặc định Port `5432`)
-- Cấu hình biến môi trường hoặc file `.env`
+- **Node.js 18+** (Khuyên dùng Node.js 20 LTS)
+- **PostgreSQL 15+** (Mặc định Port `5432`)
+- File cấu hình môi trường `.env`
 
-### Khai báo các Biến Môi Trường (Environment Variables)
+### Biến Môi Trường (`.env`)
 
-Bạn có thể tạo file `.env` hoặc export biến môi trường trong Terminal trước khi chạy:
+Tạo tệp `.env` tại thư mục gốc `merchant-service`:
 
-| Tên biến môi trường | Giá trị mặc định | Mô tả |
-|---|---|---|
-| `PORT` | `3003` | Cổng HTTP Server cho `merchant-service` |
-| `DB_HOST` | `localhost` | Địa chỉ PostgreSQL Database |
-| `DB_PORT` | `5432` | Cổng PostgreSQL Database |
-| `DB_NAME` | `merchant_service_db` | Tên cơ sở dữ liệu |
-| `DB_USER` | `postgres` | Tài khoản kết nối Database |
-| `DB_PASSWORD` | `postgres` | Mật khẩu kết nối Database |
-| `INTERNAL_KEY` | `default_internal_secret_key_123456` | Secret Key xác thực request giữa các microservices |
-| `JWT_SECRET` | `your_default_jwt_secret_key_must_be_at_least_32_bytes_long` | Chuỗi secret để verify JWT Token |
+```env
+PORT=3003
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/merchant_service
+JWT_SECRET=your_default_jwt_secret_key_must_be_at_least_32_bytes_long
+INTERNAL_KEY=default_internal_secret_key_123456
+CLIENT_URL=http://localhost:5173
+```
 
 ### Lệnh khởi chạy dịch vụ
 
-Mở terminal tại thư mục `merchant-service` và gõ:
+```bash
+# Cài đặt dependencies
+npm install
 
-- **Trên Windows (PowerShell/CMD)**:
-  ```powershell
-  .\mvnw spring-boot:run
-  ```
-- **Trên Linux/macOS**:
-  ```bash
-  ./mvnw spring-boot:run
-  ```
+# Chạy chế độ phát triển (Dev with Nodemon & tsx)
+npm run dev
 
-> [!TIP]
-> Bạn cũng có thể truyền trực tiếp biến môi trường khi chạy:
-> ```powershell
-> $env:PORT="3003"; $env:DB_USER="postgres"; $env:DB_PASSWORD="your_password"; .\mvnw spring-boot:run
-> ```
+# Kiểm tra biên dịch TypeScript
+npx tsc --noEmit
+
+# Chạy sản phẩm (Build & Start)
+npm run build
+npm start
+```
 
 ---
 
-## 🗄️ 2. Quy Trình Chạy Migration (Flyway)
+## 🗄️ 2. Quy Trình Database & Migration (Prisma ORM)
 
-> [!NOTE]
-> **Khác biệt quan trọng so với các Node.js Service (Prisma) của Đạt/Khoa/Nguyên:**
-> - Bên Node.js sử dụng Prisma CLI và phải gõ lệnh thủ công (`npx prisma migrate dev`).
-> - **Trong Spring Boot của Hữu**: Dùng **Flyway Migration** được tích hợp thẳng vào luồng khởi động ứng dụng.
+Dịch vụ sử dụng **Prisma ORM** để tương tác cơ sở dữ liệu PostgreSQL.
 
-### Cách thức Flyway hoạt động:
-1. Mỗi khi ứng dụng `merchant-service` khởi động (`spring-boot:run` hoặc `java -jar`), Flyway sẽ **tự động kết nối tới PostgreSQL**.
-2. Flyway quét các file SQL chứa trong thư mục `src/main/resources/db/migration/` (ví dụ `V1__init.sql`).
-3. Nếu phát hiện script migration mới chưa được chạy, Flyway sẽ **tự động thực thi SQL** để tạo/cập nhật bảng mà bạn không cần gõ thêm bất kỳ lệnh nào.
+```bash
+# Phát sinh Prisma Client
+npx prisma generate
 
-### Khi muốn tạo thêm Migration mới:
-Tạo file SQL mới trong `src/main/resources/db/migration/` tuân thủ quy tắc đặt tên của Flyway:
-- `V2__add_new_column_to_merchants.sql`
-- `V3__create_merchant_indexes.sql`
+# Đồng bộ Schema với DB (Development)
+npx prisma db push
+
+# Tạo và chạy Migration
+npx prisma migrate dev --name init
+```
 
 ---
 
 ## 📡 3. Danh Sách API Endpoints
 
-Đặc tả chi tiết xem trong tài liệu `FinVault_Huu_UserMerchantService_API.docx` hoặc [Huu_KeHoach_Final.md](file:///d:/HDV/PTPMHDV_Backend/Huu_KeHoach_Final.md).
-
 | Method | Endpoint | Yêu cầu Xác thực | Mô tả Chức năng |
 |---|---|---|---|
-| `POST` | `/api/merchants/register` | JWT User | Đăng ký hồ sơ merchant mới (Trạng thái mặc định `PENDING`) |
-| `GET` | `/api/merchants/{id}` | Public / JWT | Lấy chi tiết hồ sơ merchant theo Merchant UUID (`id`) |
-| `PUT` | `/api/merchants/{id}` | JWT (Chủ merchant / Admin) | Cập nhật thông tin merchant (`businessName`, `taxId`, `bankAccount`) |
-| `PATCH` | `/api/merchants/{id}/status` | Admin JWT / `X-Internal-Key` | Duyệt / Từ chối merchant (`APPROVED` / `REJECTED`) — gọi từ `admin-service` |
-| `GET` | `/api/merchants/{id}/active` | Header `X-Internal-Key` | Kiểm tra trạng thái active (`{ active: true/false }`) — gọi nội bộ từ `payment-service` |
+| `POST` | `/api/merchants/register` | JWT User / `X-User-Id` | Đăng ký hồ sơ merchant mới (Trạng thái mặc định `PENDING`) |
+| `GET` | `/api/merchants/:id` | Public / JWT | Lấy chi tiết hồ sơ merchant theo Merchant UUID (`id`) |
+| `PUT` | `/api/merchants/:id` | JWT (Chủ merchant / Admin) | Cập nhật thông tin merchant (`businessName`, `taxId`, `bankAccount`) |
+| `PATCH` | `/api/merchants/:id/status` | Admin JWT / `X-Internal-Key` | Duyệt / Từ chối merchant (`APPROVED` / `REJECTED`) |
+| `GET` | `/api/merchants/:id/active` | Public / Header `X-Internal-Key` | Kiểm tra trạng thái active (`{ active: true/false }`) — dùng nội bộ |
 | `GET` | `/api/merchants` | JWT (Chỉ Admin) | Xem danh sách merchant có lọc theo `status`, `search` và phân trang |
-| `GET` | `/actuator/health` | Public | Health check trạng thái ứng dụng & DB |
-| `GET` | `/swagger-ui.html` | Public | Giao diện Swagger UI tương tác API |
 
----
-
-## 🧪 4. Cách Chạy Unit Test Riêng Lẻ
-
-Dự án đã thiết lập cấu hình chạy test trên bộ nhớ tạm **H2 Database (In-Memory)** nên bạn có thể chạy test bất kỳ lúc nào mà **không cần bật PostgreSQL**.
-
-Mở terminal tại thư mục `merchant-service` và thực hiện:
-
-```bash
-# Chạy toàn bộ bộ test
-./mvnw test
-```
-
-### Kết quả mong đợi
-Tất cả các bài test trong `MerchantServiceTest` và `MerchantServiceApplicationTests` sẽ thực thi thành công:
-```text
-[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0
-[INFO] ------------------------------------------------------------------------
-[INFO] BUILD SUCCESS
-[INFO] ------------------------------------------------------------------------
-```
