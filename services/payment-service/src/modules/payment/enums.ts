@@ -1,0 +1,21 @@
+export enum PaymentType {
+  CARD_TOPUP = 'CARD_TOPUP',
+  BUS_TICKET = 'BUS_TICKET',
+  MOVIE_TICKET = 'MOVIE_TICKET',
+  TRAIN_TICKET = 'TRAIN_TICKET',
+  WALLET_TRANSFER = 'WALLET_TRANSFER'
+}
+
+export enum PaymentStatus {
+  PENDING = 'PENDING',
+  SUCCESS = 'SUCCESS',
+  FAILED = 'FAILED',
+  REFUNDED = 'REFUNDED',
+  CANCELLED = 'CANCELLED'
+}
+
+export enum OutboxEventStatus {
+  PENDING = 'PENDING',
+  SENT = 'SENT',
+  FAILED = 'FAILED'
+}
