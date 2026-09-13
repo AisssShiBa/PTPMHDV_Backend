@@ -7,24 +7,24 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        Int       @id @default(autoincrement())
-  username  String    @unique
-  firstName String
-  lastName  String
-  email     String    @unique
-  password  String
-  createdAt DateTime  @default(now())
-  sessions  Session[]
+model Merchant {
+  id           String         @id @default(uuid())
+  ownerId      String         @map("owner_id")
+  businessName String         @map("business_name")
+  taxId        String?        @map("tax_id")
+  bankAccount  String?        @map("bank_account")
+  status       MerchantStatus @default(PENDING)
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  deletedAt    DateTime?      @map("deleted_at")
+
+  @@index([status])
+  @@index([ownerId])
+  @@map("merchants")
 }
 
-model Session {
-  id           Int      @id @default(autoincrement())
-  refreshToken String   @unique
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
-  userId       Int
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
+enum MerchantStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }

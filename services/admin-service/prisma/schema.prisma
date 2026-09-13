@@ -7,24 +7,14 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        Int       @id @default(autoincrement())
-  username  String    @unique
-  firstName String
-  lastName  String
-  email     String    @unique
-  password  String
-  createdAt DateTime  @default(now())
-  sessions  Session[]
-}
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  adminId    String                 // userId của admin thực hiện hành động
+  action     String                 // ví dụ: "APPROVE_KYC", "REJECT_MERCHANT"
+  targetId   String                 // id của user/merchant bị tác động
+  detail     String?                // ghi chú thêm nếu có
+  createdAt  DateTime @default(now())
 
-model Session {
-  id           Int      @id @default(autoincrement())
-  refreshToken String   @unique
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
-  userId       Int
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
+  @@index([adminId])
+  @@index([targetId])
 }

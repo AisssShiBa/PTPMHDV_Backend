@@ -1,38 +1,42 @@
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
-import { prisma } from '../config/prisma'
-export const protectedRoute = async (
+import { fail } from '../utils/response'
+
+// Interface định nghĩa Payload của Access Token
+interface JwtPayload {
+  userId: string
+  role: string
+}
+
+export const protectedRoute = (
   req: Request,
   res: Response,
   next: NextFunction
 ) => {
   try {
     const authHeader = req.headers.authorization
-    const token = authHeader?.split(' ')[1]
+    const token = authHeader?.split(' ')[1] // Lấy chuỗi token sau chữ 'Bearer'
 
     if (!token) {
-      return res.status(401).json({ message: 'Chưa đăng nhập' })
+      return fail(res, 401, 'UNAUTHORIZED', 'Chưa đăng nhập hoặc thiếu Token')
     }
 
+    // 1. Chỉ giải mã và kiểm tra chữ ký Token (Mất ~0ms, không tốn I/O truy vấn DB)
     const decoded = jwt.verify(
       token,
       process.env.ACCESS_TOKEN_SECRET as string
-    ) as { userId: number }
+    ) as JwtPayload
 
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      select: { id: true, email: true, createdAt: true }
-    })
-
-    if (!user) {
-      return res.status(401).json({ message: 'Người dùng không tồn tại' })
+    // 2. Gắn thẳng payload đã giải mã vào req.user để các Controller phía sau dùng
+    ;(req as any).user = {
+      id: decoded.userId,
+      role: decoded.role
     }
-    // Gắn thông tin người dùng vào request để sử dụng trong các middleware hoặc route tiếp theo
-    ;(req as any).user = user
+
+    // 3. Cho phép request đi tiếp
     next()
   } catch (error) {
-    return res
-      .status(401)
-      .json({ message: 'Token không hợp lệ hoặc đã hết hạn' })
+    // Catch toàn bộ lỗi do jwt.verify quăng ra (Token hết hạn, sai secret, sai định dạng)
+    return fail(res, 401, 'INVALID_TOKEN', 'Token không hợp lệ hoặc đã hết hạn')
   }
 }
