@@ -1,19 +1,20 @@
+// D:\PTPMHDV\Backend\gateway\src\middlewares\authenticate.ts
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
 import { fail } from '../utils/response'
+import { env } from '../config/services'
 
 interface JwtPayload {
     userId: string
     role: string
 }
 
-// Cấu hình rõ ràng: Method + Đường dẫn nào là PUBLIC
+// Danh sách các API công khai không cần đăng nhập (khớp Method + Path)
 const PUBLIC_ROUTES: Array<{ method: string; path: RegExp | string }> = [
     { method: 'POST', path: '/api/auth/signup' },
     { method: 'POST', path: '/api/auth/signin' },
     { method: 'POST', path: '/api/auth/refresh' },
-    { method: 'POST', path: '/api/auth/signout' },
-    { method: 'GET', path: '/health' },
+    { method: 'POST', path: '/api/auth/signout' }
 ]
 
 const isPublicRoute = (req: Request): boolean => {
@@ -30,28 +31,24 @@ const isPublicRoute = (req: Request): boolean => {
 }
 
 export const authenticate = (req: Request, res: Response, next: NextFunction) => {
-    // 1. Cho qua nếu là route public
+    // 1. Cho qua nếu là route công khai
     if (isPublicRoute(req)) {
         return next()
     }
 
-    // 2. Kiểm tra Bearer Token
+    // 2. Kiểm tra định dạng Authorization Header: "Bearer <token>"
     const authHeader = req.headers.authorization
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return fail(res, 401, 'UNAUTHORIZED', 'Bạn cần đăng nhập để truy cập tài nguyên này')
     }
 
-    const token = authHeader.substring(7) // Lấy phần chuỗi sau 'Bearer '
+    const token = authHeader.substring(7)
 
     try {
-        const secret = process.env.ACCESS_TOKEN_SECRET
-        if (!secret) {
-            throw new Error('Chưa cấu hình ACCESS_TOKEN_SECRET trên Gateway')
-        }
+        // 3. Giải mã và kiểm tra chữ ký số của Token
+        const decoded = jwt.verify(token, env.accessTokenSecret) as JwtPayload
 
-        const decoded = jwt.verify(token, secret) as JwtPayload
-
-        // 3. Inject thông tin đã xác thực vào headers để chuyển tiếp cho downstream service
+        // 4. Đóng dấu danh tính vào headers để service phía sau sử dụng
         req.headers['x-user-id'] = decoded.userId
         req.headers['x-user-role'] = decoded.role
         req.headers['x-gateway-verified'] = 'true'
