@@ -1,26 +1,30 @@
-import { Injectable, Logger, NotFoundException, ConflictException, InternalServerErrorException } from '@nestjs/common';
-import { CheckoutDto } from './dto';
-import { PaymentStatus, OutboxEventStatus } from './enums';
+import { DomainException } from '../../utils/domain.exception';
+export interface CheckoutDto {
+  userId: string;
+  amount: number;
+  type: PaymentType;
+  referenceId?: string;
+  callbackTopic: string;
+  idempotencyKey: string;
+}
+import { PaymentStatus, OutboxEventStatus, PaymentType } from './enums';
 import { MockDbService, PaymentMock } from './mock-db.service';
 import { randomUUID } from 'crypto';
 
-@Injectable()
 export class PaymentService {
-  private readonly logger = new Logger(PaymentService.name);
-
-  constructor(private db: MockDbService) {}
+  constructor(private db: MockDbService = new MockDbService()) {}
 
   async checkout(dto: CheckoutDto) {
     const existing = this.db.payments.find(p => p.idempotencyKey === dto.idempotencyKey);
     if (existing) {
-      this.logger.log(`Idempotency key ${dto.idempotencyKey} already exists. Returning existing payment.`);
+      console.log(`Idempotency key ${dto.idempotencyKey} already exists. Returning existing payment.`);
       return existing;
     }
 
     const payment: PaymentMock = {
       id: randomUUID(),
       userId: dto.userId,
-      amount: dto.amount,
+      amount: dto.amount.toString(),
       type: dto.type,
       referenceId: dto.referenceId,
       callbackTopic: dto.callbackTopic,
@@ -45,9 +49,9 @@ export class PaymentService {
 
   async confirm(id: string) {
     const payment = this.db.payments.find(p => p.id === id);
-    if (!payment) throw new NotFoundException('Payment not found');
+    if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
     if (payment.status !== PaymentStatus.PENDING) {
-      throw new ConflictException(`Payment is in ${payment.status} status. Cannot confirm.`);
+      throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot confirm.`);
     }
 
     try {
@@ -94,7 +98,7 @@ export class PaymentService {
 
       return payment;
     } catch (error: any) {
-      this.logger.error(`Confirm payment failed for ${id}:`, error);
+      console.error(`Confirm payment failed for ${id}:`, error);
 
       // Failed
       payment.status = PaymentStatus.FAILED;
@@ -126,9 +130,9 @@ export class PaymentService {
 
   async refund(id: string) {
     const payment = this.db.payments.find(p => p.id === id);
-    if (!payment) throw new NotFoundException('Payment not found');
+    if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
     if (payment.status !== PaymentStatus.SUCCESS) {
-      throw new ConflictException(`Payment is in ${payment.status} status. Cannot refund.`);
+      throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot refund.`);
     }
 
     try {
@@ -172,16 +176,16 @@ export class PaymentService {
 
       return payment;
     } catch (error: any) {
-      this.logger.error(`Refund payment failed for ${id}:`, error);
-      throw new InternalServerErrorException('Refund failed');
+      console.error(`Refund payment failed for ${id}:`, error);
+      throw new DomainException(500, 'INTERNAL_ERROR', 'Refund failed');
     }
   }
 
   async cancel(id: string) {
     const payment = this.db.payments.find(p => p.id === id);
-    if (!payment) throw new NotFoundException('Payment not found');
+    if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
     if (payment.status !== PaymentStatus.PENDING) {
-      throw new ConflictException(`Payment is in ${payment.status} status. Cannot cancel.`);
+      throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot cancel.`);
     }
 
     payment.status = PaymentStatus.CANCELLED;

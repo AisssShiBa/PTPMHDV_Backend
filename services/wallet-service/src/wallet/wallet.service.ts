@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from "@nestjs/common";
+const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, CONFLICT: 409, INTERNAL_SERVER_ERROR: 500 };
 import {
   HoldStatus,
   LedgerDirection,
@@ -9,7 +9,7 @@ import {
   WalletStatus,
 } from "@prisma/client";
 import { randomUUID } from "crypto";
-import { DomainException } from "../common/domain.exception";
+import { DomainException } from "../utils/domain.exception";
 import {
   AdjustDto,
   CreateWalletDto,
@@ -44,7 +44,6 @@ export function walletView(wallet: Wallet) {
   };
 }
 
-@Injectable()
 export class WalletService {
   constructor() {
     // Đảm bảo luôn có ví SYSTEM
