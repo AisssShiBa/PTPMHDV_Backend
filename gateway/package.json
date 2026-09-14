@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon --exec tsx src/server.ts",
-    "start": "tsx src/server.ts",
+    "start": "npx tsx src/server.ts",
     "test": "tsx test-gateway.ts"
   },
   "keywords": [],

@@ -44,5 +44,27 @@ services:
     depends_on:
       - postgres
 
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: finvault-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - ACCESS_TOKEN_SECRET=d7aec1b51b32d434b4c2e29f6b7e12ad0ea34f68ad9203c91f244d95f87adeb7dc6bc157976ffeedc6b1b5a109fc01d7c419d69bcf59d873e65e4409f88f9f64
+      - CLIENT_URL=http://localhost:5173
+      - USER_SERVICE_URL=http://user-service:3002
+      - MERCHANT_SERVICE_URL=http://merchant-service:3003
+      - AUTH_SERVICE_URL=http://localhost:3001
+      - WALLET_SERVICE_URL=http://localhost:3004
+      - PAYMENT_SERVICE_URL=http://localhost:3005
+      - NOTIFICATION_SERVICE_URL=http://localhost:3006
+      - ADMIN_SERVICE_URL=http://localhost:3007
+    depends_on:
+      - user-service
+      - merchant-service
+
 volumes:
   postgres_data:
