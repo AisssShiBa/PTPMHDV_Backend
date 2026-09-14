@@ -12,8 +12,8 @@ export const validate = (schema: ZodSchema) => {
       
       // Override req with validated and transformed data
       req.body = validData.body;
-      req.query = validData.query;
-      req.params = validData.params;
+      Object.defineProperty(req, 'query', { value: validData.query, writable: true, configurable: true });
+      Object.defineProperty(req, 'params', { value: validData.params, writable: true, configurable: true });
 
       return next();
     } catch (error) {
