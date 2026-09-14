@@ -3,6 +3,7 @@ import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import merchantRoute from './routes/merchantRoute'
 import { attachRequestId } from './middlewares/requestId'
+import { requireGateway } from './middlewares/requireGateway'
 
 const app = express()
 
@@ -32,6 +33,11 @@ app.use(
   })
 )
 
-app.use('/api/merchants', merchantRoute)
+// Health Check Endpoints
+app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', service: 'merchant-service' }))
+app.get('/api/merchants/health', (_req, res) => res.status(200).json({ status: 'ok', service: 'merchant-service' }))
+
+// Protected routes (must pass through Gateway or internal call)
+app.use('/api/merchants', requireGateway, merchantRoute)
 
 export default app

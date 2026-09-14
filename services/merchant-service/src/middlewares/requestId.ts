@@ -7,6 +7,7 @@ export interface RequestWithContext extends Request {
   userId?: string
   userRole?: string
   isInternalCall?: boolean
+  isGatewayVerified?: boolean
 }
 
 export function attachRequestId(req: RequestWithContext, res: Response, next: NextFunction) {
@@ -17,6 +18,7 @@ export function attachRequestId(req: RequestWithContext, res: Response, next: Ne
 
   const internalKey = req.headers['x-internal-key'] as string
   req.isInternalCall = Boolean(internalKey && internalKey === env.internalKey)
+  req.isGatewayVerified = req.headers['x-gateway-verified'] === 'true'
 
   req.userId = (req.headers['x-user-id'] as string) || (req.headers['user-id'] as string) || undefined
   req.userRole = (req.headers['x-user-role'] as string) || (req.headers['user-role'] as string) || 'USER'
