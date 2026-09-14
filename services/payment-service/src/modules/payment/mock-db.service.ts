@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import { PaymentStatus, OutboxEventStatus, PaymentType } from './enums';
 
 export interface PaymentMock {
@@ -35,7 +34,6 @@ export interface OutboxEventMock {
   sentAt?: Date;
 }
 
-@Injectable()
 export class MockDbService {
   public payments: PaymentMock[] = [
     {
