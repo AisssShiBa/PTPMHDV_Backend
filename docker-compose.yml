@@ -44,6 +44,18 @@ services:
     depends_on:
       - postgres
 
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: finvault-notification-service
+    ports:
+      - "3006:3006"
+    environment:
+      - PORT=3006
+    depends_on:
+      - postgres
+
   gateway:
     build:
       context: ./gateway
@@ -60,11 +72,12 @@ services:
       - AUTH_SERVICE_URL=http://localhost:3001
       - WALLET_SERVICE_URL=http://localhost:3004
       - PAYMENT_SERVICE_URL=http://localhost:3005
-      - NOTIFICATION_SERVICE_URL=http://localhost:3006
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3006
       - ADMIN_SERVICE_URL=http://localhost:3007
     depends_on:
       - user-service
       - merchant-service
+      - notification-service
 
 volumes:
   postgres_data:
