@@ -6,15 +6,3 @@ export const NotificationType = {
   MERCHANT_APPROVED: 'MERCHANT_APPROVED',
   MERCHANT_REJECTED: 'MERCHANT_REJECTED'
 } as const
-
-export type NotificationTypeValue =
-  (typeof NotificationType)[keyof typeof NotificationType]
-
-export interface Notification {
-  id: string
-  userId: string
-  type: NotificationTypeValue
-  message: string
-  read: boolean
-  createdAt: string
-}

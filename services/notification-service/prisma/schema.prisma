@@ -7,24 +7,22 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        Int       @id @default(autoincrement())
-  username  String    @unique
-  firstName String
-  lastName  String
-  email     String    @unique
-  password  String
-  createdAt DateTime  @default(now())
-  sessions  Session[]
+enum NotificationType {
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  KYC_APPROVED
+  KYC_REJECTED
+  MERCHANT_APPROVED
+  MERCHANT_REJECTED
 }
 
-model Session {
-  id           Int      @id @default(autoincrement())
-  refreshToken String   @unique
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
-  userId       Int
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  message   String
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
 
   @@index([userId])
 }

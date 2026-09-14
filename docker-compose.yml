@@ -53,6 +53,7 @@ services:
       - "3006:3006"
     environment:
       - PORT=3006
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/notification_service
     depends_on:
       - postgres
 

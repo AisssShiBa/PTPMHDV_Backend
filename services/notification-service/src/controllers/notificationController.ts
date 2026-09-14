@@ -1,10 +1,5 @@
 import { Request, Response } from 'express'
-import {
-  createMockNotification,
-  findByUserId,
-  markAllRead,
-  markRead
-} from '../mock/notificationStore'
+import { prisma } from '../config/prisma'
 import { NotificationType } from '../types/notification'
 
 export const createNotification = async (req: Request, res: Response) => {
@@ -16,7 +11,9 @@ export const createNotification = async (req: Request, res: Response) => {
     if (!(type in NotificationType)) {
       return res.status(400).json({ message: `type không hợp lệ: ${type}` })
     }
-    const notification = createMockNotification({ userId, type, message })
+    const notification = await prisma.notification.create({
+      data: { userId, type, message }
+    })
     return res.status(201).json({
       message: 'Tạo thông báo thành công',
       data: notification
@@ -29,7 +26,10 @@ export const createNotification = async (req: Request, res: Response) => {
 
 export const getNotifications = async (req: Request, res: Response) => {
   const { userId } = req.params as { userId: string }
-  const notifications = findByUserId(userId)
+  const notifications = await prisma.notification.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' }
+  })
   const unreadCount = notifications.filter((item) => !item.read).length
   return res.status(200).json({
     userId,
@@ -39,23 +39,34 @@ export const getNotifications = async (req: Request, res: Response) => {
 }
 
 export const markNotificationRead = async (req: Request, res: Response) => {
-  const { id } = req.params as { id: string }
-  const notification = markRead(id)
-  if (!notification) {
-    return res.status(404).json({ message: 'Không tìm thấy thông báo' })
+  try {
+    const { id } = req.params as { id: string }
+    const notification = await prisma.notification.update({
+      where: { id },
+      data: { read: true }
+    })
+    return res.status(200).json({
+      message: 'Đánh dấu đã đọc thành công',
+      data: notification
+    })
+  } catch (error) {
+    if ((error as { code?: string }).code === 'P2025') {
+      return res.status(404).json({ message: 'Không tìm thấy thông báo' })
+    }
+    console.error('Lỗi đánh dấu đã đọc:', error)
+    return res.status(500).json({ message: 'Lỗi hệ thống' })
   }
-  return res.status(200).json({
-    message: 'Đánh dấu đã đọc thành công',
-    data: notification
-  })
 }
 
 export const markAllNotificationsRead = async (req: Request, res: Response) => {
   const { userId } = req.params as { userId: string }
-  const updatedCount = markAllRead(userId)
+  const result = await prisma.notification.updateMany({
+    where: { userId, read: false },
+    data: { read: true }
+  })
   return res.status(200).json({
     message: 'Đánh dấu tất cả đã đọc thành công',
     userId,
-    updatedCount
+    updatedCount: result.count
   })
 }
