@@ -50,21 +50,10 @@ export async function registerMerchant(req: RequestWithContext, res: Response) {
       data: merchant,
       message: 'Merchant registration submitted successfully'
     })
-  } catch {
-    const mockMerchant: MerchantResponse = {
-      id: 'm-mock-' + Date.now(),
-      ownerId,
-      businessName: String(businessName).trim(),
-      taxId: taxId || null,
-      bankAccount: bankAccount || null,
-      status: 'PENDING',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }
-    return res.status(201).json({
-      success: true,
-      data: mockMerchant,
-      message: 'Merchant registration submitted successfully (mock fallback)'
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
     })
   }
 }
@@ -73,29 +62,19 @@ export async function getMerchantById(req: RequestWithContext, res: Response) {
   const id = String(req.params.id)
   try {
     const merchant = await prisma.merchant.findUnique({ where: { id } })
-    if (merchant) {
-      return res.json({ success: true, data: merchant })
+    if (!merchant) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Merchant not found' }
+      })
     }
-  } catch {
-    // Ignore DB error for mock fallback
+    return res.json({ success: true, data: merchant })
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
+    })
   }
-
-  const mockMerchant: MerchantResponse = {
-    id,
-    ownerId: 'mock-owner-uuid-123',
-    businessName: 'FinVault Mock Store',
-    taxId: '0123456789',
-    bankAccount: '999988887777',
-    status: 'APPROVED',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  }
-
-  return res.json({
-    success: true,
-    data: mockMerchant,
-    message: 'Merchant retrieved (mock fallback)'
-  })
 }
 
 export async function updateMerchant(req: RequestWithContext, res: Response) {
@@ -103,10 +82,18 @@ export async function updateMerchant(req: RequestWithContext, res: Response) {
   const { businessName, taxId, bankAccount } = req.body
 
   try {
+    const existing = await prisma.merchant.findUnique({ where: { id } })
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Merchant not found' }
+      })
+    }
+
     const updated = await prisma.merchant.update({
       where: { id },
       data: {
-        ...(businessName && { businessName: String(businessName).trim() }),
+        ...(businessName !== undefined && { businessName: String(businessName).trim() }),
         ...(taxId !== undefined && { taxId: taxId ? String(taxId).trim() : null }),
         ...(bankAccount !== undefined && { bankAccount: bankAccount ? String(bankAccount).trim() : null })
       }
@@ -116,21 +103,10 @@ export async function updateMerchant(req: RequestWithContext, res: Response) {
       data: updated,
       message: 'Merchant profile updated successfully'
     })
-  } catch {
-    const mockMerchant: MerchantResponse = {
-      id,
-      ownerId: req.userId || 'mock-owner-uuid-123',
-      businessName: businessName || 'FinVault Mock Store',
-      taxId: taxId || '0123456789',
-      bankAccount: bankAccount || '999988887777',
-      status: 'APPROVED',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }
-    return res.json({
-      success: true,
-      data: mockMerchant,
-      message: 'Merchant profile updated successfully (mock fallback)'
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
     })
   }
 }
@@ -154,6 +130,14 @@ export async function updateMerchantStatus(req: RequestWithContext, res: Respons
   }
 
   try {
+    const existing = await prisma.merchant.findUnique({ where: { id } })
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Merchant not found' }
+      })
+    }
+
     const updated = await prisma.merchant.update({
       where: { id },
       data: { status }
@@ -163,11 +147,10 @@ export async function updateMerchantStatus(req: RequestWithContext, res: Respons
       data: updated,
       message: `Merchant status updated to ${status}`
     })
-  } catch {
-    return res.json({
-      success: true,
-      data: { id, status },
-      message: `Merchant status updated to ${status} (mock fallback)`
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
     })
   }
 }
@@ -176,32 +159,27 @@ export async function checkMerchantActive(req: RequestWithContext, res: Response
   const id = String(req.params.id)
   try {
     const merchant = await prisma.merchant.findUnique({ where: { id } })
-    if (merchant) {
-      const activeResponse: MerchantActiveResponse = {
-        id: merchant.id,
-        ownerId: merchant.ownerId,
-        businessName: merchant.businessName,
-        status: merchant.status,
-        active: merchant.status === 'APPROVED'
-      }
-      return res.json({ success: true, data: activeResponse })
+    if (!merchant) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Merchant not found' }
+      })
     }
-  } catch {
-    // DB offline/empty -> Fallback to mock active response
-  }
 
-  const mockActive: MerchantActiveResponse = {
-    id,
-    ownerId: 'mock-owner-uuid-123',
-    businessName: 'FinVault Mock Store',
-    status: 'APPROVED',
-    active: true
+    const activeResponse: MerchantActiveResponse = {
+      id: merchant.id,
+      ownerId: merchant.ownerId,
+      businessName: merchant.businessName,
+      status: merchant.status,
+      active: merchant.status === 'APPROVED'
+    }
+    return res.json({ success: true, data: activeResponse })
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
+    })
   }
-
-  return res.json({
-    success: true,
-    data: mockActive
-  })
 }
 
 export async function getMerchants(req: RequestWithContext, res: Response) {
@@ -246,26 +224,10 @@ export async function getMerchants(req: RequestWithContext, res: Response) {
     }
 
     return res.json({ success: true, data: pageResponse })
-  } catch {
-    const mockMerchants: MerchantResponse[] = [
-      {
-        id: 'm-mock-1',
-        ownerId: 'user-owner-1',
-        businessName: 'FinVault Store 1',
-        taxId: '0123456789',
-        bankAccount: '999988887777',
-        status: 'APPROVED',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ]
-    const pageResponse: PageResponse<MerchantResponse> = {
-      content: mockMerchants,
-      page: 1,
-      limit: 10,
-      totalElements: 1,
-      totalPages: 1
-    }
-    return res.json({ success: true, data: pageResponse })
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
+    })
   }
 }

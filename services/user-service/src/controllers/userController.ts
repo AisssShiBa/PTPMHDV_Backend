@@ -26,48 +26,31 @@ export async function createUser(req: RequestWithContext, res: Response) {
     }
 
     // Check duplicate
-    try {
-      const existing = await prisma.user.findFirst({
-        where: { OR: [{ authUserId }, { email }] }
-      })
-      if (existing) {
-        const response: ApiResponse<null> = {
-          success: false,
-          error: { code: 'DUPLICATE_RESOURCE', message: 'User with authUserId or email already exists' }
-        }
-        return res.status(409).json(response)
+    const existing = await prisma.user.findFirst({
+      where: { OR: [{ authUserId }, { email }] }
+    })
+    if (existing) {
+      const response: ApiResponse<null> = {
+        success: false,
+        error: { code: 'DUPLICATE_RESOURCE', message: 'User with authUserId or email already exists' }
       }
+      return res.status(409).json(response)
+    }
 
-      const newUser = await prisma.user.create({
-        data: {
-          authUserId,
-          email,
-          kycStatus: 'NONE'
-        }
-      })
-
-      const response: ApiResponse<UserResponse> = {
-        success: true,
-        data: newUser,
-        message: 'User profile created successfully'
-      }
-      return res.status(201).json(response)
-    } catch {
-      // Prisma error fallback or mock create
-      const mockUser: UserResponse = {
-        id: req.body.id || 'usr-mock-' + Date.now(),
+    const newUser = await prisma.user.create({
+      data: {
         authUserId,
         email,
-        kycStatus: 'NONE',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        kycStatus: 'NONE'
       }
-      return res.status(201).json({
-        success: true,
-        data: mockUser,
-        message: 'User profile created successfully (mock fallback)'
-      })
+    })
+
+    const response: ApiResponse<UserResponse> = {
+      success: true,
+      data: newUser,
+      message: 'User profile created successfully'
     }
+    return res.status(201).json(response)
   } catch (err: any) {
     return res.status(500).json({
       success: false,
@@ -80,63 +63,38 @@ export async function getUserById(req: RequestWithContext, res: Response) {
   const id = String(req.params.id)
   try {
     const user = await prisma.user.findUnique({ where: { id } })
-    if (user) {
-      return res.json({ success: true, data: user })
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'User not found' }
+      })
     }
-  } catch {
-    // Ignore DB error and fallback to Mock
+    return res.json({ success: true, data: user })
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
+    })
   }
-
-  // Fallback Mock Response for seamless testing
-  const mockUser: UserResponse = {
-    id,
-    authUserId: 'mock-auth-uuid-123',
-    email: 'mock.user@finvault.com',
-    fullName: 'Nguyen Van Mock',
-    phone: '0901234567',
-    address: '123 Mock Street, District 1, HCMC',
-    kycStatus: 'APPROVED',
-    idNumber: '123456789012',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  }
-
-  return res.json({
-    success: true,
-    data: mockUser,
-    message: 'Profile retrieved (mock fallback)'
-  })
 }
 
 export async function getUserByAuthUserId(req: RequestWithContext, res: Response) {
   const authUserId = String(req.params.authUserId)
   try {
     const user = await prisma.user.findUnique({ where: { authUserId } })
-    if (user) {
-      return res.json({ success: true, data: user })
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'User profile not found' }
+      })
     }
-  } catch {
-    // Ignore DB error and fallback to Mock
+    return res.json({ success: true, data: user })
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
+    })
   }
-
-  const mockUser: UserResponse = {
-    id: 'usr-' + authUserId,
-    authUserId,
-    email: `mock.auth.${authUserId}@finvault.com`,
-    fullName: 'Nguyen Van Mock Auth',
-    phone: '0909876543',
-    address: '456 Mock Ave, HCMC',
-    kycStatus: 'APPROVED',
-    idNumber: '987654321098',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  }
-
-  return res.json({
-    success: true,
-    data: mockUser,
-    message: 'Profile retrieved by authUserId (mock fallback)'
-  })
 }
 
 export async function updateUser(req: RequestWithContext, res: Response) {
@@ -144,12 +102,20 @@ export async function updateUser(req: RequestWithContext, res: Response) {
   const { fullName, phone, address } = req.body
 
   try {
+    const existing = await prisma.user.findUnique({ where: { id } })
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'User not found' }
+      })
+    }
+
     const updated = await prisma.user.update({
       where: { id },
       data: {
-        ...(fullName && { fullName: String(fullName).trim() }),
-        ...(phone && { phone: String(phone).trim() }),
-        ...(address && { address: String(address).trim() })
+        ...(fullName !== undefined && { fullName: String(fullName).trim() }),
+        ...(phone !== undefined && { phone: String(phone).trim() }),
+        ...(address !== undefined && { address: String(address).trim() })
       }
     })
     return res.json({
@@ -157,22 +123,10 @@ export async function updateUser(req: RequestWithContext, res: Response) {
       data: updated,
       message: 'User profile updated successfully'
     })
-  } catch {
-    const mockUser: UserResponse = {
-      id,
-      authUserId: 'mock-auth-uuid-123',
-      email: 'mock.user@finvault.com',
-      fullName: fullName || 'Nguyen Van Mock Updated',
-      phone: phone || '0901234567',
-      address: address || 'Updated Mock Address',
-      kycStatus: 'APPROVED',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }
-    return res.json({
-      success: true,
-      data: mockUser,
-      message: 'User profile updated successfully (mock fallback)'
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
     })
   }
 }
@@ -189,6 +143,14 @@ export async function submitKyc(req: RequestWithContext, res: Response) {
   }
 
   try {
+    const existing = await prisma.user.findUnique({ where: { id } })
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'User not found' }
+      })
+    }
+
     const updated = await prisma.user.update({
       where: { id },
       data: {
@@ -202,22 +164,10 @@ export async function submitKyc(req: RequestWithContext, res: Response) {
       data: updated,
       message: 'KYC information submitted successfully'
     })
-  } catch {
-    const mockUser: UserResponse = {
-      id,
-      authUserId: 'mock-auth-uuid-123',
-      email: 'mock.user@finvault.com',
-      fullName: 'Nguyen Van Mock',
-      kycStatus: 'PENDING',
-      idNumber,
-      idImageUrl,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }
-    return res.json({
-      success: true,
-      data: mockUser,
-      message: 'KYC information submitted successfully (mock fallback)'
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
     })
   }
 }
@@ -241,6 +191,14 @@ export async function updateKycStatus(req: RequestWithContext, res: Response) {
   }
 
   try {
+    const existing = await prisma.user.findUnique({ where: { id } })
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'User not found' }
+      })
+    }
+
     const updated = await prisma.user.update({
       where: { id },
       data: { kycStatus }
@@ -250,11 +208,10 @@ export async function updateKycStatus(req: RequestWithContext, res: Response) {
       data: updated,
       message: `User KYC status updated to ${kycStatus}`
     })
-  } catch {
-    return res.json({
-      success: true,
-      data: { id, kycStatus },
-      message: `User KYC status updated to ${kycStatus} (mock fallback)`
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
     })
   }
 }
@@ -301,25 +258,10 @@ export async function getUsers(req: RequestWithContext, res: Response) {
     }
 
     return res.json({ success: true, data: pageResponse })
-  } catch {
-    const mockUsers: UserResponse[] = [
-      {
-        id: 'usr-mock-1',
-        authUserId: 'auth-1',
-        email: 'user1@example.com',
-        fullName: 'User One',
-        kycStatus: 'APPROVED',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ]
-    const pageResponse: PageResponse<UserResponse> = {
-      content: mockUsers,
-      page: 1,
-      limit: 10,
-      totalElements: 1,
-      totalPages: 1
-    }
-    return res.json({ success: true, data: pageResponse })
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Internal server error' }
+    })
   }
 }

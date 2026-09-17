@@ -7,6 +7,8 @@
     "dev": "nodemon --exec tsx src/server.ts",
     "start": "tsx src/server.ts",
     "build": "tsc",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate",
     "test": "echo \"Error: no test specified\" && exit 0"
   },
   "keywords": [],
