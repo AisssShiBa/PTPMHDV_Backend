@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import app from './app';
-import { startOutboxScheduler } from './modules/payment/outbox.scheduler';
+import { startOutboxScheduler } from './services/outbox.scheduler';
 
 const port = process.env.PORT || 3005;
 

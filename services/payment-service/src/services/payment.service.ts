@@ -1,4 +1,4 @@
-import { DomainException } from '../../utils/domain.exception';
+import { DomainException } from '../utils/domain.exception';
 export interface CheckoutDto {
   userId: string;
   amount: number;
@@ -7,7 +7,7 @@ export interface CheckoutDto {
   callbackTopic: string;
   idempotencyKey: string;
 }
-import { PaymentStatus, OutboxEventStatus, PaymentType } from './enums';
+import { PaymentStatus, OutboxEventStatus, PaymentType } from '../utils/enums';
 import { MockDbService, PaymentMock } from './mock-db.service';
 import { randomUUID } from 'crypto';
 

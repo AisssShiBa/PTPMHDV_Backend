@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { OutboxEventStatus } from './enums';
+import { OutboxEventStatus } from '../utils/enums';
 import { MockDbService } from './mock-db.service';
 
 const db = new MockDbService();

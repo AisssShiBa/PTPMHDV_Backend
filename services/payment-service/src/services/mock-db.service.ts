@@ -1,4 +1,4 @@
-import { PaymentStatus, OutboxEventStatus, PaymentType } from './enums';
+import { PaymentStatus, OutboxEventStatus, PaymentType } from '../utils/enums';
 
 export interface PaymentMock {
   id: string;

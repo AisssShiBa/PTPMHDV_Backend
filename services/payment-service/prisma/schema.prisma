@@ -1,14 +1,73 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum PaymentType {
+  CARD_TOPUP
+  BUS_TICKET
+  MOVIE_TICKET
+  TRAIN_TICKET
+  WALLET_TRANSFER
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+enum OutboxEventStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model Payment {
+  id             String           @id @default(uuid()) @db.Uuid
+  userId         String           @db.VarChar(50)
+  amount         Decimal          @db.Decimal(20, 2)
+  type           PaymentType
+  referenceId    String           @db.VarChar(255)
+  callbackTopic  String           @db.VarChar(100)
+  idempotencyKey String           @unique @db.VarChar(255)
+  status         PaymentStatus    @default(PENDING)
+  failureReason  String?          @db.Text
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  histories      PaymentHistory[]
+
+  @@index([userId, createdAt])
+  @@index([status])
+}
+
+model PaymentHistory {
+  id         String         @id @default(uuid()) @db.Uuid
+  paymentId  String         @db.Uuid
+  fromStatus PaymentStatus?
+  toStatus   PaymentStatus
+  note       String?        @db.Text
+  changedAt  DateTime       @default(now())
+  payment    Payment        @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+}
+
+model OutboxEvent {
+  id          String            @id @default(uuid()) @db.Uuid
+  aggregateId String            @db.VarChar(255)
+  eventType   String            @db.VarChar(100)
+  topic       String            @db.VarChar(100)
+  payload     Json
+  status      OutboxEventStatus @default(PENDING)
+  createdAt   DateTime          @default(now())
+  sentAt      DateTime?         @db.Timestamp()
+
+  @@index([status, createdAt])
 }

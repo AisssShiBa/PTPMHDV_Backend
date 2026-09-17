@@ -40,7 +40,7 @@ enum HoldStatus {
 
 model Wallet {
   id            Int          @id @default(autoincrement())
-  userId        Int?         @unique
+  userId        String?      @unique @db.VarChar(50)
   ownerType     OwnerType
   balance       Decimal      @default(0) @db.Decimal(20, 2)
   heldBalance   Decimal      @default(0) @db.Decimal(20, 2)

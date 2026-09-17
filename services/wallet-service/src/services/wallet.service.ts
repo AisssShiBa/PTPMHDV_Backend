@@ -18,7 +18,7 @@ import {
   HistoryQueryDto,
   ListWalletsDto,
   TransferDto,
-} from "./dto";
+} from "../dtos/wallet.dto";
 
 // --- MOCK DATA STORE ---
 const mockWallets: Wallet[] = [];
@@ -50,7 +50,7 @@ export class WalletService {
     if (!mockWallets.find((w) => w.ownerType === OwnerType.SYSTEM)) {
       mockWallets.push({
         id: 999999,
-        userId: 0,
+        userId: "0",
         ownerType: OwnerType.SYSTEM,
         balance: new Prisma.Decimal(0),
         heldBalance: new Prisma.Decimal(0),
@@ -76,7 +76,7 @@ export class WalletService {
     }
 
     const existing = mockWallets.find(
-      (w) => Number(w.userId) === Number(dto.userId) && w.ownerType === ownerType,
+      (w) => w.userId === dto.userId && w.ownerType === ownerType,
     );
     if (existing) {
       return { wallet: existing, created: false };
@@ -100,7 +100,7 @@ export class WalletService {
   /**
    * Lấy thông tin số dư của ví. (Mock)
    */
-  async getBalance(userId: number, ownerType: OwnerType = OwnerType.USER) {
+  async getBalance(userId: string, ownerType: OwnerType = OwnerType.USER) {
     return this.findWallet(userId, ownerType);
   }
 
@@ -108,7 +108,7 @@ export class WalletService {
    * Tạo lệnh giữ tiền. (Mock)
    */
   async createHold(
-    userId: number,
+    userId: string,
     amountValue: string,
     referenceId: string,
     expiresAtValue: string,
@@ -166,7 +166,7 @@ export class WalletService {
    * Thực thi (capture) lệnh giữ tiền. (Mock)
    */
   async captureHold(
-    userId: number,
+    userId: string,
     referenceId: string,
     ownerType: OwnerType = OwnerType.USER,
   ) {
@@ -231,7 +231,7 @@ export class WalletService {
    * Hủy lệnh giữ tiền. (Mock)
    */
   async releaseHold(
-    userId: number,
+    userId: string,
     referenceId: string,
     ownerType: OwnerType = OwnerType.USER,
   ) {
@@ -295,7 +295,7 @@ export class WalletService {
    * Nạp tiền vào ví. (Mock)
    */
   async credit(
-    userId: number,
+    userId: string,
     dto: CreditDto,
     ownerType: OwnerType = OwnerType.USER,
   ) {
@@ -318,7 +318,7 @@ export class WalletService {
    * Trừ tiền trực tiếp. (Mock)
    */
   async debit(
-    userId: number,
+    userId: string,
     dto: DebitDto,
     ownerType: OwnerType = OwnerType.USER,
   ) {
@@ -340,7 +340,7 @@ export class WalletService {
    * Điều chỉnh số dư thủ công. (Mock)
    */
   async adjust(
-    userId: number,
+    userId: string,
     dto: AdjustDto,
     ownerType: OwnerType = OwnerType.USER,
   ) {
@@ -364,7 +364,7 @@ export class WalletService {
    * Khóa hoặc mở khóa ví. (Mock)
    */
   async setLock(
-    userId: number,
+    userId: string,
     locked: boolean,
     ownerType: OwnerType = OwnerType.USER,
   ) {
@@ -376,7 +376,7 @@ export class WalletService {
   /**
    * Lấy lịch sử biến động số dư. (Mock)
    */
-  async getHistory(userId: number, query: HistoryQueryDto) {
+  async getHistory(userId: string, query: HistoryQueryDto) {
     const ownerType = query.ownerType ?? OwnerType.USER;
     const wallet = this.findWallet(userId, ownerType);
     const to = query.to ? new Date(query.to) : new Date();
@@ -408,7 +408,7 @@ export class WalletService {
     let filtered = mockWallets;
     if (query.userId)
       filtered = filtered.filter(
-        (w) => Number(w.userId) === Number(query.userId),
+        (w) => w.userId === query.userId,
       );
     if (query.ownerType)
       filtered = filtered.filter((w) => w.ownerType === query.ownerType);
@@ -465,9 +465,9 @@ export class WalletService {
     return mockWallets.find((w) => w.ownerType === OwnerType.SYSTEM)!;
   }
 
-  private findWallet(userId: number | string, ownerType: OwnerType): Wallet {
+  private findWallet(userId: string, ownerType: OwnerType): Wallet {
     const wallet = mockWallets.find(
-      (w) => Number(w.userId) === Number(userId) && w.ownerType === ownerType,
+      (w) => w.userId === userId && w.ownerType === ownerType,
     );
     if (!wallet)
       throw new DomainException(

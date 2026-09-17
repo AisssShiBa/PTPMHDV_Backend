@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { WalletService, decimalToString, walletView } from '../wallet/wallet.service';
+import { WalletService, decimalToString, walletView } from '../services/wallet.service';
 import { OwnerType } from '@prisma/client';
 
 const walletService = new WalletService();
@@ -12,7 +12,7 @@ export const create = async (req: Request, res: Response) => {
 export const getBalance = async (req: Request, res: Response) => {
   const userId = req.params.userId;
   const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
-  const wallet = await walletService.getBalance(Number(userId), ownerType);
+  const wallet = await walletService.getBalance(userId, ownerType);
   res.json({ success: true, data: {
     balance: decimalToString(wallet.balance),
     heldBalance: decimalToString(wallet.heldBalance),
@@ -26,7 +26,7 @@ export const hold = async (req: Request, res: Response) => {
   const userId = req.params.userId;
   const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
   const { amount, referenceId, expiresAt } = req.body;
-  const { hold, replayed } = await walletService.createHold(Number(userId), amount, referenceId, expiresAt, ownerType);
+  const { hold, replayed } = await walletService.createHold(userId, amount, referenceId, expiresAt, ownerType);
   res.json({ success: true, data: {
     id: hold.id,
     amount: decimalToString(hold.amount),
@@ -41,7 +41,7 @@ export const capture = async (req: Request, res: Response) => {
   const userId = req.params.userId;
   const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
   const { referenceId } = req.body;
-  const result = await walletService.captureHold(Number(userId), referenceId, ownerType);
+  const result = await walletService.captureHold(userId, referenceId, ownerType);
   res.json({ success: true, data: {
     balance: decimalToString(result.balance),
     transactionId: result.transactionId,
@@ -53,7 +53,7 @@ export const release = async (req: Request, res: Response) => {
   const userId = req.params.userId;
   const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
   const { referenceId } = req.body;
-  const { hold, replayed } = await walletService.releaseHold(Number(userId), referenceId, ownerType);
+  const { hold, replayed } = await walletService.releaseHold(userId, referenceId, ownerType);
   res.json({ success: true, data: { id: hold.id, status: hold.status, replayed } });
 };
 
@@ -70,7 +70,7 @@ export const transfer = async (req: Request, res: Response) => {
 export const credit = async (req: Request, res: Response) => {
   const userId = req.params.userId;
   const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
-  const result = await walletService.credit(Number(userId), req.body, ownerType);
+  const result = await walletService.credit(userId, req.body, ownerType);
   res.json({ success: true, data: {
     balance: decimalToString(result.destinationWallet.balance),
     transactionId: result.transactionId,
@@ -81,7 +81,7 @@ export const credit = async (req: Request, res: Response) => {
 export const debit = async (req: Request, res: Response) => {
   const userId = req.params.userId;
   const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
-  const result = await walletService.debit(Number(userId), req.body, ownerType);
+  const result = await walletService.debit(userId, req.body, ownerType);
   res.json({ success: true, data: {
     balance: decimalToString(result.sourceWallet.balance),
     transactionId: result.transactionId,
@@ -92,7 +92,7 @@ export const debit = async (req: Request, res: Response) => {
 export const history = async (req: Request, res: Response) => {
   const userId = req.params.userId;
   const query: any = req.query;
-  const result = await walletService.getHistory(Number(userId), query);
+  const result = await walletService.getHistory(userId, query);
   res.json({ success: true, data: {
     items: result.entries.map((entry: any) => ({
       id: entry.id.toString(),
