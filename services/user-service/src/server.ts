@@ -7,7 +7,8 @@ async function startServer() {
     await prisma.$connect()
     console.log('User service: Connected to Postgres DB via Prisma successfully')
   } catch (err) {
-    console.warn('User service: DB connection warning (falling back to Mock mode):', err)
+    console.error('User service: DB connection failed:', err)
+    process.exit(1)
   }
 
   app.listen(env.port, () => {
