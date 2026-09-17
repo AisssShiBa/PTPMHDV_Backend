@@ -4,13 +4,15 @@ import { WalletService } from './wallet.service';
 const walletService = new WalletService();
 
 export const startHoldScheduler = () => {
-  // Chạy mỗi 1 phút thay vì theo mili giây cho đơn giản
-  cron.schedule('* * * * *', async () => {
+  cron.schedule('*/10 * * * * *', async () => {
     try {
-      const released = await walletService.releaseExpiredHolds();
-      if (released > 0) console.log(`Released ${released} expired wallet hold(s)`);
+      const count = await walletService.releaseExpiredHolds();
+      if (count > 0) {
+        console.log(`[Wallet] Released ${count} expired holds`);
+      }
     } catch (error) {
-      console.error('Could not release expired wallet holds', error);
+      console.error('[Wallet Hold Scheduler Error]', error);
     }
   });
+  console.log('Wallet Hold Scheduler started (runs every 10 seconds)');
 };

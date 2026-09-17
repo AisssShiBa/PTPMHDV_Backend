@@ -4,6 +4,7 @@ import {
   LedgerDirection,
   OwnerType,
   Prisma,
+  PrismaClient,
   TransferType,
   Wallet,
   WalletStatus,
@@ -20,10 +21,7 @@ import {
   TransferDto,
 } from "../dtos/wallet.dto";
 
-// --- MOCK DATA STORE ---
-const mockWallets: Wallet[] = [];
-const mockHolds: any[] = [];
-const mockLedgers: any[] = [];
+const prisma = new PrismaClient();
 
 export function decimalToString(value: Prisma.Decimal): string {
   return value.toFixed(2);
@@ -46,67 +44,66 @@ export function walletView(wallet: Wallet) {
 
 export class WalletService {
   constructor() {
-    // Đảm bảo luôn có ví SYSTEM
-    if (!mockWallets.find((w) => w.ownerType === OwnerType.SYSTEM)) {
-      mockWallets.push({
-        id: 999999,
-        userId: "0",
-        ownerType: OwnerType.SYSTEM,
-        balance: new Prisma.Decimal(0),
-        heldBalance: new Prisma.Decimal(0),
-        currency: "VND",
-        status: WalletStatus.ACTIVE,
-        createdAt: new Date(),
-        updatedAt: new Date(),
+    this.ensureSystemWallet();
+  }
+
+  private async ensureSystemWallet() {
+    try {
+      const existing = await prisma.wallet.findFirst({
+        where: { ownerType: OwnerType.SYSTEM }
       });
+      if (!existing) {
+        await prisma.wallet.create({
+          data: {
+            userId: "0",
+            ownerType: OwnerType.SYSTEM,
+            currency: "VND",
+            status: WalletStatus.ACTIVE,
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Failed to create SYSTEM wallet', e);
     }
   }
 
-  /**
-   * Tạo ví mới cho người dùng. (Mock)
-   */
+  // Tạo ví nếu đã có thì trả created: false và wallet: existing về json chứ không báo lỗi.
   async createWallet(dto: CreateWalletDto) {
     const ownerType = dto.ownerType ?? OwnerType.USER;
     if (ownerType === OwnerType.SYSTEM) {
-      throw new DomainException(
-        HttpStatus.BAD_REQUEST,
-        "INVALID_OWNER_TYPE",
-        "SYSTEM wallets are managed by wallet-service only",
-      );
+      throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_OWNER_TYPE", "SYSTEM wallets are managed by wallet-service only");
     }
 
-    const existing = mockWallets.find(
-      (w) => w.userId === dto.userId && w.ownerType === ownerType,
-    );
-    if (existing) {
-      return { wallet: existing, created: false };
-    }
+    return await prisma.$transaction(async (tx) => {
+      const existing = await tx.wallet.findFirst({
+        where: { userId: dto.userId, ownerType }
+      });
+      if (existing) {
+        return { wallet: existing, created: false };
+      }
 
-    const wallet: Wallet = {
-      id: mockWallets.length + 1,
-      userId: dto.userId,
-      ownerType,
-      currency: dto.currency ?? "VND",
-      balance: new Prisma.Decimal(0),
-      heldBalance: new Prisma.Decimal(0),
-      status: WalletStatus.ACTIVE,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    mockWallets.push(wallet);
-    return { wallet, created: true };
+      const wallet = await tx.wallet.create({
+        data: {
+          userId: dto.userId,
+          ownerType,
+          currency: dto.currency ?? "VND",
+          status: WalletStatus.ACTIVE,
+        }
+      });
+      return { wallet, created: true };
+    });
   }
 
-  /**
-   * Lấy thông tin số dư của ví. (Mock)
-   */
+  // Trước khi lấy số dư cần kiểm tra ví có tồn tại hay không.
   async getBalance(userId: string, ownerType: OwnerType = OwnerType.USER) {
-    return this.findWallet(userId, ownerType);
+    const wallet = await prisma.wallet.findFirst({
+      where: { userId, ownerType }
+    });
+    if (!wallet) throw new DomainException(HttpStatus.NOT_FOUND, "WALLET_NOT_FOUND", "Wallet was not found");
+    return wallet;
   }
 
-  /**
-   * Tạo lệnh giữ tiền. (Mock)
-   */
+  // Đặt giữ tiền tránh cho các giao dịch khác dùng quá tiền khi yêu cầu này chưa được xử lý.
   async createHold(
     userId: string,
     amountValue: string,
@@ -117,368 +114,339 @@ export class WalletService {
     const amount = this.money(amountValue);
     const expiresAt = new Date(expiresAtValue);
     if (expiresAt.getTime() <= Date.now()) {
-      throw new DomainException(
-        HttpStatus.BAD_REQUEST,
-        "INVALID_HOLD_EXPIRY",
-        "expiresAt must be in the future",
-      );
+      throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_HOLD_EXPIRY", "expiresAt must be in the future");
     }
 
-    const wallet = this.findWallet(userId, ownerType);
+    return await prisma.$transaction(async (tx) => {
+      const wallet = await this.findWalletTx(tx, userId, ownerType);
 
-    const existing = mockHolds.find(
-      (h) => h.walletId === wallet.id && h.referenceId === referenceId,
-    );
-    if (existing) {
-      if (!existing.amount.eq(amount)) {
-        throw this.conflict(
-          "REFERENCE_ID_REUSED",
-          "referenceId was used with a different amount",
-        );
+      const existing = await tx.walletHold.findUnique({
+        where: { walletId_referenceId: { walletId: wallet.id, referenceId } }
+      });
+
+      if (existing) {
+        if (!existing.amount.equals(amount)) {
+          throw this.conflict("REFERENCE_ID_REUSED", "referenceId was used with a different amount");
+        }
+        return { hold: existing, replayed: true };
       }
-      return { hold: existing, replayed: true };
-    }
 
-    this.assertWalletActive(wallet);
-    if (wallet.balance.sub(wallet.heldBalance).lt(amount)) {
-      throw this.insufficientBalance();
-    }
+      this.assertWalletActive(wallet);
+      if (wallet.balance.sub(wallet.heldBalance).lt(amount)) {
+        throw this.insufficientBalance();
+      }
 
-    wallet.heldBalance = wallet.heldBalance.add(amount);
+      const updatedWallet = await tx.wallet.update({
+        where: { id: wallet.id },
+        data: { heldBalance: { increment: amount } }
+      });
 
-    const hold = {
-      id: randomUUID(),
-      walletId: wallet.id,
-      amount,
-      referenceId,
-      expiresAt,
-      status: HoldStatus.PENDING,
-      transactionId: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    mockHolds.push(hold);
+      const hold = await tx.walletHold.create({
+        data: {
+          walletId: wallet.id,
+          amount,
+          referenceId,
+          expiresAt,
+          status: HoldStatus.PENDING,
+        }
+      });
 
-    return { hold, replayed: false };
+      return { hold, replayed: false };
+    });
   }
 
-  /**
-   * Thực thi (capture) lệnh giữ tiền. (Mock)
-   */
   async captureHold(
     userId: string,
     referenceId: string,
     ownerType: OwnerType = OwnerType.USER,
   ) {
-    const wallet = this.findWallet(userId, ownerType);
-    const hold = mockHolds.find(
-      (h) => h.walletId === wallet.id && h.referenceId === referenceId,
-    );
+    return await prisma.$transaction(async (tx) => {
+      const wallet = await this.findWalletTx(tx, userId, ownerType);
+      const hold = await tx.walletHold.findUnique({
+        where: { walletId_referenceId: { walletId: wallet.id, referenceId } }
+      });
 
-    if (!hold)
-      throw new DomainException(
-        HttpStatus.NOT_FOUND,
-        "HOLD_NOT_FOUND",
-        "Hold was not found",
-      );
+      if (!hold) throw new DomainException(HttpStatus.NOT_FOUND, "HOLD_NOT_FOUND", "Hold was not found");
 
-    if (hold.status === HoldStatus.CAPTURED) {
+      if (hold.status === HoldStatus.CAPTURED) {
+        return { expired: false, balance: wallet.balance, transactionId: hold.transactionId, replayed: true };
+      }
+
+      if (hold.status === HoldStatus.RELEASED || hold.status === HoldStatus.EXPIRED) {
+        throw this.conflict("HOLD_NOT_CAPTURABLE", "Hold has already been released");
+      }
+
+      if (hold.expiresAt.getTime() <= Date.now()) {
+        await tx.wallet.update({
+          where: { id: wallet.id },
+          data: { heldBalance: { decrement: hold.amount } }
+        });
+        await tx.walletHold.update({
+          where: { id: hold.id },
+          data: { status: HoldStatus.EXPIRED }
+        });
+        throw this.conflict("HOLD_EXPIRED", "Hold has expired and was released");
+      }
+
+      const systemWallet = await this.getSystemWalletTx(tx);
+      const movement = await this.moveMoneyTxInternal(tx, {
+        fromWallet: wallet,
+        toWallet: systemWallet,
+        amount: hold.amount,
+        referenceId,
+        transferType: TransferType.PAYMENT,
+        consumeHeldFrom: true,
+      });
+
+      await tx.walletHold.update({
+        where: { id: hold.id },
+        data: {
+          status: HoldStatus.CAPTURED,
+          transactionId: movement.transactionId
+        }
+      });
+
       return {
         expired: false,
-        balance: wallet.balance,
-        transactionId: hold.transactionId,
-        replayed: true,
+        balance: movement.sourceWallet.balance,
+        transactionId: movement.transactionId,
+        replayed: movement.replayed,
       };
-    }
-    if (
-      hold.status === HoldStatus.RELEASED ||
-      hold.status === HoldStatus.EXPIRED
-    ) {
-      throw this.conflict(
-        "HOLD_NOT_CAPTURABLE",
-        "Hold has already been released",
-      );
-    }
-
-    if (hold.expiresAt.getTime() <= Date.now()) {
-      wallet.heldBalance = wallet.heldBalance.sub(hold.amount);
-      hold.status = HoldStatus.EXPIRED;
-      throw this.conflict("HOLD_EXPIRED", "Hold has expired and was released");
-    }
-
-    const systemWallet = this.getSystemWallet();
-    const movement = this.moveMoneyTx({
-      fromWallet: wallet,
-      toWallet: systemWallet,
-      amount: hold.amount,
-      referenceId,
-      transferType: TransferType.PAYMENT,
-      consumeHeldFrom: true,
     });
-
-    hold.status = HoldStatus.CAPTURED;
-    hold.transactionId = movement.transactionId;
-
-    return {
-      expired: false,
-      balance: movement.sourceWallet.balance,
-      transactionId: movement.transactionId,
-      replayed: movement.replayed,
-    };
   }
 
-  /**
-   * Hủy lệnh giữ tiền. (Mock)
-   */
   async releaseHold(
     userId: string,
     referenceId: string,
     ownerType: OwnerType = OwnerType.USER,
   ) {
-    const wallet = this.findWallet(userId, ownerType);
-    const hold = mockHolds.find(
-      (h) => h.walletId === wallet.id && h.referenceId === referenceId,
-    );
+    return await prisma.$transaction(async (tx) => {
+      const wallet = await this.findWalletTx(tx, userId, ownerType);
+      const hold = await tx.walletHold.findUnique({
+        where: { walletId_referenceId: { walletId: wallet.id, referenceId } }
+      });
 
-    if (!hold)
-      throw new DomainException(
-        HttpStatus.NOT_FOUND,
-        "HOLD_NOT_FOUND",
-        "Hold was not found",
-      );
-    if (hold.status === HoldStatus.CAPTURED)
-      throw this.conflict(
-        "HOLD_ALREADY_CAPTURED",
-        "Captured holds cannot be released",
-      );
-    if (
-      hold.status === HoldStatus.RELEASED ||
-      hold.status === HoldStatus.EXPIRED
-    ) {
-      return { hold, replayed: true };
-    }
+      if (!hold) throw new DomainException(HttpStatus.NOT_FOUND, "HOLD_NOT_FOUND", "Hold was not found");
+      if (hold.status === HoldStatus.CAPTURED) throw this.conflict("HOLD_ALREADY_CAPTURED", "Captured holds cannot be released");
+      if (hold.status === HoldStatus.RELEASED || hold.status === HoldStatus.EXPIRED) {
+        return { hold, replayed: true };
+      }
 
-    const status =
-      hold.expiresAt.getTime() <= Date.now()
-        ? HoldStatus.EXPIRED
-        : HoldStatus.RELEASED;
-    wallet.heldBalance = wallet.heldBalance.sub(hold.amount);
-    hold.status = status;
+      const status = hold.expiresAt.getTime() <= Date.now() ? HoldStatus.EXPIRED : HoldStatus.RELEASED;
 
-    return { hold, replayed: false };
-  }
+      await tx.wallet.update({
+        where: { id: wallet.id },
+        data: { heldBalance: { decrement: hold.amount } }
+      });
 
-  /**
-   * Chuyển tiền từ ví này sang ví khác. (Mock)
-   */
-  async transfer(dto: TransferDto) {
-    if (dto.fromUserId === dto.toUserId)
-      throw new DomainException(
-        HttpStatus.BAD_REQUEST,
-        "SAME_WALLET_TRANSFER",
-        "Wallets must differ",
-      );
-    const amount = this.money(dto.amount);
-    const from = this.findWallet(dto.fromUserId, OwnerType.USER);
-    const to = this.findWallet(dto.toUserId, OwnerType.USER);
+      const updatedHold = await tx.walletHold.update({
+        where: { id: hold.id },
+        data: { status }
+      });
 
-    return this.moveMoneyTx({
-      fromWallet: from,
-      toWallet: to,
-      amount,
-      referenceId: dto.referenceId,
-      transferType: TransferType.P2P_TRANSFER,
+      return { hold: updatedHold, replayed: false };
     });
   }
 
-  /**
-   * Nạp tiền vào ví. (Mock)
-   */
-  async credit(
-    userId: string,
-    dto: CreditDto,
-    ownerType: OwnerType = OwnerType.USER,
-  ) {
-    console.log('CREDIT API CALLED:', { userId, type: typeof userId });
+  async transfer(dto: TransferDto) {
+    if (dto.fromUserId === dto.toUserId) throw new DomainException(HttpStatus.BAD_REQUEST, "SAME_WALLET_TRANSFER", "Wallets must differ");
+    const amount = this.money(dto.amount);
+
+    return await prisma.$transaction(async (tx) => {
+      const from = await this.findWalletTx(tx, dto.fromUserId, OwnerType.USER);
+      const to = await this.findWalletTx(tx, dto.toUserId, OwnerType.USER);
+
+      return await this.moveMoneyTxInternal(tx, {
+        fromWallet: from,
+        toWallet: to,
+        amount,
+        referenceId: dto.referenceId,
+        transferType: TransferType.P2P_TRANSFER,
+      });
+    });
+  }
+
+  async credit(userId: string, dto: CreditDto, ownerType: OwnerType = OwnerType.USER) {
     const transferType = dto.transferType ?? TransferType.TOPUP;
     const amount = this.money(dto.amount);
-    const destination = this.findWallet(userId, ownerType);
-    const systemWallet = this.getSystemWallet();
 
-    return this.moveMoneyTx({
-      fromWallet: systemWallet,
-      toWallet: destination,
-      amount,
-      referenceId: dto.referenceId,
-      transferType,
+    return await prisma.$transaction(async (tx) => {
+      const destination = await this.findWalletTx(tx, userId, ownerType);
+      const systemWallet = await this.getSystemWalletTx(tx);
+
+      return await this.moveMoneyTxInternal(tx, {
+        fromWallet: systemWallet,
+        toWallet: destination,
+        amount,
+        referenceId: dto.referenceId,
+        transferType,
+      });
     });
   }
 
-  /**
-   * Trừ tiền trực tiếp. (Mock)
-   */
-  async debit(
-    userId: string,
-    dto: DebitDto,
-    ownerType: OwnerType = OwnerType.USER,
-  ) {
+  async debit(userId: string, dto: DebitDto, ownerType: OwnerType = OwnerType.USER) {
     const transferType = dto.transferType ?? TransferType.PAYMENT;
     const amount = this.money(dto.amount);
-    const source = this.findWallet(userId, ownerType);
-    const systemWallet = this.getSystemWallet();
 
-    return this.moveMoneyTx({
-      fromWallet: source,
-      toWallet: systemWallet,
-      amount,
-      referenceId: dto.referenceId,
-      transferType,
+    return await prisma.$transaction(async (tx) => {
+      const source = await this.findWalletTx(tx, userId, ownerType);
+      const systemWallet = await this.getSystemWalletTx(tx);
+
+      return await this.moveMoneyTxInternal(tx, {
+        fromWallet: source,
+        toWallet: systemWallet,
+        amount,
+        referenceId: dto.referenceId,
+        transferType,
+      });
     });
   }
 
-  /**
-   * Điều chỉnh số dư thủ công. (Mock)
-   */
-  async adjust(
-    userId: string,
-    dto: AdjustDto,
-    ownerType: OwnerType = OwnerType.USER,
-  ) {
+  async adjust(userId: string, dto: AdjustDto, ownerType: OwnerType = OwnerType.USER) {
     const amount = this.money(dto.amount);
-    const userWallet = this.findWallet(userId, ownerType);
-    const systemWallet = this.getSystemWallet();
     const userIsSource = dto.direction === LedgerDirection.DEBIT;
 
-    return this.moveMoneyTx({
-      fromWallet: userIsSource ? userWallet : systemWallet,
-      toWallet: userIsSource ? systemWallet : userWallet,
-      amount,
-      referenceId: dto.referenceId,
-      transferType: TransferType.ADJUSTMENT,
-      note: dto.reason,
-      bypassLockedFrom: userIsSource,
+    return await prisma.$transaction(async (tx) => {
+      const userWallet = await this.findWalletTx(tx, userId, ownerType);
+      const systemWallet = await this.getSystemWalletTx(tx);
+
+      return await this.moveMoneyTxInternal(tx, {
+        fromWallet: userIsSource ? userWallet : systemWallet,
+        toWallet: userIsSource ? systemWallet : userWallet,
+        amount,
+        referenceId: dto.referenceId,
+        transferType: TransferType.ADJUSTMENT,
+        note: dto.reason,
+        bypassLockedFrom: userIsSource,
+      });
     });
   }
 
-  /**
-   * Khóa hoặc mở khóa ví. (Mock)
-   */
-  async setLock(
-    userId: string,
-    locked: boolean,
-    ownerType: OwnerType = OwnerType.USER,
-  ) {
-    const wallet = this.findWallet(userId, ownerType);
-    wallet.status = locked ? WalletStatus.LOCKED : WalletStatus.ACTIVE;
-    return wallet;
+  async setLock(userId: string, locked: boolean, ownerType: OwnerType = OwnerType.USER) {
+    const status = locked ? WalletStatus.LOCKED : WalletStatus.ACTIVE;
+    const wallet = await prisma.wallet.findFirst({ where: { userId, ownerType } });
+    if (!wallet) throw new DomainException(HttpStatus.NOT_FOUND, "WALLET_NOT_FOUND", "Wallet was not found");
+
+    return await prisma.wallet.update({
+      where: { id: wallet.id },
+      data: { status }
+    });
   }
 
-  /**
-   * Lấy lịch sử biến động số dư. (Mock)
-   */
   async getHistory(userId: string, query: HistoryQueryDto) {
     const ownerType = query.ownerType ?? OwnerType.USER;
-    const wallet = this.findWallet(userId, ownerType);
+    const wallet = await prisma.wallet.findFirst({ where: { userId, ownerType } });
+    if (!wallet) throw new DomainException(HttpStatus.NOT_FOUND, "WALLET_NOT_FOUND", "Wallet was not found");
+
     const to = query.to ? new Date(query.to) : new Date();
-    const from = query.from
-      ? new Date(query.from)
-      : new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-    const entries = mockLedgers
-      .filter(
-        (l) =>
-          l.walletId === wallet.id && l.createdAt >= from && l.createdAt <= to,
-      )
-      .sort((a, b) => b.id - a.id);
-
+    const from = query.from ? new Date(query.from) : new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
-    const paginated = entries.slice((page - 1) * limit, page * limit);
 
-    return { entries: paginated, total: entries.length, page, limit, from, to };
+    const [entries, total] = await Promise.all([
+      prisma.ledgerEntry.findMany({
+        where: {
+          walletId: wallet.id,
+          createdAt: { gte: from, lte: to }
+        },
+        orderBy: { id: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.ledgerEntry.count({
+        where: {
+          walletId: wallet.id,
+          createdAt: { gte: from, lte: to }
+        }
+      })
+    ]);
+
+    const serializedEntries = entries.map(e => ({
+      ...e,
+      id: e.id.toString(),
+    }));
+
+    return { entries: serializedEntries, total, page, limit, from, to };
   }
 
-  /**
-   * Lấy danh sách ví. (Mock)
-   */
   async listWallets(query: ListWalletsDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
-    let filtered = mockWallets;
-    if (query.userId)
-      filtered = filtered.filter(
-        (w) => w.userId === query.userId,
-      );
-    if (query.ownerType)
-      filtered = filtered.filter((w) => w.ownerType === query.ownerType);
-    if (query.status)
-      filtered = filtered.filter((w) => w.status === query.status);
+    const where: any = {};
+    if (query.userId) where.userId = query.userId;
+    if (query.ownerType) where.ownerType = query.ownerType;
+    if (query.status) where.status = query.status;
 
-    const paginated = filtered.slice((page - 1) * limit, page * limit);
-    return { wallets: paginated, total: filtered.length, page, limit };
+    const [wallets, total] = await Promise.all([
+      prisma.wallet.findMany({
+        where,
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.wallet.count({ where })
+    ]);
+
+    return { wallets, total, page, limit };
   }
 
-  /**
-   * Đối soát số dư ví. (Mock)
-   */
+  // Đang phát triển thêm.
   async reconcile() {
-    return mockWallets.map((w) => {
-      const entries = mockLedgers.filter((l) => l.walletId === w.id);
-      let ledgerBalance = new Prisma.Decimal(0);
-      for (const e of entries) {
-        if (e.direction === LedgerDirection.CREDIT)
-          ledgerBalance = ledgerBalance.add(e.amount);
-        else ledgerBalance = ledgerBalance.sub(e.amount);
-      }
-      return {
-        walletId: w.id,
-        userId: w.userId,
-        ownerType: w.ownerType,
-        balance: decimalToString(w.balance),
-        ledgerBalance: decimalToString(ledgerBalance),
-        matched: w.balance.eq(ledgerBalance),
-      };
-    });
+    throw new DomainException(HttpStatus.INTERNAL_SERVER_ERROR, "NOT_IMPLEMENTED", "Reconciliation with real DB requires batch aggregation");
   }
 
   async releaseExpiredHolds(limit = 100) {
-    const candidates = mockHolds.filter(
-      (h) =>
-        h.status === HoldStatus.PENDING && h.expiresAt.getTime() < Date.now(),
-    );
+    const holds = await prisma.walletHold.findMany({
+      where: {
+        status: HoldStatus.PENDING,
+        expiresAt: { lt: new Date() }
+      },
+      take: limit
+    });
+
     let released = 0;
-    for (const hold of candidates) {
-      const wallet = mockWallets.find((w) => w.id === hold.walletId);
-      if (wallet) {
-        wallet.heldBalance = wallet.heldBalance.sub(hold.amount);
-        hold.status = HoldStatus.EXPIRED;
-        released++;
+    for (const hold of holds) {
+      try {
+        await prisma.$transaction(async (tx) => {
+          const currentHold = await tx.walletHold.findUnique({ where: { id: hold.id } });
+          if (currentHold && currentHold.status === HoldStatus.PENDING) {
+            await tx.wallet.update({
+              where: { id: hold.walletId },
+              data: { heldBalance: { decrement: hold.amount } }
+            });
+            await tx.walletHold.update({
+              where: { id: hold.id },
+              data: { status: HoldStatus.EXPIRED }
+            });
+            released++;
+          }
+        });
+      } catch (e) {
+        console.error('Failed to release hold', hold.id, e);
       }
     }
     return released;
   }
 
-  // --- PRIVATE MOCK HELPERS ---
+  // --- PRIVATE HELPERS ---
 
-  private getSystemWallet(): Wallet {
-    return mockWallets.find((w) => w.ownerType === OwnerType.SYSTEM)!;
-  }
-
-  private findWallet(userId: string, ownerType: OwnerType): Wallet {
-    const wallet = mockWallets.find(
-      (w) => w.userId === userId && w.ownerType === ownerType,
-    );
-    if (!wallet)
-      throw new DomainException(
-        HttpStatus.NOT_FOUND,
-        "WALLET_NOT_FOUND",
-        "Wallet was not found",
-      );
+  private async getSystemWalletTx(tx: any): Promise<Wallet> {
+    const wallet = await tx.wallet.findFirst({ where: { ownerType: OwnerType.SYSTEM } });
+    if (!wallet) throw new DomainException(HttpStatus.INTERNAL_SERVER_ERROR, "SYSTEM_WALLET_NOT_FOUND", "System wallet missing");
     return wallet;
   }
 
-  private moveMoneyTx(input: {
+  private async findWalletTx(tx: any, userId: string, ownerType: OwnerType): Promise<Wallet> {
+    const wallet = await tx.wallet.findFirst({ where: { userId, ownerType } });
+    if (!wallet) throw new DomainException(HttpStatus.NOT_FOUND, "WALLET_NOT_FOUND", "Wallet was not found");
+    return wallet;
+  }
+
+  // Replay được áp dụng nếu bạn cố tình lấy một cái referenceId cũ đã từng giao dịch thành công để thực hiện
+  // một giao dịch với nội dung khác.
+  // - Mạng bị lag, user ấn 2 lần.
+  // - Bạn dùng lại referenceId cho mục đích khác.
+  private async moveMoneyTxInternal(tx: any, input: {
     fromWallet: Wallet;
     toWallet: Wallet;
     amount: Prisma.Decimal;
@@ -490,25 +458,25 @@ export class WalletService {
   }) {
     const { fromWallet, toWallet, amount } = input;
 
-    // Check Replay
-    const replay = mockLedgers.find(
-      (l) =>
-        l.walletId === fromWallet.id && l.referenceId === input.referenceId,
-    );
+    const replay = await tx.ledgerEntry.findUnique({
+      where: { walletId_referenceId: { walletId: fromWallet.id, referenceId: input.referenceId } }
+    });
+
     if (replay) {
       if (
         replay.direction !== LedgerDirection.DEBIT ||
         replay.transferType !== input.transferType ||
-        !replay.amount.eq(amount)
+        !replay.amount.equals(amount)
       ) {
-        throw this.conflict(
-          "REFERENCE_ID_REUSED",
-          "referenceId was used with a different operation",
-        );
+        throw this.conflict("REFERENCE_ID_REUSED", "referenceId was used with a different operation");
       }
+
+      const toWalletDb = await tx.wallet.findUnique({ where: { id: toWallet.id } });
+      const fromWalletDb = await tx.wallet.findUnique({ where: { id: fromWallet.id } });
+
       return {
-        sourceWallet: fromWallet,
-        destinationWallet: toWallet,
+        sourceWallet: fromWalletDb,
+        destinationWallet: toWalletDb,
         transactionId: replay.transactionId,
         replayed: true,
       };
@@ -517,55 +485,59 @@ export class WalletService {
     this.assertWalletActive(fromWallet, input.bypassLockedFrom);
     this.assertWalletActive(toWallet, false);
 
-    if (fromWallet.currency !== toWallet.currency)
-      throw this.conflict("CURRENCY_MISMATCH", "Wallet currencies must match");
+    if (fromWallet.currency !== toWallet.currency) throw this.conflict("CURRENCY_MISMATCH", "Wallet currencies must match");
 
     if (input.consumeHeldFrom) {
-      if (fromWallet.heldBalance.lt(amount))
-        throw this.conflict(
-          "HOLD_BALANCE_INCONSISTENT",
-          "Hold amount exceeds held balance",
-        );
-      fromWallet.heldBalance = fromWallet.heldBalance.sub(amount);
-    } else if (
-      fromWallet.ownerType !== OwnerType.SYSTEM &&
-      fromWallet.balance.sub(fromWallet.heldBalance).lt(amount)
-    ) {
+      if (fromWallet.heldBalance.lt(amount)) throw this.conflict("HOLD_BALANCE_INCONSISTENT", "Hold amount exceeds held balance");
+      await tx.wallet.update({
+        where: { id: fromWallet.id },
+        data: { heldBalance: { decrement: amount } }
+      });
+    } else if (fromWallet.ownerType !== OwnerType.SYSTEM && fromWallet.balance.sub(fromWallet.heldBalance).lt(amount)) {
       throw this.insufficientBalance();
     }
 
-    fromWallet.balance = fromWallet.balance.sub(amount);
-    toWallet.balance = toWallet.balance.add(amount);
+    const updatedSource = await tx.wallet.update({
+      where: { id: fromWallet.id },
+      data: { balance: { decrement: amount } }
+    });
+
+    const updatedDest = await tx.wallet.update({
+      where: { id: toWallet.id },
+      data: { balance: { increment: amount } }
+    });
 
     const transactionId = randomUUID();
-    mockLedgers.push({
-      id: mockLedgers.length + 1,
-      transactionId,
-      walletId: fromWallet.id,
-      direction: LedgerDirection.DEBIT,
-      amount,
-      balanceAfter: fromWallet.balance,
-      referenceId: input.referenceId,
-      transferType: input.transferType,
-      note: input.note,
-      createdAt: new Date(),
+
+    await tx.ledgerEntry.create({
+      data: {
+        transactionId,
+        walletId: fromWallet.id,
+        direction: LedgerDirection.DEBIT,
+        amount,
+        balanceAfter: updatedSource.balance,
+        referenceId: input.referenceId,
+        transferType: input.transferType,
+        note: input.note,
+      }
     });
-    mockLedgers.push({
-      id: mockLedgers.length + 1,
-      transactionId,
-      walletId: toWallet.id,
-      direction: LedgerDirection.CREDIT,
-      amount,
-      balanceAfter: toWallet.balance,
-      referenceId: input.referenceId,
-      transferType: input.transferType,
-      note: input.note,
-      createdAt: new Date(),
+
+    await tx.ledgerEntry.create({
+      data: {
+        transactionId,
+        walletId: toWallet.id,
+        direction: LedgerDirection.CREDIT,
+        amount,
+        balanceAfter: updatedDest.balance,
+        referenceId: input.referenceId,
+        transferType: input.transferType,
+        note: input.note,
+      }
     });
 
     return {
-      sourceWallet: fromWallet,
-      destinationWallet: toWallet,
+      sourceWallet: updatedSource,
+      destinationWallet: updatedDest,
       transactionId,
       replayed: false,
     };
@@ -574,26 +546,17 @@ export class WalletService {
   private money(value: string) {
     const amount = new Prisma.Decimal(value);
     if (!amount.isFinite() || amount.lte(0) || amount.decimalPlaces() > 2) {
-      throw new DomainException(
-        HttpStatus.BAD_REQUEST,
-        "INVALID_AMOUNT",
-        "amount must be positive and have at most 2 decimal places",
-      );
+      throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_AMOUNT", "amount must be positive and have at most 2 decimal places");
     }
     return amount;
   }
 
   private assertWalletActive(wallet: Wallet, bypass = false) {
-    if (wallet.status === WalletStatus.LOCKED && !bypass)
-      throw this.conflict("WALLET_LOCKED", "Wallet is locked");
+    if (wallet.status === WalletStatus.LOCKED && !bypass) throw this.conflict("WALLET_LOCKED", "Wallet is locked");
   }
 
   private insufficientBalance() {
-    return new DomainException(
-      HttpStatus.CONFLICT,
-      "INSUFFICIENT_BALANCE",
-      "Wallet does not have enough available balance",
-    );
+    return new DomainException(HttpStatus.CONFLICT, "INSUFFICIENT_BALANCE", "Wallet does not have enough available balance");
   }
 
   private conflict(code: string, message: string) {
