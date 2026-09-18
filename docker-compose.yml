@@ -80,7 +80,11 @@ services:
       - "3005:3005"
     environment:
       - PORT=3005
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/payment_service
       - INTERNAL_KEY=default_internal_secret_key_123456
+      - WALLET_SERVICE_URL=http://wallet-service:3004
+    depends_on:
+      - postgres
 
   gateway:
     build:

@@ -12,7 +12,7 @@ export const adjustSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).merge
 
 export const listWalletsSchema = z.object({
   query: z.object({
-    userId: z.string().transform(Number).optional(),
+    userId: z.string().optional(),
     ownerType: z.string().optional(),
     status: z.string().optional(),
     page: z.string().transform(Number).optional(),

@@ -1,16 +1,9 @@
 import { LedgerDirection, OwnerType, TransferType } from '@prisma/client';
 
 export interface CreateWalletDto {
-  userId: number;
+  userId: string;
   ownerType?: OwnerType;
   currency?: string;
-}
-
-export interface AdjustDto {
-  amount: string;
-  referenceId: string;
-  direction: LedgerDirection;
-  reason?: string;
 }
 
 export interface CreditDto {
@@ -25,6 +18,20 @@ export interface DebitDto {
   transferType?: TransferType;
 }
 
+export interface TransferDto {
+  fromUserId: string;
+  toUserId: string;
+  amount: string;
+  referenceId: string;
+}
+
+export interface AdjustDto {
+  amount: string;
+  direction: LedgerDirection;
+  referenceId: string;
+  reason: string;
+}
+
 export interface HistoryQueryDto {
   ownerType?: OwnerType;
   from?: string;
@@ -34,16 +41,9 @@ export interface HistoryQueryDto {
 }
 
 export interface ListWalletsDto {
-  userId?: number;
+  userId?: string;
   ownerType?: OwnerType;
   status?: string;
   page?: number;
   limit?: number;
-}
-
-export interface TransferDto {
-  fromUserId: number;
-  toUserId: number;
-  amount: string;
-  referenceId: string;
 }
