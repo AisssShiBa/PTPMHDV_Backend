@@ -86,31 +86,6 @@ services:
     depends_on:
       - postgres
 
-  wallet-service:
-    build:
-      context: ./services/wallet-service
-      dockerfile: Dockerfile
-    container_name: finvault-wallet-service
-    ports:
-      - "3004:3004"
-    environment:
-      - PORT=3004
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/wallet_service
-      - INTERNAL_KEY=default_internal_secret_key_123456
-    depends_on:
-      - postgres
-
-  payment-service:
-    build:
-      context: ./services/payment-service
-      dockerfile: Dockerfile
-    container_name: finvault-payment-service
-    ports:
-      - "3005:3005"
-    environment:
-      - PORT=3005
-      - INTERNAL_KEY=default_internal_secret_key_123456
-
   auth-service:
     build:
       context: ./services/auth-service
