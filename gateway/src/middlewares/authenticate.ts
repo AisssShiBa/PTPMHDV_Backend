@@ -18,14 +18,17 @@ const PUBLIC_ROUTES: Array<{ method: string; path: RegExp | string }> = [
 ]
 
 const isPublicRoute = (req: Request): boolean => {
-    const currentPath = req.path.toLowerCase()
+    const currentPath = (req.path.replace(/\/+$/, '') || '/').toLowerCase()
     const currentMethod = req.method.toUpperCase()
 
     return PUBLIC_ROUTES.some(route => {
         const methodMatch = route.method.toUpperCase() === currentMethod || route.method === '*'
-        const pathMatch = typeof route.path === 'string'
-            ? currentPath === route.path.toLowerCase()
-            : route.path.test(req.path)
+        const routePath = typeof route.path === 'string'
+            ? (route.path.replace(/\/+$/, '') || '/').toLowerCase()
+            : route.path
+        const pathMatch = typeof routePath === 'string'
+            ? currentPath === routePath
+            : routePath.test(req.path) || routePath.test(currentPath)
         return methodMatch && pathMatch
     })
 }
