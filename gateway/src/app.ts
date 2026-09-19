@@ -29,13 +29,13 @@ app.use(cors({
     credentials: true,
 }))
 
-// 3. Chuỗi Middleware cốt lõi (Thứ tự: Sanitize -> RequestId -> Auth)
+// 3. Endpoint kiểm tra sức khỏe Gateway (Công khai, không yêu cầu Token)
+app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', service: 'api-gateway' }))
+
+// 4. Chuỗi Middleware cốt lõi (Thứ tự: Sanitize -> RequestId -> Auth)
 app.use(sanitizeHeaders)
 app.use(attachRequestId)
 app.use(authenticate)
-
-// 4. Endpoint kiểm tra sức khỏe Gateway
-app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', service: 'api-gateway' }))
 
 // 5. Phân quyền tầng Route (Chặn trước khi request chạm vào proxy)
 app.use('/api/admin', requireRole('ADMIN'))

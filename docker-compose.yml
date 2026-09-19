@@ -86,6 +86,67 @@ services:
     depends_on:
       - postgres
 
+  wallet-service:
+    build:
+      context: ./services/wallet-service
+      dockerfile: Dockerfile
+    container_name: finvault-wallet-service
+    ports:
+      - "3004:3004"
+    environment:
+      - PORT=3004
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/wallet_service
+      - INTERNAL_KEY=default_internal_secret_key_123456
+    depends_on:
+      - postgres
+
+  payment-service:
+    build:
+      context: ./services/payment-service
+      dockerfile: Dockerfile
+    container_name: finvault-payment-service
+    ports:
+      - "3005:3005"
+    environment:
+      - PORT=3005
+      - INTERNAL_KEY=default_internal_secret_key_123456
+
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    container_name: finvault-auth-service
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/auth_service
+      - ACCESS_TOKEN_SECRET=d7aec1b51b32d434b4c2e29f6b7e12ad0ea34f68ad9203c91f244d95f87adeb7dc6bc157976ffeedc6b1b5a109fc01d7c419d69bcf59d873e65e4409f88f9f64
+      - USER_SERVICE_URL=http://user-service:3002
+      - WALLET_SERVICE_URL=http://wallet-service:3004
+      - INTERNAL_API_KEY=default_internal_secret_key_123456
+      - CLIENT_URL=http://localhost:5173
+    depends_on:
+      - postgres
+
+  admin-service:
+    build:
+      context: ./services/admin-service
+      dockerfile: Dockerfile
+    container_name: finvault-admin-service
+    ports:
+      - "3007:3007"
+    environment:
+      - PORT=3007
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/admin_service
+      - INTERNAL_KEY=default_internal_secret_key_123456
+      - USER_SERVICE_URL=http://user-service:3002
+      - MERCHANT_SERVICE_URL=http://merchant-service:3003
+      - WALLET_SERVICE_URL=http://wallet-service:3004
+      - CLIENT_URL=http://localhost:5173
+    depends_on:
+      - postgres
+
   gateway:
     build:
       context: ./gateway
@@ -99,12 +160,14 @@ services:
       - CLIENT_URL=http://localhost:5173
       - USER_SERVICE_URL=http://user-service:3002
       - MERCHANT_SERVICE_URL=http://merchant-service:3003
-      - AUTH_SERVICE_URL=http://localhost:3001
+      - AUTH_SERVICE_URL=http://auth-service:3001
       - WALLET_SERVICE_URL=http://wallet-service:3004
       - PAYMENT_SERVICE_URL=http://payment-service:3005
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
-      - ADMIN_SERVICE_URL=http://localhost:3007
+      - ADMIN_SERVICE_URL=http://admin-service:3007
     depends_on:
+      - auth-service
+      - admin-service
       - user-service
       - merchant-service
       - notification-service
