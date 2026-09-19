@@ -227,16 +227,21 @@ export async function getUsers(req: RequestWithContext, res: Response) {
   const page = parseInt(req.query.page as string || '1', 10)
   const limit = parseInt(req.query.limit as string || '10', 10)
   const search = (req.query.search as string || '').trim()
+  const rawStatus = ((req.query.status || req.query.kycStatus) as string || '').trim().toUpperCase()
 
   try {
-    const whereClause = search
-      ? {
-          OR: [
-            { email: { contains: search, mode: 'insensitive' as const } },
-            { fullName: { contains: search, mode: 'insensitive' as const } }
-          ]
-        }
-      : {}
+    const whereClause: any = {}
+
+    if (search) {
+      whereClause.OR = [
+        { email: { contains: search, mode: 'insensitive' as const } },
+        { fullName: { contains: search, mode: 'insensitive' as const } }
+      ]
+    }
+
+    if (rawStatus && ['NONE', 'PENDING', 'APPROVED', 'REJECTED'].includes(rawStatus)) {
+      whereClause.kycStatus = rawStatus
+    }
 
     const [users, totalElements] = await Promise.all([
       prisma.user.findMany({

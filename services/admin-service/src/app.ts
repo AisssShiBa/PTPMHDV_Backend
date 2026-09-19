@@ -1,21 +1,24 @@
 import express from 'express'
 import cookieParser from 'cookie-parser'
 import cors from 'cors'
-import authRoute from './routes/authRoute'
+import adminRoute from './routes/adminRoute'
 import { attachRequestId } from './middlewares/requestId'
 import { requireGateway } from './middlewares/requireGateway'
+import { requireAdmin } from './middlewares/requireAdmin'
 import { errorHandler } from './middlewares/errorHandler'
 import { env } from './config/env'
 
 const app = express()
 
+// 1. Phân tích cú pháp request body & cookie
 app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
 app.use(cookieParser())
 
-// 1. Gắn Correlation ID ngay đầu pipeline để theo vết log
+// 2. Gắn Correlation ID (X-Request-Id) và bóc tách thông tin Gateway
 app.use(attachRequestId)
 
-// 2. Cấu hình CORS
+// 3. Cấu hình CORS
 const allowedOrigins = [
   env.clientUrl,
   'http://localhost:5173',
@@ -32,25 +35,22 @@ app.use(
       ) {
         return callback(null, true)
       }
-      return callback(new Error('Blocked by CORS policy'))
+      return callback(new Error('Chặn bởi chính sách CORS'))
     },
     credentials: true
   })
 )
 
-// 3. Endpoint kiểm tra sức khỏe hệ thống (Health Check)
+// 4. Endpoints kiểm tra sức khỏe dịch vụ (Health Check)
 app.get('/health', (_req, res) => {
-  res.status(200).json({ status: 'ok', service: 'auth-service' })
+  res.status(200).json({ status: 'ok', service: 'admin-service', port: env.port })
 })
-app.get('/api/auth/health', (_req, res) => {
-  res.status(200).json({ status: 'ok', service: 'auth-service' })
+app.get('/api/admin/health', (_req, res) => {
+  res.status(200).json({ status: 'ok', service: 'admin-service', port: env.port })
 })
 
-// 4. Bảo vệ microservice khỏi truy cập trực tiếp bypass Gateway
-app.use('/api/auth', requireGateway)
-
-// 5. Mount Routes
-app.use('/api/auth', authRoute)
+// 5. Tuyến đường API Admin chính - Phải qua Gateway & Quyền ADMIN
+app.use('/api/admin', requireGateway, requireAdmin, adminRoute)
 
 // 6. Xử lý Route không tồn tại (404)
 app.use((_req, res) => {
@@ -58,12 +58,12 @@ app.use((_req, res) => {
     success: false,
     error: {
       code: 'NOT_FOUND',
-      message: 'Endpoint không tồn tại'
+      message: 'Endpoint admin không tồn tại'
     }
   })
 })
 
-// 7. Middleware bắt lỗi toàn cục
+// 7. Bắt lỗi toàn cục
 app.use(errorHandler)
 
 export default app
