@@ -39,6 +39,7 @@ app.use(authenticate)
 
 // 5. Phân quyền tầng Route (Chặn trước khi request chạm vào proxy)
 app.use('/api/admin', requireRole('ADMIN'))
+app.use('/api/wallets/admin', requireRole('ADMIN'))
 
 // Helper tạo Proxy Middleware chuẩn (Giữ nguyên path, có timeout 10s và error handler)
 const createServiceProxy = (pathFilter: string, target: string) => {
@@ -67,6 +68,7 @@ const createServiceProxy = (pathFilter: string, target: string) => {
 app.use(createServiceProxy('/api/auth', env.services.auth))
 app.use(createServiceProxy('/api/users', env.services.user))
 app.use(createServiceProxy('/api/merchants', env.services.merchant))
+app.use(createServiceProxy('/api/wallets/admin', env.services.wallet))
 app.use(createServiceProxy('/api/wallets', env.services.wallet))
 app.use(createServiceProxy('/api/payments', env.services.payment))
 app.use(createServiceProxy('/api/notifications', env.services.notification))
