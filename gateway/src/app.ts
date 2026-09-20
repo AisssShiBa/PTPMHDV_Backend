@@ -55,7 +55,8 @@ const createServiceProxy = (pathFilter: string, target: string) => {
                 if (req.headers['x-user-id']) proxyReq.setHeader('x-user-id', req.headers['x-user-id'] as string)
                 if (req.headers['x-user-role']) proxyReq.setHeader('x-user-role', req.headers['x-user-role'] as string)
                 if (req.headers['x-request-id']) proxyReq.setHeader('x-request-id', req.headers['x-request-id'] as string)
-                if (req.headers['x-gateway-verified']) proxyReq.setHeader('x-gateway-verified', 'true')
+                // Bất kỳ request nào đi qua Gateway proxy đều được đóng dấu xác nhận
+                proxyReq.setHeader('x-gateway-verified', 'true')
             },
             error: (err, req, res) => {
                 errorHandler(err, req as any, res as any, () => { })

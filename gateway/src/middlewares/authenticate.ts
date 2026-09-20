@@ -34,8 +34,9 @@ const isPublicRoute = (req: Request): boolean => {
 }
 
 export const authenticate = (req: Request, res: Response, next: NextFunction) => {
-    // 1. Cho qua nếu là route công khai
+    // 1. Cho qua nếu là route công khai và đóng dấu đã qua Gateway
     if (isPublicRoute(req)) {
+        req.headers['x-gateway-verified'] = 'true'
         return next()
     }
 
