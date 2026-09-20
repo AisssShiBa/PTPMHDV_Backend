@@ -18,18 +18,20 @@ const PUBLIC_ROUTES: Array<{ method: string; path: RegExp | string }> = [
 ]
 
 const isPublicRoute = (req: Request): boolean => {
+    // Chuẩn hóa path: loại bỏ dấu gạch chéo ở đuôi (ví dụ /api/auth/signin/ -> /api/auth/signin)
     const currentPath = (req.path.replace(/\/+$/, '') || '/').toLowerCase()
     const currentMethod = req.method.toUpperCase()
 
     return PUBLIC_ROUTES.some(route => {
         const methodMatch = route.method.toUpperCase() === currentMethod || route.method === '*'
-        const routePath = typeof route.path === 'string'
-            ? (route.path.replace(/\/+$/, '') || '/').toLowerCase()
-            : route.path
-        const pathMatch = typeof routePath === 'string'
-            ? currentPath === routePath
-            : routePath.test(req.path) || routePath.test(currentPath)
-        return methodMatch && pathMatch
+        if (!methodMatch) return false
+
+        if (route.path instanceof RegExp) {
+            return route.path.test(req.path) || route.path.test(currentPath)
+        }
+
+        const routePath = (route.path.replace(/\/+$/, '') || '/').toLowerCase()
+        return currentPath === routePath
     })
 }
 
