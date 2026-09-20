@@ -14,28 +14,32 @@ const PUBLIC_ROUTES: Array<{ method: string; path: RegExp | string }> = [
     { method: 'POST', path: '/api/auth/signup' },
     { method: 'POST', path: '/api/auth/signin' },
     { method: 'POST', path: '/api/auth/refresh' },
-    { method: 'POST', path: '/api/auth/signout' }
+    { method: 'POST', path: '/api/auth/signout' },
+    { method: '*', path: '/health' }
 ]
 
 const isPublicRoute = (req: Request): boolean => {
+    // Chuẩn hóa path: loại bỏ dấu gạch chéo ở đuôi (ví dụ /api/auth/signin/ -> /api/auth/signin)
     const currentPath = (req.path.replace(/\/+$/, '') || '/').toLowerCase()
     const currentMethod = req.method.toUpperCase()
 
     return PUBLIC_ROUTES.some(route => {
         const methodMatch = route.method.toUpperCase() === currentMethod || route.method === '*'
-        const routePath = typeof route.path === 'string'
-            ? (route.path.replace(/\/+$/, '') || '/').toLowerCase()
-            : route.path
-        const pathMatch = typeof routePath === 'string'
-            ? currentPath === routePath
-            : routePath.test(req.path) || routePath.test(currentPath)
-        return methodMatch && pathMatch
+        if (!methodMatch) return false
+
+        if (route.path instanceof RegExp) {
+            return route.path.test(req.path) || route.path.test(currentPath)
+        }
+
+        const routePath = (route.path.replace(/\/+$/, '') || '/').toLowerCase()
+        return currentPath === routePath
     })
 }
 
 export const authenticate = (req: Request, res: Response, next: NextFunction) => {
-    // 1. Cho qua nếu là route công khai
+    // 1. Cho qua nếu là route công khai và đóng dấu đã qua Gateway
     if (isPublicRoute(req)) {
+        req.headers['x-gateway-verified'] = 'true'
         return next()
     }
 
