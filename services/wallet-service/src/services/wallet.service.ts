@@ -78,6 +78,7 @@ export class WalletService {
       const existing = await tx.wallet.findFirst({
         where: { userId: dto.userId, ownerType }
       });
+      // Không nén ra bad quest khí ví đã tồn tại điều này vẫn trả về ví nhưng trạng thái tạo là false
       if (existing) {
         return { wallet: existing, created: false };
       }
