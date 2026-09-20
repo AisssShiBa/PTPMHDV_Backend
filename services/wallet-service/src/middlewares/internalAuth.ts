@@ -14,12 +14,20 @@ export const requireInternalAuth = (req: Request, res: Response, next: NextFunct
     });
   }
 
+  const gatewayVerified = req.headers['x-gateway-verified'];
+
+  // Nếu là request từ API Gateway đã được xác thực
+  if (gatewayVerified === 'true') {
+    return next();
+  }
+
+  // Nếu là request nội bộ (Service gọi Service)
   if (!internalKey || internalKey !== expectedKey) {
     return res.status(401).json({
       success: false,
       error: {
         code: 'UNAUTHORIZED',
-        message: 'Invalid or missing X-Internal-Key',
+        message: 'Invalid or missing authentication',
       },
     });
   }
