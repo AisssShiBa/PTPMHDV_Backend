@@ -4,6 +4,8 @@ import cors from 'cors'
 import merchantRoute from './routes/merchantRoute'
 import { attachRequestId } from './middlewares/requestId'
 import { requireGateway } from './middlewares/requireGateway'
+import { notFound } from './middlewares/notFound'
+import { errorHandler } from './middlewares/errorHandler'
 
 const app = express()
 
@@ -40,4 +42,9 @@ app.get('/api/merchants/health', (_req, res) => res.status(200).json({ status: '
 // Protected routes (must pass through Gateway or internal call)
 app.use('/api/merchants', requireGateway, merchantRoute)
 
+// 404 & Error Handler
+app.use(notFound)
+app.use(errorHandler)
+
 export default app
+

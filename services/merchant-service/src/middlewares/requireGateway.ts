@@ -2,7 +2,8 @@ import { Response, NextFunction } from 'express'
 import { RequestWithContext } from './requestId'
 
 export function requireGateway(req: RequestWithContext, res: Response, next: NextFunction) {
-  const disableCheck = process.env.DISABLE_GATEWAY_CHECK === 'true'
+  const disableCheck = process.env.NODE_ENV !== 'production' && process.env.DISABLE_GATEWAY_CHECK === 'true'
+
 
   if (disableCheck || req.isGatewayVerified || req.isInternalCall) {
     return next()
