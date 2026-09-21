@@ -20,7 +20,7 @@ export class PaymentService {
       });
       if (existing) {
         console.log(`Idempotency key ${dto.idempotencyKey} already exists. Returning existing payment.`);
-        return existing;
+        return { payment: existing, replayed: true };
       }
 
       const payment = await tx.payment.create({
@@ -42,7 +42,7 @@ export class PaymentService {
           }
         }
       });
-      return payment;
+      return { payment, replayed: false };
     });
   }
 

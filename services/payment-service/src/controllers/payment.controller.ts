@@ -4,8 +4,8 @@ import { PaymentService } from '../services/payment.service';
 const paymentService = new PaymentService();
 
 export const checkout = async (req: Request, res: Response) => {
-  const result = await paymentService.checkout(req.body);
-  res.status(201).json({ success: true, data: result });
+  const { payment, replayed } = await paymentService.checkout({ ...req.body, userId: (req as any).userId });
+  res.status(201).json({ success: true, data: { ...payment, replayed } });
 };
 
 export const confirm = async (req: Request, res: Response) => {
