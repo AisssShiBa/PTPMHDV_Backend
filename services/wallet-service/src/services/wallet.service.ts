@@ -55,7 +55,7 @@ export class WalletService {
       if (!existing) {
         await prisma.wallet.create({
           data: {
-            userId: "0",
+            userId: null,
             ownerType: OwnerType.SYSTEM,
             currency: "VND",
             status: WalletStatus.ACTIVE,

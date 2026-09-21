@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const amountSchema = z.string()
+export const amountSchema = z.string()
   .refine((val) => !isNaN(Number(val)) && isFinite(Number(val)), {
     message: "amount phải là một số hợp lệ"
   })

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireInternalAuth } from '../middlewares/internalAuth';
+import { requireAdminAuth } from '../middlewares/adminAuth';
 import { validate } from '../middlewares/validate';
 import * as adminController from '../controllers/admin.controller';
 import * as schemas from '../validations/admin.validation';
@@ -7,7 +7,7 @@ import { ownerIdParamSchema, ownerTypeQuerySchema } from '../validations/wallet.
 
 const router = Router();
 
-router.use(requireInternalAuth);
+router.use(requireAdminAuth);
 
 router.post('/:userId/lock', validate(ownerIdParamSchema.merge(ownerTypeQuerySchema)), adminController.lock);
 router.post('/:userId/unlock', validate(ownerIdParamSchema.merge(ownerTypeQuerySchema)), adminController.unlock);
