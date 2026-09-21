@@ -64,7 +64,8 @@ export const release = async (req: Request, res: Response) => {
 };
 
 export const transfer = async (req: Request, res: Response) => {
-  const result = await walletService.transfer(req.body);
+  const fromUserId = req.params.userId;
+  const result = await walletService.transfer({ fromUserId, ...req.body });
   res.json({
     success: true, data: {
       fromBalance: decimalToString(result.sourceWallet.balance),

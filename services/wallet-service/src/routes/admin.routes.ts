@@ -9,10 +9,10 @@ const router = Router();
 
 router.use(requireInternalAuth);
 
-router.post('/wallets/:userId/lock', validate(ownerIdParamSchema.merge(ownerTypeQuerySchema)), adminController.lock);
-router.post('/wallets/:userId/unlock', validate(ownerIdParamSchema.merge(ownerTypeQuerySchema)), adminController.unlock);
-router.post('/wallets/:userId/adjust', validate(schemas.adjustSchema), adminController.adjust);
-router.get('/wallets', validate(schemas.listWalletsSchema), adminController.list);
+router.post('/:userId/lock', validate(ownerIdParamSchema.merge(ownerTypeQuerySchema)), adminController.lock);
+router.post('/:userId/unlock', validate(ownerIdParamSchema.merge(ownerTypeQuerySchema)), adminController.unlock);
+router.post('/:userId/adjust', validate(schemas.adjustSchema), adminController.adjust);
+router.get('/', validate(schemas.listWalletsSchema), adminController.list);
 router.get('/reconciliation', adminController.reconciliation);
 
 export default router;

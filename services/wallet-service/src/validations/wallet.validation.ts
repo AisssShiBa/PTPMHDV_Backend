@@ -1,5 +1,19 @@
 import { z } from 'zod';
 
+const amountSchema = z.string()
+  .refine((val) => !isNaN(Number(val)) && isFinite(Number(val)), {
+    message: "amount phải là một số hợp lệ"
+  })
+  .refine((val) => Number(val) > 0, {
+    message: "amount phải lớn hơn 0"
+  })
+  .refine((val) => {
+    const parts = val.split('.');
+    return !parts[1] || parts[1].length <= 2;
+  }, {
+    message: "amount chỉ được tối đa 2 chữ số thập phân"
+  });
+
 export const ownerIdParamSchema = z.object({
   params: z.object({
     userId: z.string().uuid({ message: "userId phải là định dạng UUID hợp lệ" }),
@@ -29,7 +43,7 @@ export const createWalletSchema = z.object({
 
 export const holdSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).merge(z.object({
   body: z.object({
-    amount: z.string(),
+    amount: amountSchema,
     referenceId: z.string(),
     expiresAt: z.string(),
   }),
@@ -41,20 +55,21 @@ export const referenceSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).me
   }),
 }));
 
-export const transferSchema = z.object({
+export const transferSchema = ownerIdParamSchema.merge(z.object({
   body: z.object({
-    fromUserId: z.string(),
     toUserId: z.string(),
-    amount: z.string(),
+    amount: amountSchema,
     referenceId: z.string(),
   }),
-});
+}));
 
 export const creditDebitSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).merge(z.object({
   body: z.object({
-    amount: z.string(),
+    amount: amountSchema,
     referenceId: z.string(),
-    transferType: z.string().optional(),
+    transferType: z.enum(['TOPUP', 'PAYMENT', 'REFUND', 'P2P_TRANSFER', 'ADJUSTMENT'], {
+      message: "transferType không hợp lệ"
+    }).optional(),
   }),
 }));
 

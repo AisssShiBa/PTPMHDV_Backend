@@ -14,7 +14,6 @@ router.use((req, res, next) => {
     const gatewayUserId = req.headers['x-user-id'] as string;
     if (req.body) {
       if (req.body.userId) req.body.userId = gatewayUserId;
-      if (req.body.fromUserId) req.body.fromUserId = gatewayUserId;
     }
   }
   next();
@@ -31,7 +30,7 @@ router.get('/:userId/balance', validate(schemas.ownerIdParamSchema.merge(schemas
 router.post('/:userId/hold', validate(schemas.holdSchema), walletController.hold);
 router.post('/:userId/capture', validate(schemas.referenceSchema), walletController.capture);
 router.post('/:userId/release', validate(schemas.referenceSchema), walletController.release);
-router.post('/transfer', validate(schemas.transferSchema), walletController.transfer);
+router.post('/:userId/transfer', validate(schemas.transferSchema), walletController.transfer);
 router.post('/:userId/credit', validate(schemas.creditDebitSchema), walletController.credit);
 router.post('/:userId/debit', validate(schemas.creditDebitSchema), walletController.debit);
 router.get('/:userId/history', validate(schemas.historyQuerySchema), walletController.history);

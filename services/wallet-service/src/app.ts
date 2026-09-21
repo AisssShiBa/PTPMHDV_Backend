@@ -15,7 +15,7 @@ app.use(morgan('dev'));
 app.use(express.json());
 
 app.use('/api/wallets', walletRoutes);
-app.use('/api/admin', adminRoutes);
+app.use('/api/wallets/admin', adminRoutes);
 
 app.use(errorHandler);
 
