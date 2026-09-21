@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import app from './app';
-import { startHoldScheduler } from './wallet/wallet-hold.scheduler';
+import { startHoldScheduler } from './services/wallet-hold.scheduler';
 
 const port = process.env.PORT || 3004;
 

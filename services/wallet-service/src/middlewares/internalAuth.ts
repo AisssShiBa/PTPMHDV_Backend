@@ -9,7 +9,7 @@ export const requireInternalAuth = (req: Request, res: Response, next: NextFunct
       success: false,
       error: {
         code: 'INTERNAL_SERVER_ERROR',
-        message: 'INTERNAL_API_KEY is not configured',
+        message: 'INTERNAL_KEY is not configured',
       },
     });
   }

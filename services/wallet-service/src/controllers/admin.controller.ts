@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { WalletService, walletView } from '../wallet/wallet.service';
+import { WalletService, walletView } from '../services/wallet.service';
 import { OwnerType } from '@prisma/client';
 
 const walletService = new WalletService();
@@ -7,24 +7,24 @@ const walletService = new WalletService();
 export const lock = async (req: Request, res: Response) => {
   const userId = req.params.userId;
   const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
-  const wallet = await walletService.setLock(Number(userId), true, ownerType);
+  const wallet = await walletService.setLock(userId, true, ownerType);
   res.json({ success: true, data: walletView(wallet) });
 };
 
 export const unlock = async (req: Request, res: Response) => {
   const userId = req.params.userId;
   const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
-  const wallet = await walletService.setLock(Number(userId), false, ownerType);
+  const wallet = await walletService.setLock(userId, false, ownerType);
   res.json({ success: true, data: walletView(wallet) });
 };
 
 export const adjust = async (req: Request, res: Response) => {
   const userId = req.params.userId;
   const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
-  const result = await walletService.adjust(Number(userId), req.body, ownerType);
+  const result = await walletService.adjust(userId, req.body, ownerType);
   res.json({ success: true, data: {
     userWallet: walletView(
-      result.sourceWallet.userId === Number(userId) ? result.sourceWallet : result.destinationWallet
+      result.sourceWallet.userId === userId ? result.sourceWallet : result.destinationWallet
     ),
     transactionId: result.transactionId,
     replayed: result.replayed

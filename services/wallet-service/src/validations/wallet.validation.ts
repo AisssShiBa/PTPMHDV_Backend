@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const ownerIdParamSchema = z.object({
   params: z.object({
-    userId: z.string().transform(Number),
+    userId: z.string(),
   }),
 });
 
@@ -14,7 +14,7 @@ export const ownerTypeQuerySchema = z.object({
 
 export const createWalletSchema = z.object({
   body: z.object({
-    userId: z.number(),
+    userId: z.string(),
     ownerType: z.string().optional(),
     currency: z.string().optional(),
   }),
@@ -36,8 +36,8 @@ export const referenceSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).me
 
 export const transferSchema = z.object({
   body: z.object({
-    fromUserId: z.number(),
-    toUserId: z.number(),
+    fromUserId: z.string(),
+    toUserId: z.string(),
     amount: z.string(),
     referenceId: z.string(),
   }),
