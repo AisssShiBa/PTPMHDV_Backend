@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Wallet" ALTER COLUMN "userId" SET DATA TYPE VARCHAR(50);

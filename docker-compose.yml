@@ -79,8 +79,8 @@ services:
       context: ./services/payment-service
       dockerfile: Dockerfile
     container_name: finvault-payment-service
-    expose:
-      - "3005"
+    ports:
+      - "3005:3005"
     environment:
       - PORT=3005
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/payment_service
