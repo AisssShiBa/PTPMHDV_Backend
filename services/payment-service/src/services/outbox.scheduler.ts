@@ -14,15 +14,24 @@ export const startOutboxScheduler = () => {
 
       for (const event of pendingEvents) {
         console.log(`[Outbox] Processing event ${event.id} - ${event.topic}`);
-        
+
         try {
           const payload = event.payload as any;
           let message = `Giao dịch ${payload.id} đã được xử lý.`;
-          
+
           if (event.eventType === 'PAYMENT_SUCCESS') {
             message = `Thanh toán thành công ${payload.amount} VND.`;
           } else if (event.eventType === 'PAYMENT_FAILED') {
             message = `Thanh toán thất bại. Lý do: ${payload.failureReason || 'Lỗi hệ thống'}`;
+          } else {
+            // Các type khác như PAYMENT_REFUNDED hiện tại notification-service chưa hỗ trợ
+            // Đánh dấu SENT luôn để bỏ qua
+            // Yêu cầu notification update để gọi lại
+            await prisma.outboxEvent.update({
+              where: { id: event.id },
+              data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
+            });
+            continue;
           }
 
           // Gọi HTTP POST sang notification-service
@@ -39,7 +48,7 @@ export const startOutboxScheduler = () => {
               }
             }
           );
-          
+
           // Nếu gọi thành công thì update DB
           await prisma.outboxEvent.update({
             where: { id: event.id },
@@ -50,7 +59,14 @@ export const startOutboxScheduler = () => {
           });
         } catch (err: any) {
           console.error(`[Outbox] Lỗi khi gửi event ${event.id} sang notification-service:`, err?.response?.data || err.message);
-          // Không throw error để vòng lặp tiếp tục xử lý các event khác
+
+          if (err?.response?.status >= 400 && err?.response?.status < 500) {
+            // Lỗi payload/client error từ notification-service (ví dụ sai type) -> đánh dấu FAILED để không lặp vô tận
+            await prisma.outboxEvent.update({
+              where: { id: event.id },
+              data: { status: OutboxEventStatus.FAILED }
+            });
+          }
         }
       }
     } catch (error) {
