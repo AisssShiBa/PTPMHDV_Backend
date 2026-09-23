@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth } from '../middlewares/auth';
+import { requireGatewayOrInternal } from '../middlewares/gatewayOrInternalAuth';
 import { protectIdorBody, protectIdorParam } from '../middlewares/idorProtection';
 import { validate } from '../middlewares/validate';
 import * as walletController from '../controllers/wallet.controller';
@@ -7,7 +7,7 @@ import * as schemas from '../validations/wallet.validation';
 
 const router = Router();
 
-router.use(requireAuth);
+router.use(requireGatewayOrInternal);
 
 // Lấy userId từ header đè lên body (nếu có) để chống IDOR
 router.use(protectIdorBody);
