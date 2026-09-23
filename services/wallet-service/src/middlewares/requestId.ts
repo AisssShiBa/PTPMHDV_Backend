@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
 import { randomUUID } from 'crypto'
-import { env } from '../config/env'
 
 export interface RequestWithContext extends Request {
   requestId?: string
@@ -17,7 +16,7 @@ export function attachRequestId(req: RequestWithContext, res: Response, next: Ne
   res.setHeader('X-Request-Id', requestId)
 
   const internalKey = req.headers['x-internal-key'] as string
-  req.isInternalCall = Boolean(internalKey && internalKey === env.internalKey)
+  req.isInternalCall = Boolean(internalKey && process.env.INTERNAL_KEY && internalKey === process.env.INTERNAL_KEY)
   req.isGatewayVerified = req.headers['x-gateway-verified'] === 'true'
 
   req.userId = (req.headers['x-user-id'] as string) || (req.headers['user-id'] as string) || undefined
