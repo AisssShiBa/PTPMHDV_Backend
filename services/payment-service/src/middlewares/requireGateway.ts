@@ -3,7 +3,7 @@ import { Request, Response, NextFunction } from 'express';
 export const requireGateway = (req: Request, res: Response, next: NextFunction) => {
   const gatewayVerified = req.headers['x-gateway-verified'];
   const internalKey = req.headers['x-internal-key'];
-  const expectedKey = process.env.INTERNAL_KEY || process.env.INTERNAL_API_KEY;
+  const expectedKey = process.env.INTERNAL_KEY;
 
   // Nếu request đi qua API Gateway
   if (gatewayVerified === 'true') {
