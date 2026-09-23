@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 
-export const requireInternalAuth = (req: Request, res: Response, next: NextFunction) => {
+export const requireAuth = (req: Request, res: Response, next: NextFunction) => {
   const internalKey = req.headers['x-internal-key'];
   const expectedKey = process.env.INTERNAL_KEY;
 
