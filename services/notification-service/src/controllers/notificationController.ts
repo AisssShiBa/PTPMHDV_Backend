@@ -9,10 +9,16 @@ export const createNotification = async (req: Request, res: Response) => {
   try {
     const { userId, type, message } = req.body
     if (!userId || !type || !message) {
-      return res.status(400).json({ message: 'userId, type và message là bắt buộc' })
+      return res.status(400).json({
+        success: false,
+        error: { code: 'BAD_REQUEST', message: 'userId, type và message là bắt buộc' }
+      })
     }
     if (!(type in NotificationType)) {
-      return res.status(400).json({ message: `type không hợp lệ: ${type}` })
+      return res.status(400).json({
+        success: false,
+        error: { code: 'BAD_REQUEST', message: `type không hợp lệ: ${type}` }
+      })
     }
     const notification = await prisma.notification.create({
       data: { userId, type, message }
@@ -23,7 +29,10 @@ export const createNotification = async (req: Request, res: Response) => {
     })
   } catch (error) {
     console.error('Lỗi tạo thông báo:', error)
-    return res.status(500).json({ message: 'Lỗi hệ thống' })
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' }
+    })
   }
 }
 
@@ -37,7 +46,10 @@ export const getNotifications = async (req: Request, res: Response) => {
 
     // SELF-GUARD CỨNG — trước khi query
     if (req.userId !== userId) {
-      return res.status(403).json({ message: 'Không có quyền xem thông báo của người khác' })
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Không có quyền xem thông báo của người khác' }
+      })
     }
 
     // Phân trang từ query (clamp: page ≥ 1, 1 ≤ limit ≤ 50)
@@ -70,7 +82,10 @@ export const getNotifications = async (req: Request, res: Response) => {
     })
   } catch (error) {
     console.error('Lỗi lấy thông báo:', error)
-    return res.status(500).json({ message: 'Lỗi hệ thống' })
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' }
+    })
   }
 }
 
@@ -83,10 +98,16 @@ export const markNotificationRead = async (req: Request, res: Response) => {
     const { id } = req.params as { id: string }
     const existing = await prisma.notification.findUnique({ where: { id } })
     if (!existing) {
-      return res.status(404).json({ message: 'Không tìm thấy thông báo' })
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' }
+      })
     }
     if (existing.userId !== req.userId) {
-      return res.status(403).json({ message: 'Không có quyền thao tác thông báo này' })
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Không có quyền thao tác thông báo này' }
+      })
     }
     const notification = await prisma.notification.update({
       where: { id },
@@ -98,16 +119,28 @@ export const markNotificationRead = async (req: Request, res: Response) => {
     })
   } catch (error) {
     if ((error as { code?: string }).code === 'P2025') {
-      return res.status(404).json({ message: 'Không tìm thấy thông báo' })
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' }
+      })
     }
     console.error('Lỗi đánh dấu đã đọc:', error)
-    return res.status(500).json({ message: 'Lỗi hệ thống' })
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' }
+    })
   }
 }
 
 export const markAllNotificationsRead = async (req: Request, res: Response) => {
   try {
     const { userId } = req.params as { userId: string }
+    if (req.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Không có quyền thao tác thông báo của người khác' }
+      })
+    }
     const result = await prisma.notification.updateMany({
       where: { userId, read: false },
       data: { read: true }
@@ -119,6 +152,9 @@ export const markAllNotificationsRead = async (req: Request, res: Response) => {
     })
   } catch (error) {
     console.error('Lỗi đánh dấu tất cả đã đọc:', error)
-    return res.status(500).json({ message: 'Lỗi hệ thống' })
+    return res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' }
+    })
   }
 }
