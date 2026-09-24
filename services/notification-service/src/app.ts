@@ -2,6 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import notificationRoute from './routes/notificationRoute'
 import { errorHandler } from './middlewares/errorHandler'
+import { requireGateway } from './middlewares/requireGateway'
 import { env } from './config/env'
 
 const app = express()
@@ -17,7 +18,7 @@ app.get('/api/notifications/health', (_req, res) => {
 })
 
 // internal + client routes
-app.use('/api/notifications', notificationRoute)
+app.use('/api/notifications', requireGateway, notificationRoute)
 
 // Xử lý Route không tồn tại (404)
 app.use((_req, res) => {
