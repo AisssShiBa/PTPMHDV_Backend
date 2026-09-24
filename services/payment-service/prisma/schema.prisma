@@ -68,6 +68,9 @@ model OutboxEvent {
   status      OutboxEventStatus @default(PENDING)
   createdAt   DateTime          @default(now())
   sentAt      DateTime?         @db.Timestamp()
+  retryCount  Int               @default(0)
+  nextRetryAt DateTime?         @db.Timestamp()
 
   @@index([status, createdAt])
+  @@index([nextRetryAt])
 }

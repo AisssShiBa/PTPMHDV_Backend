@@ -8,7 +8,13 @@ export const startOutboxScheduler = () => {
   cron.schedule('*/5 * * * * *', async () => {
     try {
       const pendingEvents = await prisma.outboxEvent.findMany({
-        where: { status: OutboxEventStatus.PENDING },
+        where: { 
+          status: OutboxEventStatus.PENDING,
+          OR: [
+            { nextRetryAt: null },
+            { nextRetryAt: { lte: new Date() } }
+          ]
+        },
         take: 50,
       });
 
@@ -70,6 +76,27 @@ export const startOutboxScheduler = () => {
               where: { id: event.id },
               data: { status: OutboxEventStatus.FAILED }
             });
+          } else {
+            // Lỗi mạng hoặc server error (500) -> Exponential Backoff & DLQ
+            const newRetryCount = (event.retryCount || 0) + 1;
+            
+            if (newRetryCount >= 5) {
+              console.error(`[Outbox DLQ] Event ${event.id} vượt quá số lần thử lại (5 lần). Chuyển sang FAILED.`);
+              await prisma.outboxEvent.update({
+                where: { id: event.id },
+                data: { status: OutboxEventStatus.FAILED, retryCount: newRetryCount }
+              });
+            } else {
+              // Exponential backoff: 2s, 4s, 8s, 16s...
+              const delaySeconds = Math.pow(2, newRetryCount);
+              const nextRetryAt = new Date(Date.now() + delaySeconds * 1000);
+              console.log(`[Outbox Backoff] Lùi lại gửi event ${event.id}. Thử lại lần ${newRetryCount} vào ${nextRetryAt.toISOString()}`);
+              
+              await prisma.outboxEvent.update({
+                where: { id: event.id },
+                data: { retryCount: newRetryCount, nextRetryAt: nextRetryAt }
+              });
+            }
           }
         }
       }
