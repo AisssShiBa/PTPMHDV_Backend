@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import { prisma } from '../config/prisma'
-import { NotificationType } from '../types/notification'
+import { notificationIO } from '../socket'
+import { createNotificationRecord, isNotificationType } from '../services/notificationService'
 
 // ===================================================================
 // INTERNAL — chỉ Outbox Scheduler của Payment/Wallet gọi (POST /)
@@ -14,15 +15,14 @@ export const createNotification = async (req: Request, res: Response) => {
         error: { code: 'BAD_REQUEST', message: 'userId, type và message là bắt buộc' }
       })
     }
-    if (!(type in NotificationType)) {
+    if (!isNotificationType(type)) {
       return res.status(400).json({
         success: false,
         error: { code: 'BAD_REQUEST', message: `type không hợp lệ: ${type}` }
       })
     }
-    const notification = await prisma.notification.create({
-      data: { userId, type, message }
-    })
+    const notification = await createNotificationRecord(userId, type, message)
+    notificationIO?.to(`user:${userId}`).emit('notification:new', notification)
     return res.status(201).json({
       message: 'Tạo thông báo thành công',
       data: notification
