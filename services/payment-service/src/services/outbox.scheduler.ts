@@ -23,8 +23,12 @@ export const startOutboxScheduler = () => {
             message = `Thanh toán thành công ${payload.amount} VND.`;
           } else if (event.eventType === 'PAYMENT_FAILED') {
             message = `Thanh toán thất bại. Lý do: ${payload.failureReason || 'Lỗi hệ thống'}`;
+          } else if (event.eventType === 'PAYMENT_REFUNDED') {
+            message = `Thanh toán đã được hoàn tiền ${payload.amount} VND.`;
+          } else if (event.eventType === 'PAYMENT_CANCELLED') {
+            message = `Thanh toán đã bị hủy.`;
           } else {
-            // Các type khác như PAYMENT_REFUNDED hiện tại notification-service chưa hỗ trợ
+            // Các type khác hiện tại notification-service chưa hỗ trợ
             // Đánh dấu SENT luôn để bỏ qua
             // Yêu cầu notification update để gọi lại
             await prisma.outboxEvent.update({
