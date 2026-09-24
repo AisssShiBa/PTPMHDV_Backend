@@ -5,6 +5,61 @@ import { prisma } from '../utils/prisma';
 import axios from 'axios';
 
 export const startOutboxScheduler = () => {
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const expiredPayments = await prisma.payment.findMany({
+        where: {
+          status: 'PENDING',
+          holdExpiresAt: { lt: new Date() }
+        },
+        take: 50,
+      });
+
+      for (const payment of expiredPayments) {
+        console.log(`[Scheduler] Payment ${payment.id} hold expired. Releasing...`);
+        try {
+          if (payment.holdId) {
+            await axios.post(
+              `${process.env.WALLET_SERVICE_URL}/api/wallets/${payment.userId}/release`,
+              { referenceId: payment.holdId },
+              { headers: { 'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456' } }
+            );
+          }
+
+          const updated = await prisma.payment.update({
+            where: { id: payment.id },
+            data: {
+              status: 'EXPIRED',
+              histories: {
+                create: {
+                  id: require('crypto').randomUUID(),
+                  fromStatus: 'PENDING',
+                  toStatus: 'EXPIRED',
+                  note: 'Hold expired by scheduler',
+                }
+              }
+            }
+          });
+
+          await prisma.outboxEvent.create({
+            data: {
+              id: require('crypto').randomUUID(),
+              aggregateId: payment.id,
+              eventType: 'PAYMENT_EXPIRED',
+              topic: payment.callbackTopic,
+              payload: JSON.parse(JSON.stringify(updated)),
+              status: OutboxEventStatus.PENDING,
+            }
+          });
+        } catch (err: any) {
+          console.error(`[Scheduler] Failed to process expired payment ${payment.id}:`, err.message);
+        }
+      }
+    } catch (error) {
+      console.error('[Payment Expiration Scheduler Error]', error);
+    }
+  });
+
   cron.schedule('*/5 * * * * *', async () => {
     try {
       const pendingEvents = await prisma.outboxEvent.findMany({

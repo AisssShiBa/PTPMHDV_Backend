@@ -11,7 +11,8 @@ export enum PaymentStatus {
   SUCCESS = 'SUCCESS',
   FAILED = 'FAILED',
   REFUNDED = 'REFUNDED',
-  CANCELLED = 'CANCELLED'
+  CANCELLED = 'CANCELLED',
+  EXPIRED = 'EXPIRED'
 }
 
 export enum OutboxEventStatus {
