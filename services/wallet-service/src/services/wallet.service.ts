@@ -536,6 +536,40 @@ export class WalletService {
       }
     });
 
+    if (fromWallet.ownerType === OwnerType.USER && fromWallet.userId) {
+      await tx.walletOutboxEvent.create({
+        data: {
+          topic: 'wallet.balance_deducted',
+          payload: {
+            userId: fromWallet.userId,
+            amount: decimalToString(amount),
+            balanceAfter: decimalToString(updatedSource.balance),
+            transferType: input.transferType,
+            referenceId: input.referenceId,
+            transactionId,
+            note: input.note || '',
+          }
+        }
+      });
+    }
+
+    if (toWallet.ownerType === OwnerType.USER && toWallet.userId) {
+      await tx.walletOutboxEvent.create({
+        data: {
+          topic: 'wallet.balance_added',
+          payload: {
+            userId: toWallet.userId,
+            amount: decimalToString(amount),
+            balanceAfter: decimalToString(updatedDest.balance),
+            transferType: input.transferType,
+            referenceId: input.referenceId,
+            transactionId,
+            note: input.note || '',
+          }
+        }
+      });
+    }
+
     return {
       sourceWallet: updatedSource,
       destinationWallet: updatedDest,
