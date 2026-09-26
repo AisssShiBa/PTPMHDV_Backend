@@ -5,10 +5,71 @@ import { prisma } from '../utils/prisma';
 import axios from 'axios';
 
 export const startOutboxScheduler = () => {
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const expiredPayments = await prisma.payment.findMany({
+        where: {
+          status: 'PENDING',
+          holdExpiresAt: { lt: new Date() }
+        },
+        take: 50,
+      });
+
+      for (const payment of expiredPayments) {
+        console.log(`[Scheduler] Payment ${payment.id} hold expired. Releasing...`);
+        try {
+          if (payment.holdId) {
+            await axios.post(
+              `${process.env.WALLET_SERVICE_URL}/api/wallets/${payment.userId}/release`,
+              { referenceId: payment.holdId },
+              { headers: { 'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456' } }
+            );
+          }
+
+          const updated = await prisma.payment.update({
+            where: { id: payment.id },
+            data: {
+              status: 'EXPIRED',
+              histories: {
+                create: {
+                  id: require('crypto').randomUUID(),
+                  fromStatus: 'PENDING',
+                  toStatus: 'EXPIRED',
+                  note: 'Hold expired by scheduler',
+                }
+              }
+            }
+          });
+
+          await prisma.outboxEvent.create({
+            data: {
+              id: require('crypto').randomUUID(),
+              aggregateId: payment.id,
+              eventType: 'PAYMENT_EXPIRED',
+              topic: payment.callbackTopic,
+              payload: JSON.parse(JSON.stringify(updated)),
+              status: OutboxEventStatus.PENDING,
+            }
+          });
+        } catch (err: any) {
+          console.error(`[Scheduler] Failed to process expired payment ${payment.id}:`, err.message);
+        }
+      }
+    } catch (error) {
+      console.error('[Payment Expiration Scheduler Error]', error);
+    }
+  });
+
   cron.schedule('*/5 * * * * *', async () => {
     try {
       const pendingEvents = await prisma.outboxEvent.findMany({
-        where: { status: OutboxEventStatus.PENDING },
+        where: { 
+          status: OutboxEventStatus.PENDING,
+          OR: [
+            { nextRetryAt: null },
+            { nextRetryAt: { lte: new Date() } }
+          ]
+        },
         take: 50,
       });
 
@@ -23,8 +84,12 @@ export const startOutboxScheduler = () => {
             message = `Thanh toán thành công ${payload.amount} VND.`;
           } else if (event.eventType === 'PAYMENT_FAILED') {
             message = `Thanh toán thất bại. Lý do: ${payload.failureReason || 'Lỗi hệ thống'}`;
+          } else if (event.eventType === 'PAYMENT_REFUNDED') {
+            message = `Thanh toán đã được hoàn tiền ${payload.amount} VND.`;
+          } else if (event.eventType === 'PAYMENT_CANCELLED') {
+            message = `Thanh toán đã bị hủy.`;
           } else {
-            // Các type khác như PAYMENT_REFUNDED hiện tại notification-service chưa hỗ trợ
+            // Các type khác hiện tại notification-service chưa hỗ trợ
             // Đánh dấu SENT luôn để bỏ qua
             // Yêu cầu notification update để gọi lại
             await prisma.outboxEvent.update({
@@ -66,6 +131,27 @@ export const startOutboxScheduler = () => {
               where: { id: event.id },
               data: { status: OutboxEventStatus.FAILED }
             });
+          } else {
+            // Lỗi mạng hoặc server error (500) -> Exponential Backoff & DLQ
+            const newRetryCount = (event.retryCount || 0) + 1;
+            
+            if (newRetryCount >= 5) {
+              console.error(`[Outbox DLQ] Event ${event.id} vượt quá số lần thử lại (5 lần). Chuyển sang FAILED.`);
+              await prisma.outboxEvent.update({
+                where: { id: event.id },
+                data: { status: OutboxEventStatus.FAILED, retryCount: newRetryCount }
+              });
+            } else {
+              // Exponential backoff: 2s, 4s, 8s, 16s...
+              const delaySeconds = Math.pow(2, newRetryCount);
+              const nextRetryAt = new Date(Date.now() + delaySeconds * 1000);
+              console.log(`[Outbox Backoff] Lùi lại gửi event ${event.id}. Thử lại lần ${newRetryCount} vào ${nextRetryAt.toISOString()}`);
+              
+              await prisma.outboxEvent.update({
+                where: { id: event.id },
+                data: { retryCount: newRetryCount, nextRetryAt: nextRetryAt }
+              });
+            }
           }
         }
       }

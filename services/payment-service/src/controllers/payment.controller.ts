@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
 import { PaymentService } from '../services/payment.service';
+import { RequestWithContext } from '../middlewares/requestId';
 
 const paymentService = new PaymentService();
 
-export const checkout = async (req: Request, res: Response) => {
-  const { payment, replayed } = await paymentService.checkout({ ...req.body, userId: (req as any).userId });
+export const checkout = async (req: RequestWithContext, res: Response) => {
+  const { payment, replayed } = await paymentService.checkout({ ...req.body, userId: req.userId });
   res.status(201).json({ success: true, data: { ...payment, replayed } });
 };
 

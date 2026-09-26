@@ -1,19 +1,21 @@
 import { Router } from 'express';
-import { requireInternalAuth } from '../middlewares/internalAuth';
-import { protectIdorBody, protectIdorParam } from '../middlewares/idorProtection';
+import { requireGatewayOrInternal } from '../middlewares/gatewayOrInternalAuth';
+import { attachRequestId } from '../middlewares/requestId';
+import { requireOwnerOrAdmin } from '../middlewares/requireOwnerOrAdmin';
 import { validate } from '../middlewares/validate';
 import * as walletController from '../controllers/wallet.controller';
 import * as schemas from '../validations/wallet.validation';
 
 const router = Router();
 
-router.use(requireInternalAuth);
+router.use(requireGatewayOrInternal);
 
-// Lấy userId từ header đè lên body (nếu có) để chống IDOR
-router.use(protectIdorBody);
+// Gán request ID và user info từ gateway
+router.use(attachRequestId);
 
-// Lấy userId từ header đè lên param trên URL để chống IDOR
-router.param('userId', protectIdorParam);
+// Đảm bảo user chỉ được tác động lên ví của mình (hoặc là Admin/Internal)
+router.use(requireOwnerOrAdmin);
+
 router.post('/', validate(schemas.createWalletSchema), walletController.create);
 router.get('/:userId/balance', validate(schemas.ownerIdParamSchema.merge(schemas.ownerTypeQuerySchema)), walletController.getBalance);
 router.post('/:userId/hold', validate(schemas.holdSchema), walletController.hold);
