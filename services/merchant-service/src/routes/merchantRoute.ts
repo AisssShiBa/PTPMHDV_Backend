@@ -1,27 +1,13 @@
 import { Router } from 'express'
-import {
-  registerMerchant,
-  getMerchantById,
-  updateMerchant,
-  updateMerchantStatus,
-  checkMerchantActive,
-  getMerchants
-} from '../controllers/merchantController'
+import * as controller from '../controllers/merchantController'
+import * as schema from '../validations/merchant.validation'
+import { idSchema } from '../validations/common'
 import { validate } from '../middlewares/validate'
-import {
-  registerMerchantSchema,
-  updateMerchantSchema,
-  updateMerchantStatusSchema
-} from '../validations/merchant.validation'
-
 const router = Router()
-
-router.post('/register', validate(registerMerchantSchema), registerMerchant)
-router.get('/', getMerchants)
-router.get('/:id/active', checkMerchantActive)
-router.get('/:id', getMerchantById)
-router.put('/:id', validate(updateMerchantSchema), updateMerchant)
-router.patch('/:id/status', validate(updateMerchantStatusSchema), updateMerchantStatus)
-
+router.post('/register', validate(schema.registerMerchantSchema), controller.registerMerchant)
+router.get('/', validate(schema.listMerchantsSchema), controller.getMerchants)
+router.get('/:id/active', validate(idSchema), controller.checkMerchantActive)
+router.get('/:id', validate(idSchema), controller.getMerchantById)
+router.put('/:id', validate(schema.updateMerchantSchema), controller.updateMerchant)
+router.patch('/:id/status', validate(schema.updateMerchantStatusSchema), controller.updateMerchantStatus)
 export default router
-

@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
-import { randomUUID } from 'crypto'
-import { env } from '../config/env'
+import { randomUUID } from 'node:crypto'
 
 export interface RequestWithContext extends Request {
   requestId?: string
@@ -9,19 +8,10 @@ export interface RequestWithContext extends Request {
   isInternalCall?: boolean
   isGatewayVerified?: boolean
 }
-
 export function attachRequestId(req: RequestWithContext, res: Response, next: NextFunction) {
-  const incomingId = req.headers['x-request-id'] as string
-  const requestId = incomingId || randomUUID()
-  req.requestId = requestId
-  res.setHeader('X-Request-Id', requestId)
-
-  const internalKey = req.headers['x-internal-key'] as string
-  req.isInternalCall = Boolean(internalKey && internalKey === env.internalKey)
-  req.isGatewayVerified = req.headers['x-gateway-verified'] === 'true'
-
-  req.userId = (req.headers['x-user-id'] as string) || (req.headers['user-id'] as string) || undefined
-  req.userRole = (req.headers['x-user-role'] as string) || (req.headers['user-role'] as string) || 'USER'
-
+  const incoming = req.get('x-request-id')
+  req.requestId = incoming && /^[a-zA-Z0-9_-]{1,100}$/.test(incoming) ? incoming : randomUUID()
+  res.setHeader('X-Request-Id', req.requestId)
+  // Identity is assigned only after authentication, never from unverified headers.
   next()
 }

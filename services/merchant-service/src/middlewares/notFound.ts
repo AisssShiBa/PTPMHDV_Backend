@@ -1,11 +1,7 @@
-import { Request, Response } from 'express'
-
-export function notFound(req: Request, res: Response) {
+import { Response } from 'express'
+import { RequestWithContext } from './requestId'
+export function notFound(req: RequestWithContext, res: Response) {
   return res.status(404).json({
-    success: false,
-    error: {
-      code: 'NOT_FOUND',
-      message: `Route ${req.method} ${req.originalUrl} not found`
-    }
+    success: false, error: { code: 'NOT_FOUND', message: 'Route not found' }, requestId: req.requestId
   })
 }

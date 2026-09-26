@@ -1,10 +1,10 @@
-FROM node:20-alpine AS build
+FROM node:22-alpine
+RUN apk add --no-cache openssl
 WORKDIR /app
 COPY package*.json ./
 COPY prisma ./prisma
-RUN npm install
+RUN npm ci
 COPY . .
-RUN npx prisma generate
-
+RUN npx prisma generate && npm run build
 EXPOSE 3002
-CMD ["sh", "-c", "npx prisma db push && npm run start"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/server.js"]
