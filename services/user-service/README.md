@@ -36,7 +36,7 @@ Các đường dẫn dưới đây nối sau `/api/users`.
 | Method | Đường dẫn | Quyền | Dữ liệu |
 |---|---|---|---|
 | POST | `/` | Internal | `authUserId`, `email`; thành công 201, trùng 409 |
-| GET | `/` | ADMIN/internal | `page`, `limit`, `search` |
+| GET | `/` | ADMIN/internal | `page`, `limit`, `search`, `status` hoặc `kycStatus` |
 | GET | `/:id` | Chính chủ/ADMIN/internal | Nhận profile ID hoặc Auth ID |
 | GET | `/by-auth/:authUserId` | Chính chủ/ADMIN/internal | Chỉ nhận Auth ID |
 | PUT | `/:id` hoặc `/by-auth/:authUserId` | Chính chủ/ADMIN/internal | Ít nhất một trong `fullName`, `phone`, `address` |
@@ -50,6 +50,8 @@ Ngoài ra có `GET /health`. Phân trang: page 1–100000, limit 1–100; mặc 
 Nếu một identifier khớp profile ID và Auth ID của hai hồ sơ khác nhau, API trả 409 `AMBIGUOUS_IDENTIFIER`; dùng endpoint `/by-auth/...` để chỉ rõ. Kiểm tra quyền luôn dùng `user.authUserId`.
 
 Response thành công: `{ success: true, data: ... }`. Danh sách có `content, page, limit, totalElements, totalPages`. Hồ sơ trả `hasKycDocument`, không trả object key hoặc URL KYC cũ.
+
+Lọc danh sách theo trạng thái KYC bằng `status` hoặc `kycStatus`: `NONE`, `PENDING`, `APPROVED`, `REJECTED` (không phân biệt hoa/thường, bỏ khoảng trắng). Giá trị rỗng không lọc; nếu gửi cả hai thì ưu tiên `status` không rỗng. Trạng thái không hợp lệ trả 400.
 
 ## Upload KYC bằng S3/MinIO
 
@@ -135,7 +137,7 @@ Trên Windows có thể dùng `powershell -File tests/start-infra.ps1` để kh�
 
 MinIO test được build từ mã nguồn vì image legacy không tải được từ registry. Đây là hạ tầng test local, không phải manifest triển khai production. Hướng dẫn nguồn: [MinIO](https://github.com/minio/minio), [amqplib confirm channel](https://amqp-node.github.io/amqplib/channel_api.html), [AWS S3 SDK](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/javascript_s3_code_examples.html).
 
-Đã chạy thành công: 16 test API/unit, 13 test integration với PostgreSQL/RabbitMQ/MinIO và build TypeScript. Tests gồm đăng ký đồng thời, replay, restart consumer, DLQ, rollback khi upload không lưu được DB, ảnh private và URL đọc có xác thực.
+Đã chạy thành công: 19 test API/unit, 13 test integration với PostgreSQL/RabbitMQ/MinIO và build TypeScript. Tests gồm đăng ký đồng thời, replay, restart consumer, DLQ, rollback khi upload không lưu được DB, ảnh private và URL đọc có xác thực. Sau khi merge bộ lọc KYC, đã chạy lại 19 test API/unit và build; bộ integration chưa chạy lại trong lần merge này.
 
 Dockerfile dùng migration deploy thay cho tự đồng bộ schema bằng db push; build tạo mã tại `dist`. Worker trong container có thể chạy bằng `node dist/events/worker.js` sau migration.
 

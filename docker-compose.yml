@@ -19,13 +19,13 @@ services:
       context: ./services/user-service
       dockerfile: Dockerfile
     container_name: finvault-user-service
-    ports:
-      - "3002:3002"
+    expose:
+      - "3002"
     environment:
       - PORT=3002
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/user_service
       - JWT_SECRET=your_default_jwt_secret_key_must_be_at_least_32_bytes_long
-      - INTERNAL_KEY=default_internal_secret_key_123456
+      - INTERNAL_KEY=f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68
     depends_on:
       - postgres
 
@@ -34,13 +34,13 @@ services:
       context: ./services/merchant-service
       dockerfile: Dockerfile
     container_name: finvault-merchant-service
-    ports:
-      - "3003:3003"
+    expose:
+      - "3003"
     environment:
       - PORT=3003
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/merchant_service
       - JWT_SECRET=your_default_jwt_secret_key_must_be_at_least_32_bytes_long
-      - INTERNAL_KEY=default_internal_secret_key_123456
+      - INTERNAL_KEY=f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68
     depends_on:
       - postgres
 
@@ -49,11 +49,13 @@ services:
       context: ./services/notification-service
       dockerfile: Dockerfile
     container_name: finvault-notification-service
-    ports:
-      - "3006:3006"
+    expose:
+      - "3006"
     environment:
       - PORT=3006
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/notification_service
+      - INTERNAL_KEY=f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68
+      - CLIENT_URL=http://localhost:5173
     depends_on:
       - postgres
 
@@ -62,12 +64,13 @@ services:
       context: ./services/wallet-service
       dockerfile: Dockerfile
     container_name: finvault-wallet-service
-    ports:
-      - "3004:3004"
+    expose:
+      - "3004"
     environment:
       - PORT=3004
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/wallet_service
-      - INTERNAL_KEY=default_internal_secret_key_123456
+      - INTERNAL_KEY=f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3006
     depends_on:
       - postgres
 
@@ -80,7 +83,48 @@ services:
       - "3005:3005"
     environment:
       - PORT=3005
-      - INTERNAL_KEY=default_internal_secret_key_123456
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/payment_service
+      - INTERNAL_KEY=f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68
+      - WALLET_SERVICE_URL=http://wallet-service:3004
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3006
+    depends_on:
+      - postgres
+
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    container_name: finvault-auth-service
+    expose:
+      - "3001"
+    environment:
+      - PORT=3001
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/auth_service
+      - ACCESS_TOKEN_SECRET=b7761dba2e068daf4f88c80a5d76f3ba1ee53e492a3fa1ade3d09ddbc2d30a69e86de163a65a3573aed370c9d5141827
+      - USER_SERVICE_URL=http://user-service:3002
+      - WALLET_SERVICE_URL=http://wallet-service:3004
+      - INTERNAL_KEY=f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68
+      - CLIENT_URL=http://localhost:5173
+    depends_on:
+      - postgres
+
+  admin-service:
+    build:
+      context: ./services/admin-service
+      dockerfile: Dockerfile
+    container_name: finvault-admin-service
+    expose:
+      - "3007"
+    environment:
+      - PORT=3007
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/admin_service
+      - INTERNAL_KEY=f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68
+      - USER_SERVICE_URL=http://user-service:3002
+      - MERCHANT_SERVICE_URL=http://merchant-service:3003
+      - WALLET_SERVICE_URL=http://wallet-service:3004
+      - CLIENT_URL=http://localhost:5173
+    depends_on:
+      - postgres
 
   gateway:
     build:
@@ -91,16 +135,18 @@ services:
       - "3000:3000"
     environment:
       - PORT=3000
-      - ACCESS_TOKEN_SECRET=d7aec1b51b32d434b4c2e29f6b7e12ad0ea34f68ad9203c91f244d95f87adeb7dc6bc157976ffeedc6b1b5a109fc01d7c419d69bcf59d873e65e4409f88f9f64
+      - ACCESS_TOKEN_SECRET=b7761dba2e068daf4f88c80a5d76f3ba1ee53e492a3fa1ade3d09ddbc2d30a69e86de163a65a3573aed370c9d5141827
       - CLIENT_URL=http://localhost:5173
       - USER_SERVICE_URL=http://user-service:3002
       - MERCHANT_SERVICE_URL=http://merchant-service:3003
-      - AUTH_SERVICE_URL=http://localhost:3001
+      - AUTH_SERVICE_URL=http://auth-service:3001
       - WALLET_SERVICE_URL=http://wallet-service:3004
       - PAYMENT_SERVICE_URL=http://payment-service:3005
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
-      - ADMIN_SERVICE_URL=http://localhost:3007
+      - ADMIN_SERVICE_URL=http://admin-service:3007
     depends_on:
+      - auth-service
+      - admin-service
       - user-service
       - merchant-service
       - notification-service

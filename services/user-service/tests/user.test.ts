@@ -14,6 +14,62 @@ const id = '20000000-0000-4000-8000-000000000001'
 const profile = { id, authUserId: owner, email: 'a@example.com', deletedAt: null, kycStatus: 'NONE', version: 0 }
 const headers = (userId = owner) => ({ 'x-gateway-verified': 'true', authorization: 'Bearer ' + jwt.sign({ userId, role: 'USER' }, process.env.ACCESS_TOKEN_SECRET!) })
 afterEach(() => mock.restoreAll())
+const adminHeaders = () => ({ 'x-gateway-verified': 'true', authorization: 'Bearer ' + jwt.sign({ userId: owner, role: 'ADMIN' }, process.env.ACCESS_TOKEN_SECRET!) })
+
+test('user directory preserves both KYC filter aliases, pagination, search and privacy', async () => {
+  let findQuery: any
+  let countQuery: any
+  stub(prisma.user, 'findMany', async (query: any) => {
+    findQuery = query
+    return [{ ...profile, kycStatus: 'PENDING', kycObjectKey: 'private/key', idImageUrl: 'private-url' }]
+  })
+  stub(prisma.user, 'count', async (query: any) => { countQuery = query; return 3 })
+  for (const alias of ['status', 'kycStatus']) {
+    const result = await request(app).get('/api/users').set(adminHeaders())
+      .query({ [alias]: ' pending ', search: ' Alice ', page: 2, limit: 2 }).expect(200)
+    assert.deepEqual(findQuery.where, {
+      deletedAt: null, kycStatus: 'PENDING', OR: [
+        { email: { contains: 'Alice', mode: 'insensitive' } },
+        { fullName: { contains: 'Alice', mode: 'insensitive' } }
+      ]
+    })
+    assert.deepEqual(countQuery.where, findQuery.where)
+    assert.equal(findQuery.skip, 2)
+    assert.equal(findQuery.take, 2)
+    assert.equal(result.body.data.totalElements, 3)
+    assert.equal(result.body.data.totalPages, 2)
+    assert.equal(result.body.data.content[0].kycObjectKey, undefined)
+    assert.equal(result.body.data.content[0].idImageUrl, undefined)
+  }
+})
+
+test('KYC filters accept each status, prioritize status alias and allow an empty filter', async () => {
+  let where: any
+  stub(prisma.user, 'findMany', async (query: any) => { where = query.where; return [] })
+  stub(prisma.user, 'count', async () => 0)
+  for (const status of ['NONE', 'PENDING', 'APPROVED', 'REJECTED']) {
+    await request(app).get('/api/users').set(adminHeaders()).query({ status }).expect(200)
+    assert.equal(where.kycStatus, status)
+  }
+  await request(app).get('/api/users').set(adminHeaders()).query({ status: 'approved', kycStatus: 'pending' }).expect(200)
+  assert.equal(where.kycStatus, 'APPROVED')
+  await request(app).get('/api/users').set(adminHeaders()).query({ status: '', kycStatus: 'pending' }).expect(200)
+  assert.equal(where.kycStatus, 'PENDING')
+  for (const query of [{}, { status: ' ', kycStatus: '' }]) {
+    await request(app).get('/api/users').set(adminHeaders()).query(query).expect(200)
+    assert.deepEqual(where, { deletedAt: null })
+  }
+})
+
+test('invalid KYC filters and non-admin directory access never query the database', async () => {
+  stub(prisma.user, 'findMany', async () => assert.fail('must not query users'))
+  stub(prisma.user, 'count', async () => assert.fail('must not count users'))
+  for (const query of [{ status: 'unknown' }, { kycStatus: 'unknown' }, { status: ['PENDING', 'APPROVED'] }]) {
+    await request(app).get('/api/users').set(adminHeaders()).query(query).expect(400)
+  }
+  await request(app).get('/api/users').set(headers()).query({ status: 'PENDING' }).expect(403)
+})
+
 test('GET resolves both profile ID and Auth ID and hides storage keys', async () => {
   stub(prisma.user, 'findMany', async () => [{ ...profile, kycObjectKey: 'private/key', idImageUrl: 'legacy-secret-url' }])
   for (const identifier of [id, owner]) {

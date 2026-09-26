@@ -2,14 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 
 export const requireInternalAuth = (req: Request, res: Response, next: NextFunction) => {
   const internalKey = req.headers['x-internal-key'];
-  const expectedKey = process.env.INTERNAL_API_KEY;
+  const expectedKey = process.env.INTERNAL_KEY;
 
   if (!expectedKey) {
     return res.status(500).json({
       success: false,
       error: {
         code: 'INTERNAL_SERVER_ERROR',
-        message: 'INTERNAL_API_KEY is not configured',
+        message: 'INTERNAL_KEY is not configured',
       },
     });
   }

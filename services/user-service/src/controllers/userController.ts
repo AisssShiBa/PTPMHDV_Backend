@@ -4,7 +4,7 @@ import { RequestWithContext } from '../middlewares/requestId'
 import { requireAdmin, requireOwner } from '../utils/access'
 import { HttpError } from '../utils/errors'
 import { resolveUser, setKycStatus, userResponse } from '../services/user.service'
-import { kycBody } from '../validations/user.validation'
+import { kycBody, ListUsersQuery } from '../validations/user.validation'
 import { submitDocument, documentUrl } from '../services/kyc.service'
 
 export async function createUser(req: RequestWithContext, res: Response) {
@@ -52,8 +52,8 @@ export async function updateKycStatus(req: RequestWithContext, res: Response) {
 }
 export async function getUsers(req: RequestWithContext, res: Response) {
   requireAdmin(req)
-  const { page, limit, search } = req.query as unknown as { page: number; limit: number; search: string }
-  const where = { deletedAt: null, ...(search ? { OR: [
+  const { page, limit, search, kycStatus } = req.query as unknown as ListUsersQuery
+  const where = { deletedAt: null, ...(kycStatus ? { kycStatus } : {}), ...(search ? { OR: [
     { email: { contains: search, mode: 'insensitive' as const } },
     { fullName: { contains: search, mode: 'insensitive' as const } }
   ] } : {}) }

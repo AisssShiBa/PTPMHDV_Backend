@@ -5,6 +5,7 @@ import helmet from 'helmet'
 import morgan from 'morgan'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { env } from './config/services'
+import { rateLimiter } from './middlewares/rateLimiter'
 import { sanitizeHeaders } from './middlewares/sanitizeHeaders'
 import { attachRequestId } from './middlewares/requestId'
 import { authenticate } from './middlewares/authenticate'
@@ -29,16 +30,20 @@ app.use(cors({
     credentials: true,
 }))
 
-// 3. Chuỗi Middleware cốt lõi (Thứ tự: Sanitize -> RequestId -> Auth)
+// 3. Endpoint kiểm tra sức khỏe Gateway (Công khai, không yêu cầu Token)
+app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', service: 'api-gateway' }))
+
+// 4. Rate Limiter chặn spam & DDoS toàn hệ thống (120 req/phút mỗi IP)
+app.use(rateLimiter(60 * 1000, 120))
+
+// 5. Chuỗi Middleware cốt lõi (Thứ tự: Sanitize -> RequestId -> Auth)
 app.use(sanitizeHeaders)
 app.use(attachRequestId)
 app.use(authenticate)
 
-// 4. Endpoint kiểm tra sức khỏe Gateway
-app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', service: 'api-gateway' }))
-
 // 5. Phân quyền tầng Route (Chặn trước khi request chạm vào proxy)
 app.use('/api/admin', requireRole('ADMIN'))
+app.use('/api/wallets/admin', requireRole('ADMIN'))
 
 // Helper tạo Proxy Middleware chuẩn (Giữ nguyên path, có timeout 10s và error handler)
 const createServiceProxy = (pathFilter: string, target: string) => {
@@ -54,7 +59,8 @@ const createServiceProxy = (pathFilter: string, target: string) => {
                 if (req.headers['x-user-id']) proxyReq.setHeader('x-user-id', req.headers['x-user-id'] as string)
                 if (req.headers['x-user-role']) proxyReq.setHeader('x-user-role', req.headers['x-user-role'] as string)
                 if (req.headers['x-request-id']) proxyReq.setHeader('x-request-id', req.headers['x-request-id'] as string)
-                if (req.headers['x-gateway-verified']) proxyReq.setHeader('x-gateway-verified', 'true')
+                // Bất kỳ request nào đi qua Gateway proxy đều được đóng dấu xác nhận
+                proxyReq.setHeader('x-gateway-verified', 'true')
             },
             error: (err, req, res) => {
                 errorHandler(err, req as any, res as any, () => { })
@@ -67,6 +73,7 @@ const createServiceProxy = (pathFilter: string, target: string) => {
 app.use(createServiceProxy('/api/auth', env.services.auth))
 app.use(createServiceProxy('/api/users', env.services.user))
 app.use(createServiceProxy('/api/merchants', env.services.merchant))
+app.use(createServiceProxy('/api/wallets/admin', env.services.wallet))
 app.use(createServiceProxy('/api/wallets', env.services.wallet))
 app.use(createServiceProxy('/api/payments', env.services.payment))
 app.use(createServiceProxy('/api/notifications', env.services.notification))
