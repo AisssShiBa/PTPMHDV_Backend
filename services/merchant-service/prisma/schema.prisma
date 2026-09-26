@@ -9,7 +9,7 @@ datasource db {
 
 model Merchant {
   id           String         @id @default(uuid())
-  ownerId      String         @map("owner_id")
+  ownerId      String         @unique @map("owner_id")
   businessName String         @map("business_name")
   taxId        String?        @map("tax_id")
   bankAccount  String?        @map("bank_account")
@@ -17,6 +17,7 @@ model Merchant {
   createdAt    DateTime       @default(now()) @map("created_at")
   updatedAt    DateTime       @updatedAt @map("updated_at")
   deletedAt    DateTime?      @map("deleted_at")
+  version      Int            @default(1)
 
   @@index([status])
   @@index([ownerId])
@@ -27,4 +28,23 @@ enum MerchantStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+model MerchantOutboxEvent {
+  id String @id @default(uuid())
+  aggregateId String @map("aggregate_id")
+  aggregateVersion Int @map("aggregate_version")
+  eventType String @map("event_type")
+  payload Json
+  status String @default("PENDING")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at")
+  lockedUntil DateTime? @map("locked_until")
+  lockToken String? @map("lock_token")
+  lastError String? @map("last_error")
+  createdAt DateTime @default(now()) @map("created_at")
+  publishedAt DateTime? @map("published_at")
+  @@index([status, nextAttemptAt])
+  @@unique([aggregateId, aggregateVersion])
+  @@map("merchant_outbox_events")
 }
