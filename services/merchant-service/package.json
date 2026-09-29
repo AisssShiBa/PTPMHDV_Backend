@@ -9,7 +9,13 @@
     "build": "tsc",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
-    "test": "echo \"Error: no test specified\" && exit 0"
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test:integration": "tsx --test --test-concurrency=1 tests/integration/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test:db": "node tests/migrate.cjs",
+    "worker": "tsx src/events/worker.ts",
+    "db:migrate": "prisma migrate deploy",
+    "events:replay": "tsx src/events/replay.ts"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +23,7 @@
   "type": "commonjs",
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "amqplib": "^2.0.1",
     "axios": "^1.20.0",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
@@ -28,16 +35,19 @@
     "zod": "^4.6.2"
   },
   "devDependencies": {
+    "@types/amqplib": "^0.10.8",
     "@types/bcrypt": "^6.0.0",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.2.0",
+    "@types/supertest": "^7.2.1",
     "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
     "globals": "^17.11.0",
     "nodemon": "^3.1.14",
+    "supertest": "^7.3.0",
     "tsx": "^4.23.12",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.67.0"

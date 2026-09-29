@@ -17,6 +17,10 @@ model User {
   kycStatus   KycStatus @default(NONE) @map("kyc_status")
   idNumber    String?   @map("id_number")
   idImageUrl  String?   @map("id_image_url")
+  kycObjectKey String? @map("kyc_object_key")
+  kycMimeType String? @map("kyc_mime_type")
+  kycFileSize Int? @map("kyc_file_size")
+  version Int @default(0)
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
   deletedAt   DateTime? @map("deleted_at")
@@ -30,4 +34,20 @@ enum KycStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+model ConsumedEvent {
+  id String @id
+  payloadHash String @map("payload_hash")
+  processedAt DateTime @default(now()) @map("processed_at")
+  @@map("consumed_events")
+}
+
+model StorageCleanup {
+  objectKey String @id @map("object_key")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  @@index([nextAttemptAt])
+  @@map("storage_cleanup")
 }
