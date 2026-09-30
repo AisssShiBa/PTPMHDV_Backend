@@ -15,8 +15,8 @@ export const create = async (req: Request, res: Response) => {
 };
 
 export const getBalance = async (req: Request, res: Response) => {
-  const userId = req.params.userId;
-  const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
+  const userId = req.params.userId as string;
+  const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
   const wallet = await walletService.getBalance(userId, ownerType);
   res.json({
     success: true, data: {
@@ -30,8 +30,8 @@ export const getBalance = async (req: Request, res: Response) => {
 };
 
 export const hold = async (req: Request, res: Response) => {
-  const userId = req.params.userId;
-  const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
+  const userId = req.params.userId as string;
+  const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
   const { amount, referenceId, expiresAt } = req.body;
   const { hold, replayed } = await walletHoldService.createHold(userId, amount, referenceId, expiresAt, ownerType);
   res.json({
@@ -47,8 +47,8 @@ export const hold = async (req: Request, res: Response) => {
 };
 
 export const capture = async (req: Request, res: Response) => {
-  const userId = req.params.userId;
-  const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
+  const userId = req.params.userId as string;
+  const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
   const { referenceId } = req.body;
   const result = await walletHoldService.captureHold(userId, referenceId, ownerType);
   res.json({
@@ -61,15 +61,15 @@ export const capture = async (req: Request, res: Response) => {
 };
 
 export const release = async (req: Request, res: Response) => {
-  const userId = req.params.userId;
-  const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
+  const userId = req.params.userId as string;
+  const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
   const { referenceId } = req.body;
   const { hold, replayed } = await walletHoldService.releaseHold(userId, referenceId, ownerType);
   res.json({ success: true, data: { id: hold.id, status: hold.status, replayed } });
 };
 
 export const transfer = async (req: Request, res: Response) => {
-  const fromUserId = req.params.userId;
+  const fromUserId = req.params.userId as string;
   const result = await ledgerService.transfer({ fromUserId, ...req.body });
   res.json({
     success: true, data: {
@@ -82,8 +82,8 @@ export const transfer = async (req: Request, res: Response) => {
 };
 
 export const credit = async (req: Request, res: Response) => {
-  const userId = req.params.userId;
-  const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
+  const userId = req.params.userId as string;
+  const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
   const result = await ledgerService.credit(userId, req.body, ownerType);
   res.json({
     success: true, data: {
@@ -95,8 +95,8 @@ export const credit = async (req: Request, res: Response) => {
 };
 
 export const debit = async (req: Request, res: Response) => {
-  const userId = req.params.userId;
-  const ownerType = (req.query.ownerType as OwnerType) || OwnerType.USER;
+  const userId = req.params.userId as string;
+  const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
   const result = await ledgerService.debit(userId, req.body, ownerType);
   res.json({
     success: true, data: {
@@ -108,7 +108,7 @@ export const debit = async (req: Request, res: Response) => {
 };
 
 export const history = async (req: Request, res: Response) => {
-  const userId = req.params.userId;
+  const userId = req.params.userId as string;
   const query: any = req.query;
   const result = await walletService.getHistory(userId, query);
   res.json({

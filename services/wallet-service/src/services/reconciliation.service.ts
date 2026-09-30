@@ -1,16 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { AnomalyType } from '@prisma/client';
+import { AnomalyType, PrismaClient } from '@prisma/client';
 import { randomUUID } from 'crypto';
 
-@Injectable()
+const prisma = new PrismaClient();
+
 export class ReconciliationService {
-  private readonly logger = new Logger(ReconciliationService.name);
-
-  constructor(private readonly prisma: PrismaService) {}
-
   async runReconciliation(isFull: boolean = false) {
-    this.logger.log(`Starting reconciliation process. isFull=${isFull}`);
+    console.log(`[Reconciliation] Starting reconciliation process. isFull=${isFull}`);
     const anomalies: any[] = [];
 
     // 1. Check Negative Balances
@@ -34,9 +29,9 @@ export class ReconciliationService {
     const systemConservation = await this.checkSystemConservation();
 
     // 5. Calculate Summary & Save Report
-    const totalWallets = await this.prisma.wallet.count();
+    const totalWallets = await prisma.wallet.count();
     
-    const report = await this.prisma.reconciliationReport.create({
+    const report = await prisma.reconciliationReport.create({
       data: {
         totalWallets,
         anomaliesFound: anomalies.length,
@@ -54,12 +49,12 @@ export class ReconciliationService {
       },
     });
 
-    this.logger.log(`Reconciliation completed. Report ID: ${report.id}. Anomalies found: ${anomalies.length}`);
+    console.log(`[Reconciliation] Completed. Report ID: ${report.id}. Anomalies found: ${anomalies.length}`);
     return report;
   }
 
   private async checkNegativeBalances() {
-    const result: any[] = await this.prisma.$queryRaw`
+    const result: any[] = await prisma.$queryRaw`
       SELECT id as "walletId", balance
       FROM "Wallet"
       WHERE balance < 0;
@@ -73,7 +68,7 @@ export class ReconciliationService {
 
   private async checkBalanceDriftQuick() {
     // Quick check compares the latest ledger entry balanceAfter against the current wallet balance
-    const result: any[] = await this.prisma.$queryRaw`
+    const result: any[] = await prisma.$queryRaw`
       WITH LatestLedger AS (
         SELECT "walletId", "balanceAfter",
                ROW_NUMBER() OVER(PARTITION BY "walletId" ORDER BY "createdAt" DESC, "id" DESC) as rn
@@ -97,7 +92,7 @@ export class ReconciliationService {
 
   private async checkBalanceDriftFull() {
     // Full check sums all DEBIT/CREDIT transactions for each wallet
-    const result: any[] = await this.prisma.$queryRaw`
+    const result: any[] = await prisma.$queryRaw`
       WITH CalculatedBalance AS (
         SELECT "walletId",
                SUM(CASE WHEN direction = 'CREDIT' THEN amount ELSE -amount END) as "calculatedBalance"
@@ -121,7 +116,7 @@ export class ReconciliationService {
 
   private async checkTransactionIntegrity() {
     // Checks if the sum of CREDIT amounts equals the sum of DEBIT amounts for each transactionId
-    const result: any[] = await this.prisma.$queryRaw`
+    const result: any[] = await prisma.$queryRaw`
       SELECT "transactionId",
              SUM(CASE WHEN direction = 'CREDIT' THEN amount ELSE -amount END) as diff
       FROM "LedgerEntry"
@@ -137,7 +132,7 @@ export class ReconciliationService {
 
   private async checkSystemConservation() {
     // Sum of all balances (including SYSTEM) should ideally be 0 if the system is closed
-    const result: any[] = await this.prisma.$queryRaw`
+    const result: any[] = await prisma.$queryRaw`
       SELECT SUM(balance) as "totalBalance"
       FROM "Wallet";
     `;

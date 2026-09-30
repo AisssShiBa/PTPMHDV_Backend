@@ -121,7 +121,4 @@ export class WalletService {
     return { wallets, total, page, limit };
   }
 
-  async reconcile() {
-    throw new DomainException(HttpStatus.INTERNAL_SERVER_ERROR, "NOT_IMPLEMENTED", "Reconciliation with real DB requires batch aggregation");
-  }
 }

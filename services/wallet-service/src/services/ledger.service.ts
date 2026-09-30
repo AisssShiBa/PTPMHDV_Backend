@@ -4,7 +4,7 @@ import { DomainException } from "../utils/domain.exception";
 import { TransferDto, CreditDto, DebitDto } from "../dtos/wallet.dto";
 import { assertWalletActive, conflict, decimalToString, insufficientBalance, money } from "../utils/wallet.helpers";
 
-const HttpStatus = { NOT_FOUND: 404, INTERNAL_SERVER_ERROR: 500 };
+const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, INTERNAL_SERVER_ERROR: 500 };
 const prisma = new PrismaClient();
 
 export class LedgerService {
