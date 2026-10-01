@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
 import { PaymentService } from '../services/payment.service';
+import { WalletClient } from '../clients/wallet.client';
 import { RequestWithContext } from '../middlewares/requestId';
 
-const paymentService = new PaymentService();
+const walletClient = new WalletClient();
+const paymentService = new PaymentService(walletClient);
 
 export const checkout = async (req: RequestWithContext, res: Response) => {
   const { payment, replayed } = await paymentService.checkout({ ...req.body, userId: req.userId });

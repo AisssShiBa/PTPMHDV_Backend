@@ -2,6 +2,7 @@ import { DomainException } from '../utils/domain.exception';
 import { PaymentStatus, OutboxEventStatus, PaymentType } from '../utils/enums';
 import { prisma } from '../utils/prisma';
 import { randomUUID } from 'crypto';
+import { WalletClient } from '../clients/wallet.client';
 
 export interface CheckoutDto {
   userId: string;
@@ -13,6 +14,8 @@ export interface CheckoutDto {
 }
 
 export class PaymentService {
+  constructor(private walletClient: WalletClient) {}
+
   async checkout(dto: CheckoutDto) {
     const existing = await prisma.payment.findUnique({
       where: { idempotencyKey: dto.idempotencyKey }
@@ -29,24 +32,7 @@ export class PaymentService {
 
     // 1. Call Wallet hold
     try {
-      const response = await fetch(`${process.env.WALLET_SERVICE_URL}/api/wallets/${dto.userId}/hold`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
-        },
-        body: JSON.stringify({
-          amount: dto.amount.toString(),
-          referenceId: holdId,
-          expiresAt: holdExpiresAt.toISOString()
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new DomainException(400, 'HOLD_FAILED', errorData.message || 'Failed to hold amount in wallet');
-      }
-
+      await this.walletClient.createHold(dto.userId, dto.amount.toString(), holdId, holdExpiresAt.toISOString());
       holdSucceeded = true;
     } catch (err: any) {
       console.error(`Hold failed for user ${dto.userId}:`, err);
@@ -85,7 +71,7 @@ export class PaymentService {
 
       if (holdSucceeded) {
         console.log(`[Saga Compensate] DB save failed. Calling release to free up user's money...`);
-        await this.releaseWalletHold(dto.userId, holdId);
+        await this.walletClient.releaseHold(dto.userId, holdId);
       }
 
       throw new DomainException(500, 'INTERNAL_ERROR', 'Database error during checkout. Wallet hold has been released.');
@@ -100,7 +86,7 @@ export class PaymentService {
     }
 
     if (payment.holdExpiresAt && payment.holdExpiresAt.getTime() < Date.now()) {
-      await this.releaseWalletHold(payment.userId, payment.holdId!);
+      await this.walletClient.releaseHold(payment.userId, payment.holdId!);
       const updated = await prisma.payment.update({
         where: { id },
         data: {
@@ -121,21 +107,7 @@ export class PaymentService {
     let captureSucceeded = false;
 
     try {
-      const response = await fetch(`${process.env.WALLET_SERVICE_URL}/api/wallets/${payment.userId}/capture`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
-        },
-        body: JSON.stringify({
-          referenceId: payment.holdId
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || 'Capture failed');
-      }
+      await this.walletClient.captureHold(payment.userId, payment.holdId!);
 
       captureSucceeded = true;
       console.log(`[Saga] Wallet capture success for payment ${id}`);
@@ -177,7 +149,7 @@ export class PaymentService {
 
       if (captureSucceeded) {
         console.log(`[Saga Compensate] Capture success but DB failed. Calling credit to refund...`);
-        await this.creditWallet(payment.userId, payment.amount.toString(), `compensate_${payment.id}`);
+        await this.walletClient.credit(payment.userId, payment.amount.toString(), `compensate_${payment.id}`);
       }
 
       const failureNote = captureSucceeded
@@ -226,21 +198,7 @@ export class PaymentService {
       }
 
       try {
-        const response = await fetch(`${process.env.WALLET_SERVICE_URL}/api/wallets/${payment.userId}/credit`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
-          },
-          body: JSON.stringify({
-            amount: payment.amount.toString(),
-            referenceId: `refund_${payment.id}`
-          })
-        });
-
-        if (!response.ok) {
-          throw new Error('Credit failed');
-        }
+        await this.walletClient.refundCredit(payment.userId, payment.amount.toString(), `refund_${payment.id}`);
 
         const updated = await tx.payment.update({
           where: { id },
@@ -284,7 +242,7 @@ export class PaymentService {
     }
 
     if (payment.holdId) {
-      await this.releaseWalletHold(payment.userId, payment.holdId);
+      await this.walletClient.releaseHold(payment.userId, payment.holdId);
     }
 
     return await prisma.payment.update({
@@ -319,52 +277,5 @@ export class PaymentService {
       },
       orderBy: { createdAt: 'desc' }
     });
-  }
-
-  private async releaseWalletHold(userId: string, holdId: string) {
-    try {
-      const response = await fetch(`${process.env.WALLET_SERVICE_URL}/api/wallets/${userId}/release`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
-        },
-        body: JSON.stringify({
-          referenceId: holdId
-        })
-      });
-
-      if (!response.ok) {
-        console.error(`[Wallet Release] Failed to release hold ${holdId} for user ${userId}. Wallet returned non-OK.`);
-      } else {
-        console.log(`[Wallet Release] Successfully released hold ${holdId} for user ${userId}.`);
-      }
-    } catch (error: any) {
-      console.error(`[Wallet Release] Network/System Error releasing hold ${holdId} for user ${userId}:`, error.message);
-    }
-  }
-
-  private async creditWallet(userId: string, amount: string, referenceId: string) {
-    try {
-      const response = await fetch(`${process.env.WALLET_SERVICE_URL}/api/wallets/${userId}/credit`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
-        },
-        body: JSON.stringify({
-          amount,
-          referenceId
-        })
-      });
-
-      if (!response.ok) {
-        console.error(`[Wallet Credit] Failed to refund (compensate) ${amount} for user ${userId}. Wallet returned non-OK.`);
-      } else {
-        console.log(`[Wallet Credit] Successfully refunded (compensated) ${amount} for user ${userId}.`);
-      }
-    } catch (error: any) {
-      console.error(`[Wallet Credit] Network/System Error refunding user ${userId}:`, error.message);
-    }
   }
 }
