@@ -35,6 +35,10 @@ export function startOutboxScheduler() {
             message = `Hoàn tiền dịch vụ cộng ${amount} VND. Số dư: ${balanceAfter} VND.`;
           }
           
+          let type = event.topic.toUpperCase().replace('.', '_');
+          if (type === 'WALLET_BALANCE_ADDED') type = 'WALLET_CREDITED';
+          if (type === 'WALLET_BALANCE_DEDUCTED') type = 'WALLET_DEBITED';
+          
           const response = await fetch(`${process.env.NOTIFICATION_SERVICE_URL}/api/notifications`, {
             method: 'POST',
             headers: {
@@ -43,7 +47,7 @@ export function startOutboxScheduler() {
             },
             body: JSON.stringify({
               userId: payload.userId,
-              type: event.topic.toUpperCase().replace('.', '_'), // e.g. WALLET_BALANCE_ADDED
+              type: type, // Mapped to correct notification type
               message: message
             })
           });

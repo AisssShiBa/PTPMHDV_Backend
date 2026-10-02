@@ -1,64 +1,10 @@
 import cron from 'node-cron';
 import { OutboxEventStatus } from '../utils/enums';
 import { prisma } from '../utils/prisma';
+import { NotificationClient } from '../clients/notification.client';
 
-import axios from 'axios';
-
-export const startOutboxScheduler = () => {
-  cron.schedule('*/5 * * * *', async () => {
-    try {
-      const expiredPayments = await prisma.payment.findMany({
-        where: {
-          status: 'PENDING',
-          holdExpiresAt: { lt: new Date() }
-        },
-        take: 50,
-      });
-
-      for (const payment of expiredPayments) {
-        console.log(`[Scheduler] Payment ${payment.id} hold expired. Releasing...`);
-        try {
-          if (payment.holdId) {
-            await axios.post(
-              `${process.env.WALLET_SERVICE_URL}/api/wallets/${payment.userId}/release`,
-              { referenceId: payment.holdId },
-              { headers: { 'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456' } }
-            );
-          }
-
-          const updated = await prisma.payment.update({
-            where: { id: payment.id },
-            data: {
-              status: 'EXPIRED',
-              histories: {
-                create: {
-                  id: require('crypto').randomUUID(),
-                  fromStatus: 'PENDING',
-                  toStatus: 'EXPIRED',
-                  note: 'Hold expired by scheduler',
-                }
-              }
-            }
-          });
-
-          await prisma.outboxEvent.create({
-            data: {
-              id: require('crypto').randomUUID(),
-              aggregateId: payment.id,
-              eventType: 'PAYMENT_EXPIRED',
-              topic: payment.callbackTopic,
-              payload: JSON.parse(JSON.stringify(updated)),
-              status: OutboxEventStatus.PENDING,
-            }
-          });
-        } catch (err: any) {
-          console.error(`[Scheduler] Failed to process expired payment ${payment.id}:`, err.message);
-        }
-      }
-    } catch (error) {
-      console.error('[Payment Expiration Scheduler Error]', error);
-    }
-  });
+export const startOutboxJob = () => {
+  const notificationClient = new NotificationClient();
 
   cron.schedule('*/5 * * * * *', async () => {
     try {
@@ -100,19 +46,7 @@ export const startOutboxScheduler = () => {
           }
 
           // Gọi HTTP POST sang notification-service
-          await axios.post(
-            `${process.env.NOTIFICATION_SERVICE_URL}/api/notifications`,
-            {
-              userId: payload.userId,
-              type: event.eventType, // PAYMENT_SUCCESS, PAYMENT_FAILED
-              message: message
-            },
-            {
-              headers: {
-                'X-Internal-Key': process.env.INTERNAL_KEY || 'f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68'
-              }
-            }
-          );
+          await notificationClient.send(payload.userId, event.eventType, message);
 
           // Nếu gọi thành công thì update DB
           await prisma.outboxEvent.update({
@@ -159,5 +93,5 @@ export const startOutboxScheduler = () => {
       console.error('[Outbox Scheduler Error]', error);
     }
   });
-  console.log('Outbox Scheduler started (runs every 5 seconds)');
+  console.log('Outbox Job started (runs every 5 seconds)');
 };

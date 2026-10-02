@@ -77,3 +77,46 @@ model OutboxEvent {
   @@index([status, createdAt])
   @@index([nextRetryAt])
 }
+
+enum TopupStatus {
+  PENDING
+  PROCESSING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+model TopupRequest {
+  id                  String       @id @default(uuid()) @db.Uuid
+  userId              String       @db.VarChar(50)
+  amount              Decimal      @db.Decimal(20, 2)
+  code                String       @unique @db.VarChar(50)
+  status              TopupStatus  @default(PENDING)
+  expiresAt           DateTime     @db.Timestamp()
+  approvedBy          String?      @db.VarChar(50)
+  approvedAt          DateTime?    @db.Timestamp()
+  rejectReason        String?      @db.Text
+  walletTransactionId String?      @db.Uuid
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  auditLogs           TopupAuditLog[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model TopupAuditLog {
+  id              String       @id @default(uuid()) @db.Uuid
+  topupRequestId  String       @db.Uuid
+  actorId         String       @db.VarChar(50)
+  action          String       @db.VarChar(100)
+  fromStatus      TopupStatus?
+  toStatus        TopupStatus
+  reason          String?      @db.Text
+  createdAt       DateTime     @default(now())
+
+  topupRequest    TopupRequest @relation(fields: [topupRequestId], references: [id], onDelete: Cascade)
+
+  @@index([topupRequestId])
+}

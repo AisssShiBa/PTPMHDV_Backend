@@ -39,15 +39,15 @@ enum HoldStatus {
 }
 
 model Wallet {
-  id            Int          @id @default(autoincrement())
-  userId        String?      @unique @db.VarChar(50)
+  id            Int           @id @default(autoincrement())
+  userId        String?       @unique @db.VarChar(50)
   ownerType     OwnerType
-  balance       Decimal      @default(0) @db.Decimal(20, 2)
-  heldBalance   Decimal      @default(0) @db.Decimal(20, 2)
-  currency      String       @default("VND") @db.VarChar(3)
-  status        WalletStatus @default(ACTIVE)
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  balance       Decimal       @default(0) @db.Decimal(20, 2)
+  heldBalance   Decimal       @default(0) @db.Decimal(20, 2)
+  currency      String        @default("VND") @db.VarChar(3)
+  status        WalletStatus  @default(ACTIVE)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
   ledgerEntries LedgerEntry[]
   holds         WalletHold[]
 
@@ -96,4 +96,40 @@ model WalletHold {
 
   @@unique([walletId, referenceId])
   @@index([status, expiresAt])
+}
+
+enum AnomalyType {
+  NEGATIVE_BALANCE
+  BALANCE_DRIFT_QUICK
+  BALANCE_DRIFT_FULL
+  TRANSACTION_UNBALANCED
+}
+
+model ReconciliationReport {
+  id                    Int      @id @default(autoincrement())
+  runAt                 DateTime @default(now())
+  totalWallets          Int
+  anomaliesFound        Int
+  systemBalanceExpected Decimal  @db.Decimal(20, 2)
+  systemBalanceActual   Decimal  @db.Decimal(20, 2)
+  isBalanced            Boolean
+
+  anomalies ReconciliationAnomaly[]
+
+  @@index([runAt])
+}
+
+model ReconciliationAnomaly {
+  id            BigInt      @id @default(autoincrement())
+  reportId      Int
+  type          AnomalyType
+  walletId      Int?
+  transactionId String?     @db.Uuid
+  detail        Json
+
+  report ReconciliationReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+  @@index([type])
+  @@index([walletId])
 }

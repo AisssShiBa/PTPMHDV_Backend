@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import app from './app';
-import { startHoldScheduler } from './services/wallet-hold.scheduler';
-import { startOutboxScheduler } from './services/outbox.scheduler';
+import { startHoldScheduler } from './jobs/wallet-hold.scheduler';
+import { startOutboxScheduler } from './jobs/outbox.scheduler';
 
 const port = process.env.PORT || 3004;
 
