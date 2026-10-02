@@ -95,4 +95,22 @@ export class WalletClient {
       throw new Error('Credit failed');
     }
   }
+
+  async topupCredit(userId: string, amount: string, referenceId: string) {
+    const response = await fetch(`${this.baseUrl}/api/wallets/${userId}/credit`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
+      },
+      body: JSON.stringify({ amount, referenceId, transferType: 'TOPUP' })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return { success: false, status: response.status, errorData };
+    }
+    const data = await response.json();
+    return { success: true, data };
+  }
 }

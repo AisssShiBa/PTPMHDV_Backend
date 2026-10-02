@@ -5,8 +5,13 @@ import { requireGateway } from '../middlewares/requireGateway';
 import { requireInternalAuth } from '../middlewares/internalAuth';
 import * as paymentController from '../controllers/payment.controller';
 import * as schemas from '../validations/payment.validation';
+import topupRoutes from './topup.routes';
+import adminTopupRoutes from './admin-topup.routes';
 
 const router = Router();
+
+router.use('/topups', topupRoutes);
+router.use('/admin/topups', adminTopupRoutes);
 
 router.post('/checkout', requireGateway, attachRequestId, validate(schemas.checkoutSchema), paymentController.checkout);
 router.post('/:id/confirm', requireInternalAuth, validate(schemas.paramIdSchema), paymentController.confirm);
