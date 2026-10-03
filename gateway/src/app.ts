@@ -19,16 +19,12 @@ app.use(helmet()) //giúp hạn chế một số kiểu tấn công liên quan �
 app.use(morgan('[:date[iso]] :method :url :status :response-time ms - ReqId: :req[x-request-id]'))
 
 // 2. Cấu hình CORS
-const allowedOrigins = [env.clientUrl, 'http://localhost:5173', 'http://localhost:5174'].filter(Boolean)
-app.use(cors({
-    origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin) || /^http:\/\/localhost:\d+$/.test(origin)) {
-            return callback(null, true)
-        }
-        return callback(new Error('Chặn bởi chính sách CORS'))
-    },
-    credentials: true,
-}))
+app.use(
+    cors({
+        origin: 'http://localhost:5173',
+        credentials: true,
+    })
+)
 
 // 3. Endpoint kiểm tra sức khỏe Gateway (Công khai, không yêu cầu Token)
 app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', service: 'api-gateway' }))
