@@ -17,6 +17,7 @@
     "type": "commonjs",
     "dependencies": {
         "@prisma/client": "^6.19.3",
+        "amqplib": "^2.2.0",
         "class-transformer": "^0.5.1",
         "class-validator": "^0.15.1",
         "cors": "^2.8.6",
@@ -30,6 +31,7 @@
         "zod": "^4.6.5"
     },
     "devDependencies": {
+        "@types/amqplib": "^0.10.8",
         "@types/cors": "^2.8.19",
         "@types/express": "^5.0.6",
         "@types/morgan": "^1.9.10",

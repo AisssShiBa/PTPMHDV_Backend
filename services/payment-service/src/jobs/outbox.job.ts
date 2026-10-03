@@ -2,6 +2,21 @@ import cron from 'node-cron';
 import { OutboxEventStatus } from '../utils/enums';
 import { prisma } from '../utils/prisma';
 import { NotificationClient } from '../clients/notification.client';
+import { publish } from '../utils/rabbitmq.publisher';
+
+/**
+ * Type validation (Bước 4):
+ * eventType từ payment outbox phải thuộc whitelist của notification-service:
+ *   PAYMENT_SUCCESS    ✅
+ *   PAYMENT_FAILED     ✅
+ *   PAYMENT_REFUNDED   ✅
+ *   PAYMENT_CANCELLED  ✅
+ *   PAYMENT_EXPIRED    ❌ — KHÔNG có trong whitelist notification-service
+ *                         → xử lý như cũ: mark SENT ngay, skip gửi
+ *
+ * Routing key: 'payment.notification' (binding '#' của consumer khớp tất cả)
+ */
+const ROUTING_KEY = 'payment.notification';
 
 export const startOutboxJob = () => {
   const notificationClient = new NotificationClient();
@@ -9,7 +24,7 @@ export const startOutboxJob = () => {
   cron.schedule('*/5 * * * * *', async () => {
     try {
       const pendingEvents = await prisma.outboxEvent.findMany({
-        where: { 
+        where: {
           status: OutboxEventStatus.PENDING,
           OR: [
             { nextRetryAt: null },
@@ -23,21 +38,20 @@ export const startOutboxJob = () => {
         console.log(`[Outbox] Processing event ${event.id} - ${event.topic}`);
 
         try {
-          const payload = event.payload as any;
-          let message = `Giao dịch ${payload.id} đã được xử lý.`;
+          const payload = event.payload as Record<string, unknown>;
+          let message = `Giao dịch ${String(payload.id ?? '')} đã được xử lý.`;
 
           if (event.eventType === 'PAYMENT_SUCCESS') {
-            message = `Thanh toán thành công ${payload.amount} VND.`;
+            message = `Thanh toán thành công ${String(payload.amount ?? '')} VND.`;
           } else if (event.eventType === 'PAYMENT_FAILED') {
-            message = `Thanh toán thất bại. Lý do: ${payload.failureReason || 'Lỗi hệ thống'}`;
+            message = `Thanh toán thất bại. Lý do: ${String(payload.failureReason ?? 'Lỗi hệ thống')}`;
           } else if (event.eventType === 'PAYMENT_REFUNDED') {
-            message = `Thanh toán đã được hoàn tiền ${payload.amount} VND.`;
+            message = `Thanh toán đã được hoàn tiền ${String(payload.amount ?? '')} VND.`;
           } else if (event.eventType === 'PAYMENT_CANCELLED') {
             message = `Thanh toán đã bị hủy.`;
           } else {
-            // Các type khác hiện tại notification-service chưa hỗ trợ
-            // Đánh dấu SENT luôn để bỏ qua
-            // Yêu cầu notification update để gọi lại
+            // PAYMENT_EXPIRED và các type khác không có trong whitelist notification-service
+            // → đánh dấu SENT ngay, không gửi
             await prisma.outboxEvent.update({
               where: { id: event.id },
               data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
@@ -45,30 +59,57 @@ export const startOutboxJob = () => {
             continue;
           }
 
-          // Gọi HTTP POST sang notification-service
-          await notificationClient.send(payload.userId, event.eventType, message);
+          const userId = String(payload.userId ?? '');
+          const mqPayload = { userId, type: event.eventType, message };
 
-          // Nếu gọi thành công thì update DB
+          // --- Thử RabbitMQ trước ---
+          let sent = false;
+          try {
+            sent = await publish('payment.events', ROUTING_KEY, mqPayload, { messageId: event.id });
+          } catch {
+            sent = false;
+          }
+
+          if (sent) {
+            // RabbitMQ đã confirm — đánh dấu thành công
+            await prisma.outboxEvent.update({
+              where: { id: event.id },
+              data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
+            });
+            console.log(`[Outbox] Event ${event.id} sent via RabbitMQ.`);
+            continue;
+          }
+
+          // --- Fallback: HTTP POST sang notification-service ---
+          console.warn(`[Outbox] RabbitMQ unavailable for event ${event.id}, falling back to HTTP.`);
+          await notificationClient.send(userId, event.eventType, message);
+
           await prisma.outboxEvent.update({
             where: { id: event.id },
-            data: {
-              status: OutboxEventStatus.SENT,
-              sentAt: new Date(),
-            }
+            data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
           });
-        } catch (err: any) {
-          console.error(`[Outbox] Lỗi khi gửi event ${event.id} sang notification-service:`, err?.response?.data || err.message);
+          console.log(`[Outbox] Event ${event.id} sent via HTTP fallback.`);
 
-          if (err?.response?.status >= 400 && err?.response?.status < 500) {
-            // Lỗi payload/client error từ notification-service (ví dụ sai type) -> đánh dấu FAILED để không lặp vô tận
+        } catch (err: unknown) {
+          const axiosErr = err as { response?: { status?: number; data?: unknown }; message?: string };
+          console.error(
+            `[Outbox] Lỗi khi gửi event ${event.id}:`,
+            axiosErr?.response?.data ?? axiosErr?.message
+          );
+
+          const httpStatus = axiosErr?.response?.status;
+
+          if (httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500) {
+            // Lỗi 4xx từ notification-service (payload sai, type không hợp lệ)
+            // → đánh dấu FAILED, không retry (chỉ áp dụng cho nhánh HTTP fallback)
             await prisma.outboxEvent.update({
               where: { id: event.id },
               data: { status: OutboxEventStatus.FAILED }
             });
           } else {
-            // Lỗi mạng hoặc server error (500) -> Exponential Backoff & DLQ
-            const newRetryCount = (event.retryCount || 0) + 1;
-            
+            // Lỗi mạng, 5xx, hoặc lỗi publish RabbitMQ → Exponential Backoff & DLQ
+            const newRetryCount = (event.retryCount ?? 0) + 1;
+
             if (newRetryCount >= 5) {
               console.error(`[Outbox DLQ] Event ${event.id} vượt quá số lần thử lại (5 lần). Chuyển sang FAILED.`);
               await prisma.outboxEvent.update({
@@ -76,14 +117,13 @@ export const startOutboxJob = () => {
                 data: { status: OutboxEventStatus.FAILED, retryCount: newRetryCount }
               });
             } else {
-              // Exponential backoff: 2s, 4s, 8s, 16s...
               const delaySeconds = Math.pow(2, newRetryCount);
               const nextRetryAt = new Date(Date.now() + delaySeconds * 1000);
-              console.log(`[Outbox Backoff] Lùi lại gửi event ${event.id}. Thử lại lần ${newRetryCount} vào ${nextRetryAt.toISOString()}`);
-              
+              console.log(`[Outbox Backoff] Event ${event.id}. Thử lại lần ${newRetryCount} vào ${nextRetryAt.toISOString()}`);
+
               await prisma.outboxEvent.update({
                 where: { id: event.id },
-                data: { retryCount: newRetryCount, nextRetryAt: nextRetryAt }
+                data: { retryCount: newRetryCount, nextRetryAt }
               });
             }
           }
@@ -93,5 +133,6 @@ export const startOutboxJob = () => {
       console.error('[Outbox Scheduler Error]', error);
     }
   });
+
   console.log('Outbox Job started (runs every 5 seconds)');
 };
