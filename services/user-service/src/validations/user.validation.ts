@@ -6,7 +6,7 @@ const profileFields = z.object({
   address: z.string().trim().min(1).max(500).optional()
 }).strict().refine(value => Object.keys(value).length > 0, 'At least one field is required')
 export const createUserSchema = z.object({ body: z.object({
-  authUserId: z.string().uuid(), email: z.string().trim().email().max(254)
+  authUserId: z.string().uuid(), email: z.string().trim().email().max(254), fullName: z.string().trim().optional()
 }).strict() })
 export const updateUserSchema = z.object({ params: idParams, body: profileFields })
 export const updateByAuthSchema = z.object({ params: z.object({ authUserId: z.string().uuid() }), body: profileFields })
