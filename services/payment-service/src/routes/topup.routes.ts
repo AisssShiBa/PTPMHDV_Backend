@@ -11,6 +11,8 @@ router.use(requireGateway);
 router.use(attachRequestId);
 
 router.post('/', validate(schemas.createTopupSchema), topupController.createTopup);
+router.get('/vnpay/ipn', topupController.vnpayIpn);
+router.get('/vnpay/return', topupController.vnpayReturn);
 router.get('/', topupController.getMyTopups);
 router.get('/:id', validate(schemas.paramIdSchema), topupController.getTopup);
 

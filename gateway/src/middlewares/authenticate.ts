@@ -15,7 +15,8 @@ const PUBLIC_ROUTES: Array<{ method: string; path: RegExp | string }> = [
     { method: 'POST', path: '/api/auth/signin' },
     { method: 'POST', path: '/api/auth/refresh' },
     { method: 'POST', path: '/api/auth/signout' },
-    { method: '*', path: '/health' }
+    { method: '*', path: '/health' },
+    { method: 'GET', path: /^\/api\/payments\/topups\/vnpay\/.*/ }
 ]
 
 const isPublicRoute = (req: Request): boolean => {
