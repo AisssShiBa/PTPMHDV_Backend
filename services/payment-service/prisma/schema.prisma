@@ -84,6 +84,7 @@ enum TopupStatus {
   APPROVED
   REJECTED
   EXPIRED
+  FAILED
 }
 
 model TopupRequest {
@@ -97,6 +98,11 @@ model TopupRequest {
   approvedAt          DateTime?    @db.Timestamp()
   rejectReason        String?      @db.Text
   walletTransactionId String?      @db.Uuid
+  vnpTransactionNo    String?      @db.VarChar(50)
+  vnpBankCode         String?      @db.VarChar(20)
+  vnpPayDate          String?      @db.VarChar(20)
+  vnpResponseCode     String?      @db.VarChar(10)
+  paymentUrl          String?      @db.Text
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt
 

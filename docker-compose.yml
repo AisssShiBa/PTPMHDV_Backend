@@ -27,7 +27,7 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -117,6 +117,11 @@ services:
       - WALLET_SERVICE_URL=http://wallet-service:3004
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
       - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672
+      - VNP_TMN_CODE=9OJY037K
+      - VNP_HASH_SECRET=AIWWJEDQTSPYEMVZYUXJKMOZDNWFTGRQ
+      - VNP_URL=https://sandbox.vnpayment.vn/paymentv2/vpcpay.html
+      - VNP_RETURN_URL=http://localhost:3000/api/payments/topups/vnpay/return
+      - VNP_IPN_URL=http://localhost:3000/api/payments/topups/vnpay/ipn
     depends_on:
       postgres:
         condition: service_started

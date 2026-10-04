@@ -11,8 +11,32 @@ export const createTopup = async (req: RequestWithContext, res: Response, next: 
     if (!userId) throw new DomainException(401, 'UNAUTHORIZED', 'Missing user context');
     const { amount } = req.body;
 
-    const result = await topupService.createTopup(userId, amount);
+    let ipAddr = req.ip || req.headers['x-forwarded-for'] || '127.0.0.1';
+    if (typeof ipAddr !== 'string' || ipAddr.includes(':')) {
+      ipAddr = '127.0.0.1'; // VNPAY sandbox often rejects IPv6
+    }
+
+    const result = await topupService.createTopup(userId, amount, ipAddr as string);
     res.status(201).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const vnpayIpn = async (req: RequestWithContext, res: Response, next: NextFunction) => {
+  try {
+    const result = await topupService.handleVnpayIpn(req.query);
+    res.status(200).json(result);
+  } catch (error) {
+    // According to VNPAY specs, on unexpected error we should return 99
+    res.status(200).json({ RspCode: '99', Message: 'Unknown error' });
+  }
+};
+
+export const vnpayReturn = async (req: RequestWithContext, res: Response, next: NextFunction) => {
+  try {
+    const result = await topupService.handleVnpayReturn(req.query);
+    res.status(200).json({ success: true, data: result });
   } catch (error) {
     next(error);
   }
