@@ -32,8 +32,17 @@ export const getBalance = async (req: Request, res: Response) => {
 export const hold = async (req: Request, res: Response) => {
   const userId = req.params.userId as string;
   const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
-  const { amount, referenceId, expiresAt } = req.body;
-  const { hold, replayed } = await walletHoldService.createHold(userId, amount, referenceId, expiresAt, ownerType);
+  const { amount, referenceId, expiresAt, destinationUserId, destinationOwnerType } = req.body;
+  
+  if (!destinationUserId) {
+    res.status(400).json({ success: false, message: 'destinationUserId is required' });
+    return;
+  }
+
+  const { hold, replayed } = await walletHoldService.createHold(
+    userId, amount, referenceId, expiresAt, ownerType, 
+    destinationUserId, destinationOwnerType || OwnerType.USER
+  );
   res.json({
     success: true, data: {
       id: hold.id,

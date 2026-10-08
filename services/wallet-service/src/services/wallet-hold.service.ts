@@ -7,7 +7,7 @@ const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, CONFLICT: 409 };
 const prisma = new PrismaClient();
 
 export class WalletHoldService {
-  constructor(private readonly ledgerService: LedgerService) {}
+  constructor(private readonly ledgerService: LedgerService) { }
 
   async createHold(
     userId: string,
@@ -15,6 +15,8 @@ export class WalletHoldService {
     referenceId: string,
     expiresAtValue: string,
     ownerType: OwnerType = OwnerType.USER,
+    destUserId: string,
+    destOwnerType: OwnerType = OwnerType.USER,
   ) {
     const amount = money(amountValue);
     const expiresAt = new Date(expiresAtValue);
@@ -24,9 +26,10 @@ export class WalletHoldService {
 
     return await prisma.$transaction(async (tx) => {
       const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
+      const destWallet = await this.ledgerService.findWalletTx(tx, destUserId, destOwnerType);
 
       const existing = await tx.walletHold.findUnique({
-        where: { walletId_referenceId: { walletId: wallet.id, referenceId } }
+        where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
       });
 
       if (existing) {
@@ -48,7 +51,8 @@ export class WalletHoldService {
 
       const hold = await tx.walletHold.create({
         data: {
-          walletId: wallet.id,
+          sourceWalletId: wallet.id,
+          destinationWalletId: destWallet.id,
           amount,
           referenceId,
           expiresAt,
@@ -68,7 +72,7 @@ export class WalletHoldService {
     return await prisma.$transaction(async (tx) => {
       const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
       const hold = await tx.walletHold.findUnique({
-        where: { walletId_referenceId: { walletId: wallet.id, referenceId } }
+        where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
       });
 
       if (!hold) throw new DomainException(HttpStatus.NOT_FOUND, "HOLD_NOT_FOUND", "Hold was not found");
@@ -93,10 +97,18 @@ export class WalletHoldService {
         throw conflict("HOLD_EXPIRED", "Hold has expired and was released");
       }
 
-      const systemWallet = await this.ledgerService.getSystemWalletTx(tx);
+      let destWallet;
+      if (hold.destinationWalletId) {
+        const found = await tx.wallet.findUnique({ where: { id: hold.destinationWalletId } });
+        if (!found) throw new DomainException(HttpStatus.NOT_FOUND, "DESTINATION_NOT_FOUND", "Destination wallet not found");
+        destWallet = found;
+      } else {
+        destWallet = await this.ledgerService.getSystemWalletTx(tx);
+      }
+
       const movement = await this.ledgerService.moveMoneyTxInternal(tx, {
         fromWallet: wallet,
-        toWallet: systemWallet,
+        toWallet: destWallet,
         amount: hold.amount,
         referenceId,
         transferType: TransferType.PAYMENT,
@@ -128,7 +140,7 @@ export class WalletHoldService {
     return await prisma.$transaction(async (tx) => {
       const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
       const hold = await tx.walletHold.findUnique({
-        where: { walletId_referenceId: { walletId: wallet.id, referenceId } }
+        where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
       });
 
       if (!hold) throw new DomainException(HttpStatus.NOT_FOUND, "HOLD_NOT_FOUND", "Hold was not found");
@@ -167,7 +179,7 @@ export class WalletHoldService {
       try {
         await prisma.$transaction(async (tx) => {
           // Lock wallet first to prevent deadlock and race conditions
-          await tx.$queryRaw`SELECT id FROM "Wallet" WHERE id = ${hold.walletId} FOR UPDATE`;
+          await tx.$queryRaw`SELECT id FROM "Wallet" WHERE id = ${hold.sourceWalletId} FOR UPDATE`;
 
           // Optimistic update: only update if it's still PENDING
           const updated = await tx.walletHold.updateMany({
@@ -178,7 +190,7 @@ export class WalletHoldService {
           if (updated.count > 0) {
             // Safe to decrement because we secured the wallet lock and hold was confirmed PENDING
             await tx.wallet.update({
-              where: { id: hold.walletId },
+              where: { id: hold.sourceWalletId },
               data: { heldBalance: { decrement: hold.amount } }
             });
             released++;

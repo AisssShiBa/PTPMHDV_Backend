@@ -25,6 +25,18 @@ export interface TransferDto {
   referenceId: string;
 }
 
+export interface CreateHoldDto {
+  amount: string;
+  referenceId: string;
+  expiresAt: string;
+  destinationUserId: string;
+  destinationOwnerType?: OwnerType;
+}
+
+export interface CaptureHoldDto {
+  referenceId: string;
+}
+
 export interface AdjustDto {
   amount: string;
   direction: LedgerDirection;
