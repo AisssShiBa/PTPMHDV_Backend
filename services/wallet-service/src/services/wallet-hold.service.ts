@@ -166,15 +166,20 @@ export class WalletHoldService {
     for (const hold of holds) {
       try {
         await prisma.$transaction(async (tx) => {
-          const currentHold = await tx.walletHold.findUnique({ where: { id: hold.id } });
-          if (currentHold && currentHold.status === HoldStatus.PENDING) {
+          // Lock wallet first to prevent deadlock and race conditions
+          await tx.$queryRaw`SELECT id FROM "Wallet" WHERE id = ${hold.walletId} FOR UPDATE`;
+
+          // Optimistic update: only update if it's still PENDING
+          const updated = await tx.walletHold.updateMany({
+            where: { id: hold.id, status: HoldStatus.PENDING },
+            data: { status: HoldStatus.EXPIRED }
+          });
+
+          if (updated.count > 0) {
+            // Safe to decrement because we secured the wallet lock and hold was confirmed PENDING
             await tx.wallet.update({
               where: { id: hold.walletId },
               data: { heldBalance: { decrement: hold.amount } }
-            });
-            await tx.walletHold.update({
-              where: { id: hold.id },
-              data: { status: HoldStatus.EXPIRED }
             });
             released++;
           }
