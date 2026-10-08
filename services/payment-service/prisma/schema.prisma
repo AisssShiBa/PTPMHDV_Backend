@@ -30,14 +30,23 @@ enum OutboxEventStatus {
   FAILED
 }
 
+enum IdempotencyStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model Payment {
-  id             String           @id @default(uuid()) @db.Uuid
-  userId         String           @db.VarChar(50)
-  amount         Decimal          @db.Decimal(20, 2)
-  type           PaymentType
-  referenceId    String           @db.VarChar(255)
-  callbackTopic  String           @db.VarChar(100)
-  idempotencyKey String           @unique @db.VarChar(255)
+  id                   String             @id @default(uuid()) @db.Uuid
+  userId               String             @db.VarChar(50)
+  amount               Decimal            @db.Decimal(20, 2)
+  type                 PaymentType
+  referenceId          String             @db.VarChar(255)
+  callbackTopic        String             @db.VarChar(100)
+  idempotencyKey       String             @db.VarChar(255)
+  requestHash          String             @db.VarChar(255)
+  idempotencyStatus    IdempotencyStatus  @default(PROCESSING)
+  idempotencyExpiresAt DateTime           @db.Timestamp()
   status         PaymentStatus    @default(PENDING)
   failureReason  String?          @db.Text
   holdId         String?          @db.VarChar(255)
@@ -48,6 +57,8 @@ model Payment {
 
   @@index([userId, createdAt])
   @@index([status])
+  @@unique([userId, idempotencyKey])
+  @@index([idempotencyExpiresAt])
 }
 
 model PaymentHistory {
