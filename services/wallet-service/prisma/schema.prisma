@@ -48,8 +48,9 @@ model Wallet {
   status        WalletStatus  @default(ACTIVE)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
-  ledgerEntries LedgerEntry[]
-  holds         WalletHold[]
+  ledgerEntries      LedgerEntry[]
+  holdsAsSource      WalletHold[] @relation("HoldSource")
+  holdsAsDestination WalletHold[] @relation("HoldDestination")
 
   @@index([ownerType, status])
 }
@@ -85,17 +86,20 @@ model LedgerEntry {
 
 model WalletHold {
   id            String     @id @default(uuid()) @db.Uuid
-  walletId      Int
-  amount        Decimal    @db.Decimal(20, 2)
-  referenceId   String     @db.VarChar(255)
-  status        HoldStatus @default(PENDING)
-  transactionId String?    @db.Uuid
-  expiresAt     DateTime
-  createdAt     DateTime   @default(now())
-  wallet        Wallet     @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  sourceWalletId      Int
+  destinationWalletId Int?
+  amount              Decimal    @db.Decimal(20, 2)
+  referenceId         String     @db.VarChar(255)
+  status              HoldStatus @default(PENDING)
+  transactionId       String?    @db.Uuid
+  expiresAt           DateTime
+  createdAt           DateTime   @default(now())
+  sourceWallet        Wallet     @relation("HoldSource", fields: [sourceWalletId], references: [id], onDelete: Restrict)
+  destinationWallet   Wallet?    @relation("HoldDestination", fields: [destinationWalletId], references: [id], onDelete: SetNull)
 
-  @@unique([walletId, referenceId])
+  @@unique([sourceWalletId, referenceId])
   @@index([status, expiresAt])
+  @@index([destinationWalletId])
 }
 
 enum AnomalyType {

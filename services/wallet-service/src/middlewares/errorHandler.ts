@@ -17,6 +17,17 @@ export const errorHandler = (
     });
   }
 
+  // Handle Prisma constraint violation
+  if (err?.code === 'P2004' || err?.code === '23514') {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'INSUFFICIENT_BALANCE_OR_INVALID_STATE',
+        message: 'Transaction failed due to balance or state constraints',
+      }
+    });
+  }
+
   console.error(err);
 
   return res.status(500).json({
