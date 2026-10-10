@@ -15,7 +15,7 @@ import { errorHandler } from './middlewares/errorHandler'
 const app = express()
 
 // 1. Bảo mật Header HTTP & Ghi nhật ký Log
-app.use(helmet()) //giúp hạn chế một số kiểu tấn công liên quan đến browser/security headers
+app.use(helmet())
 app.use(morgan('[:date[iso]] :method :url :status :response-time ms - ReqId: :req[x-request-id]'))
 
 // 2. Cấu hình CORS
@@ -37,26 +37,32 @@ app.use(sanitizeHeaders)
 app.use(attachRequestId)
 app.use(authenticate)
 
-// 5. Phân quyền tầng Route (Chặn trước khi request chạm vào proxy)
+// 6. Phân quyền tầng Route (Chặn trước khi request chạm vào proxy)
 app.use('/api/admin', requireRole('ADMIN'))
 app.use('/api/wallets/admin', requireRole('ADMIN'))
 
-// Helper tạo Proxy Middleware chuẩn (Giữ nguyên path, có timeout 10s và error handler)
-const createServiceProxy = (pathFilter: string, target: string) => {
+// Helper tạo Proxy Middleware chuẩn (Hỗ trợ forward x-gateway-token và WebSocket)
+const createServiceProxy = (pathFilter: string, target: string, ws: boolean = false) => {
     return createProxyMiddleware({
         target,
         pathFilter,
         changeOrigin: true,
+        ws,                  // Hỗ trợ WebSocket (Upgrade connection)
         timeout: 10000,      // Timeout kết nối tới service (10s)
         proxyTimeout: 10000, // Timeout chờ service con xử lý xong (10s)
         on: {
             proxyReq: (proxyReq, req) => {
-                // Đảm bảo các header do Gateway đóng dấu được chuyển tiếp đầy đủ
+                // 1. CHUYỂN TIẾP GATEWAY TOKEN MẬT MÃ (ES256)
+                if (req.headers['x-gateway-token']) {
+                    proxyReq.setHeader('x-gateway-token', req.headers['x-gateway-token'] as string)
+                }
+
+                // 2. Chuyển tiếp các header định danh & truy vết
                 if (req.headers['x-user-id']) proxyReq.setHeader('x-user-id', req.headers['x-user-id'] as string)
                 if (req.headers['x-user-role']) proxyReq.setHeader('x-user-role', req.headers['x-user-role'] as string)
                 if (req.headers['x-request-id']) proxyReq.setHeader('x-request-id', req.headers['x-request-id'] as string)
-                // Bất kỳ request nào đi qua Gateway proxy đều được đóng dấu xác nhận
-                proxyReq.setHeader('x-gateway-verified', 'true')
+
+                // LƯU Ý BẢO MẬT: ĐÃ XÓA BỎ HOÀN TOÀN cờ tĩnh cũ proxyReq.setHeader('x-gateway-verified', 'true')
             },
             error: (err, req, res) => {
                 errorHandler(err, req as any, res as any, () => { })
@@ -65,22 +71,24 @@ const createServiceProxy = (pathFilter: string, target: string) => {
     })
 }
 
-// 6. Phân luồng Reverse Proxy tới 7 Microservices
+// 7. Phân luồng Reverse Proxy tới các Microservices nội bộ
 app.use(createServiceProxy('/api/auth', env.services.auth))
 app.use(createServiceProxy('/api/users', env.services.user))
 app.use(createServiceProxy('/api/merchants', env.services.merchant))
 app.use(createServiceProxy('/api/wallets/admin', env.services.wallet))
 app.use(createServiceProxy('/api/wallets', env.services.wallet))
 app.use(createServiceProxy('/api/payments', env.services.payment))
+app.use(createServiceProxy('/api/funding', env.services.payment)) // Whitelist Webhook VNPAY
 app.use(createServiceProxy('/api/notifications', env.services.notification))
+app.use(createServiceProxy('/socket.io', env.services.notification, true)) // Proxy WebSocket sang notification-service
 app.use(createServiceProxy('/api/admin', env.services.admin))
 
-// 7. Bắt các Route không tồn tại (404)
+// 8. Bắt các Route không tồn tại (404)
 app.use((_req, res) => {
     res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Endpoint không tồn tại' } })
 })
 
-// 8. Bắt lỗi toàn cục
+// 9. Bắt lỗi toàn cục
 app.use(errorHandler)
 
 export default app
