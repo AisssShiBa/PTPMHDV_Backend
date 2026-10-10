@@ -25,12 +25,14 @@ BEGIN
 END $$;
 
 -- Step 2: Add constraints safely using NOT VALID (to avoid table lock), then VALIDATE
+ALTER TABLE "Wallet" DROP CONSTRAINT IF EXISTS "Wallet_balance_nonnegative";
 ALTER TABLE "Wallet" DROP CONSTRAINT IF EXISTS "wallet_balance_check";
 ALTER TABLE "Wallet" ADD CONSTRAINT "wallet_balance_check" CHECK ("ownerType" = 'SYSTEM' OR "balance" >= 0) NOT VALID;
 
 ALTER TABLE "Wallet" DROP CONSTRAINT IF EXISTS "wallet_held_positive_check";
 ALTER TABLE "Wallet" ADD CONSTRAINT "wallet_held_positive_check" CHECK ("heldBalance" >= 0) NOT VALID;
 
+ALTER TABLE "Wallet" DROP CONSTRAINT IF EXISTS "Wallet_heldBalance_lte_balance";
 ALTER TABLE "Wallet" DROP CONSTRAINT IF EXISTS "wallet_held_balance_check";
 ALTER TABLE "Wallet" ADD CONSTRAINT "wallet_held_balance_check" CHECK ("ownerType" = 'SYSTEM' OR "heldBalance" <= "balance") NOT VALID;
 

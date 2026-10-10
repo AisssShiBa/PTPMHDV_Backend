@@ -57,7 +57,7 @@ export class ReconciliationService {
     const result: any[] = await prisma.$queryRaw`
       SELECT id as "walletId", balance
       FROM "Wallet"
-      WHERE balance < 0;
+      WHERE balance < 0 AND "ownerType" != 'SYSTEM';
     `;
     return result.map(row => ({
       type: AnomalyType.NEGATIVE_BALANCE,
