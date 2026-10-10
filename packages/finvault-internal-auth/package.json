@@ -1,0 +1,19 @@
+{
+  "name": "finvault-internal-auth",
+  "version": "1.0.0",
+  "description": "Thư viện xác thực nội bộ dùng chung cho toàn bộ Microservices của FinVault",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "tsx test.ts"
+  },
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}
