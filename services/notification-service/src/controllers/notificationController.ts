@@ -3,6 +3,22 @@ import { prisma } from '../config/prisma'
 import { notificationIO } from '../socket'
 import { createNotificationRecord, isNotificationType } from '../services/notificationService'
 
+export const getSocketTicket = async (req: Request, res: Response) => {
+  const ticket = req.headers['x-gateway-token']
+  if (typeof ticket !== 'string' || ticket.length === 0) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'INVALID_GATEWAY_TOKEN', message: 'Gateway Token không hợp lệ hoặc đã hết hạn.' }
+    })
+  }
+
+  // Ticket chỉ chứng minh danh tính đã xác thực của user hiện tại trong tối đa 60 giây; không ghi ticket vào log.
+  return res.status(200).json({
+    success: true,
+    data: { ticket }
+  })
+}
+
 // ===================================================================
 // INTERNAL — chỉ Outbox Scheduler của Payment/Wallet gọi (POST /)
 // ===================================================================

@@ -9,8 +9,9 @@
         "db:push": "prisma db push",
         "db:generate": "prisma generate",
         "postinstall": "prisma generate",
-        "test": "tsx --test tests/auth.test.ts tests/notificationRoutes.test.ts",
-        "vendor:auth": "node scripts/vendor-auth.mjs"
+        "test": "tsx --test tests/auth.test.ts tests/notificationRoutes.test.ts tests/socket.test.ts",
+        "vendor:auth": "node scripts/vendor-auth.mjs",
+        "socket:smoke": "tsx scripts/socket-smoke.ts"
     },
     "keywords": [],
     "author": "",
@@ -41,6 +42,7 @@
         "eslint-plugin-react": "^7.37.5",
         "globals": "^17.11.0",
         "nodemon": "^3.1.14",
+        "socket.io-client": "^4.8.4",
         "tsx": "^4.23.12",
         "typescript": "^5.7.3",
         "typescript-eslint": "^8.67.0"

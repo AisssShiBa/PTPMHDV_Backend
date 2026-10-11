@@ -3,6 +3,7 @@ import { requireGateway } from 'finvault-internal-auth'
 import { internalAuth } from '../middlewares/internalAuth'
 import {
   createNotification,
+  getSocketTicket,
   getNotifications,
   markAllNotificationsRead,
   markNotificationRead
@@ -17,6 +18,7 @@ route.post('/', internalAuth, createNotification)
 // 2. Mọi route client phía dưới phải có Gateway Token hợp lệ.
 route.use(requireGateway)
 
+route.get('/socket-ticket', getSocketTicket)
 route.get('/me', getNotifications)
 route.patch('/me/read-all', markAllNotificationsRead)
 route.patch('/:id/read', markNotificationRead)

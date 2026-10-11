@@ -36,6 +36,25 @@ test('notification client route rejects missing Gateway Token', async () => {
   assert.equal((await response.json()).error.code, 'INVALID_GATEWAY_TOKEN')
 })
 
+test('socket ticket endpoint rejects a missing Gateway Token', async () => {
+  const response = await fetch(`${baseUrl}/api/notifications/socket-ticket`)
+  assert.equal(response.status, 401)
+  assert.equal((await response.json()).error.code, 'INVALID_GATEWAY_TOKEN')
+})
+
+test('socket ticket endpoint returns the verified request Gateway Token', async () => {
+  const token = createTestGatewayToken('ticket-user')
+  const response = await fetch(`${baseUrl}/api/notifications/socket-ticket`, {
+    headers: { 'x-gateway-token': token }
+  })
+
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), {
+    success: true,
+    data: { ticket: token }
+  })
+})
+
 test('notification client route rejects expired Gateway Token', async () => {
   const token = createTestGatewayToken('user-a', 'USER', 0, '-1s')
   const response = await getNotifications({ 'x-gateway-token': token })
