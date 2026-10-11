@@ -17,8 +17,8 @@ route.post('/', internalAuth, createNotification)
 // 2. Mọi route client phía dưới phải có Gateway Token hợp lệ.
 route.use(requireGateway)
 
-route.patch('/:userId/read-all', markAllNotificationsRead)
+route.get('/me', getNotifications)
+route.patch('/me/read-all', markAllNotificationsRead)
 route.patch('/:id/read', markNotificationRead)
-route.get('/:userId', getNotifications)
 
 export default route

@@ -58,16 +58,6 @@ test('a forged user ID header cannot authenticate client requests', async () => 
   assert.equal((await response.json()).error.code, 'INVALID_GATEWAY_TOKEN')
 })
 
-test('a forged user ID header is ignored when a valid Gateway Token is present', async () => {
-  const token = createTestGatewayToken('user-a')
-  const response = await getNotifications({
-    'x-gateway-token': token,
-    'x-user-id': 'user-b'
-  })
-  assert.equal(response.status, 200)
-  assert.equal((await response.json()).userId, 'user-a')
-})
-
 test('internal notification creation still requires x-internal-key', async () => {
   const response = await fetch(`${baseUrl}/api/notifications`, {
     method: 'POST',

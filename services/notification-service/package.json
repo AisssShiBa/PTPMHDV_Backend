@@ -9,7 +9,7 @@
         "db:push": "prisma db push",
         "db:generate": "prisma generate",
         "postinstall": "prisma generate",
-        "test": "tsx --test tests/auth.test.ts",
+        "test": "tsx --test tests/auth.test.ts tests/notificationRoutes.test.ts",
         "vendor:auth": "node scripts/vendor-auth.mjs"
     },
     "keywords": [],

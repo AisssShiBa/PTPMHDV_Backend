@@ -45,7 +45,8 @@ export const getNotifications = async (req: Request, res: Response) => {
     const userId = req.auth!.userId
 
     // Phân trang từ query (clamp: page ≥ 1, 1 ≤ limit ≤ 50)
-    const page = Math.max(parseInt(req.query.page as string) || 1, 1)
+    const requestedPage = Number.parseInt(req.query.page as string, 10)
+    const page = Number.isFinite(requestedPage) ? Math.max(requestedPage, 1) : 1
     const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 10, 1), 50)
     const skip = (page - 1) * limit
 
@@ -62,21 +63,24 @@ export const getNotifications = async (req: Request, res: Response) => {
     ])
 
     return res.status(200).json({
-      userId,
-      notifications,
-      unreadCount,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit)
+      success: true,
+      data: {
+        notifications,
+        unreadCount,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        }
       }
     })
   } catch (error) {
     console.error('Lỗi lấy thông báo:', error)
     return res.status(500).json({
       success: false,
-      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' }
+      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' },
+      requestId: req.get('x-request-id')
     })
   }
 }
@@ -88,38 +92,38 @@ export const getNotifications = async (req: Request, res: Response) => {
 export const markNotificationRead = async (req: Request, res: Response) => {
   try {
     const { id } = req.params as { id: string }
-    const existing = await prisma.notification.findUnique({ where: { id } })
-    if (!existing) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' }
-      })
-    }
-    if (existing.userId !== req.auth!.userId) {
-      return res.status(403).json({
-        success: false,
-        error: { code: 'FORBIDDEN', message: 'Không có quyền thao tác thông báo này' }
-      })
-    }
-    const notification = await prisma.notification.update({
-      where: { id },
+    const userId = req.auth!.userId
+    const result = await prisma.notification.updateMany({
+      where: { id, userId },
       data: { read: true }
     })
+    if (result.count === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' },
+        requestId: req.get('x-request-id')
+      })
+    }
+    const notification = await prisma.notification.findFirst({
+      where: { id, userId }
+    })
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' },
+        requestId: req.get('x-request-id')
+      })
+    }
     return res.status(200).json({
-      message: 'Đánh dấu đã đọc thành công',
+      success: true,
       data: notification
     })
   } catch (error) {
-    if ((error as { code?: string }).code === 'P2025') {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' }
-      })
-    }
     console.error('Lỗi đánh dấu đã đọc:', error)
     return res.status(500).json({
       success: false,
-      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' }
+      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' },
+      requestId: req.get('x-request-id')
     })
   }
 }
@@ -132,15 +136,15 @@ export const markAllNotificationsRead = async (req: Request, res: Response) => {
       data: { read: true }
     })
     return res.status(200).json({
-      message: 'Đánh dấu tất cả đã đọc thành công',
-      userId,
-      updatedCount: result.count
+      success: true,
+      data: { updatedCount: result.count }
     })
   } catch (error) {
     console.error('Lỗi đánh dấu tất cả đã đọc:', error)
     return res.status(500).json({
       success: false,
-      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' }
+      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' },
+      requestId: req.get('x-request-id')
     })
   }
 }

@@ -26,7 +26,8 @@ app.use((_req, res) => {
     error: {
       code: 'NOT_FOUND',
       message: 'Endpoint không tồn tại'
-    }
+    },
+    requestId: _req.headers['x-request-id']
   })
 })
 
