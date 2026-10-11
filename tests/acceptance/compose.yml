@@ -1,0 +1,32 @@
+name: finvault-acceptance
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: acceptance
+      POSTGRES_PASSWORD: ${ACCEPTANCE_DB_PASSWORD:?run prepare.mjs first}
+      POSTGRES_DB: finvault_acceptance
+    ports:
+      - "127.0.0.1:25433:5432"
+    volumes:
+      - acceptance_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acceptance -d finvault_acceptance"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  minio:
+    # Built by the existing User Service integration infrastructure.
+    image: finvault-user-merchant-tests-minio:latest
+    pull_policy: never
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: acceptance
+      MINIO_ROOT_PASSWORD: ${ACCEPTANCE_STORAGE_PASSWORD:?run prepare.mjs first}
+    ports:
+      - "127.0.0.1:19001:9000"
+    volumes:
+      - acceptance_minio:/data
+volumes:
+  acceptance_postgres:
+  acceptance_minio:

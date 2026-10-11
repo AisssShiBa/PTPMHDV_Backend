@@ -1,5 +1,7 @@
 # Merchant Service
 
+**Cập nhật 11/10/2026:** auth dùng `finvault-internal-auth`; xem [trạng thái](docs/week1-status.md), [OpenAPI](docs/openapi.json) và [hướng dẫn runtime](../../docs/User_Merchant_Runtime.md).
+
 Quản lý đăng ký, duyệt Merchant và phát event qua transactional outbox. API mặc định `http://localhost:3003/api/merchants`.
 
 ## Chạy local
@@ -7,14 +9,15 @@ Quản lý đăng ký, duyệt Merchant và phát event qua transactional outbox
 Dùng Node.js 22 trở lên, PostgreSQL, và file `.env` sao chép từ `.env.example`.
 
 ```powershell
-npm ci
+rtk npm ci --prefix ../../packages/finvault-internal-auth
+rtk npm ci
 npm run db:generate
 npm run db:migrate
 npm run build
 npm start
 ```
 
-Biến bắt buộc: `DATABASE_URL`, `INTERNAL_KEY`, `ACCESS_TOKEN_SECRET`; port mặc định 3003. Hai khóa dài tối thiểu 32 ký tự; không có fallback khóa cũ. `ACCESS_TOKEN_SECRET` khớp khóa ký JWT, `INTERNAL_KEY` khớp caller nội bộ.
+Cấu hình service: `DATABASE_URL`, `INTERNAL_KEY` (ít nhất 32 ký tự), `PORT`, `CLIENT_URL`. Production cần `GATEWAY_PUBLIC_KEY_FILE` hoặc `GATEWAY_PUBLIC_KEY`. User/Merchant không đọc access-token secret.
 
 Migration thêm unique `ownerId`, `version`, bảng `merchant_outbox_events`. Một chủ chỉ có một merchant, kể cả hồ sơ đã soft delete. Migration dừng và báo lỗi khi có owner trùng; không tự xóa/ghép dữ liệu. Kiểm tra trước khi áp dụng:
 
@@ -27,9 +30,8 @@ Nếu database cũ được tạo bằng db push, cần baseline migration phù 
 
 ## Xác thực và API
 
-Request người dùng cần marker `X-Gateway-Verified: true` và Bearer token HS256 hợp lệ. Danh tính và role lấy từ token, không tin header user/role do caller tự gửi. Kiểm chứng token tại service bảo vệ trường hợp caller tự giả marker. Internal call dùng `X-Internal-Key`; header `X-User-Id` dạng UUID được nhận sau khi internal key hợp lệ.
+Request người dùng gửi Bearer token tới Gateway. Gateway chuyển `x-gateway-token` ES256; service xác thực qua package chung và đọc `req.auth`. Thiếu/sai token trả 401; thiếu quyền trả 403.
 
-`DISABLE_GATEWAY_CHECK=true` chỉ bỏ yêu cầu marker ngoài production, không bỏ xác thực. Các đường dẫn sau nối với `/api/merchants`:
 
 | Method | Đường dẫn | Quyền | Nội dung |
 |---|---|---|---|
@@ -142,7 +144,7 @@ npm run test:db
 npm run test:integration
 ```
 
-PostgreSQL test ở `127.0.0.1:55432/finvault_test`, schema `merchant_test`; RabbitMQ test ở 5673. Các test dọn dữ liệu schema test cố định, không dùng database ứng dụng.
+PostgreSQL test ở `127.0.0.1:25432/finvault_test`, schema `merchant_test`; RabbitMQ test ở 5673. Các test dọn dữ liệu schema test cố định, không dùng database ứng dụng.
 
 Đã chạy thành công: 13 test API/unit, 10 test integration và build TypeScript. Bao phủ phân quyền, đăng ký đồng thời, rollback khi outbox lỗi, trạng thái/no-op, active, soft delete, worker lease và tiến trình publisher sau restart, retry/FAILED/replay, confirm RabbitMQ, event không có queue nhận và lệch đồng hồ ứng dụng 10 phút.
 

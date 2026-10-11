@@ -1,3 +1,4 @@
+import { createTestGatewayToken } from 'finvault-internal-auth'
 import '../setup'
 import { stub } from '../stub'
 import { test, before, beforeEach, after, mock } from 'node:test'
@@ -7,16 +8,15 @@ import { spawn, ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { setTimeout as sleep } from 'node:timers/promises'
 import request from 'supertest'
-import jwt from 'jsonwebtoken'
 import amqp from 'amqplib'
 import app from '../../src/app'
 import { prisma } from '../../src/config/prisma'
 import { env } from '../../src/config/env'
-import { register, changeStatus } from '../../src/services/merchant.service'
+import { register, changeStatus, updateProfile } from '../../src/services/merchant.service'
 import { publishOne, claimEvent, replayFailed } from '../../src/events/outbox'
 import { publishConfirmed } from '../../src/events/amqp'
 const internal = { 'x-internal-key': process.env.INTERNAL_KEY! }
-const auth = (userId: string, role = 'USER') => ({ 'x-gateway-verified': 'true', authorization: 'Bearer ' + jwt.sign({ userId, role }, process.env.ACCESS_TOKEN_SECRET!) })
+const auth = (userId: string, role = 'USER') => ({ 'x-gateway-token': createTestGatewayToken(userId, role) })
 before(async () => { assert.ok(process.env.DATABASE_URL?.includes('/finvault_test?schema=merchant_test')); await prisma.$connect() })
 beforeEach(async () => { await prisma.merchantOutboxEvent.deleteMany(); await prisma.merchant.deleteMany() })
 after(() => prisma.$disconnect())
@@ -61,7 +61,7 @@ test('active endpoint covers all states, hides bank account and excludes deleted
     assert.equal(response.body.data.bankAccount, undefined)
   }
   await request(app).get('/api/merchants/' + randomUUID() + '/active').set(internal).expect(404)
-  await request(app).get('/api/merchants/' + merchant.id + '/active').expect(403)
+  await request(app).get('/api/merchants/' + merchant.id + '/active').expect(401)
   await prisma.merchant.update({ where: { id: merchant.id }, data: { deletedAt: new Date() } })
   await request(app).get('/api/merchants/' + merchant.id + '/active').set(internal).expect(404)
   const list = await request(app).get('/api/merchants').set(internal).expect(200)
@@ -72,6 +72,45 @@ test('owner can update profile; only administrator/internal can review', async (
   await request(app).put('/api/merchants/' + merchant.id).set(auth(merchant.ownerId)).send({ businessName: ' New name ' }).expect(200)
   await request(app).patch('/api/merchants/' + merchant.id + '/status').set(auth(merchant.ownerId)).send({ status: 'APPROVED' }).expect(403)
   await request(app).patch('/api/merchants/' + merchant.id + '/status').set(auth(randomUUID(), 'ADMIN')).send({ status: 'APPROVED' }).expect(200)
+})
+
+test('profile update is atomic with outbox, excludes financial fields, and no-ops unchanged values', async () => {
+  const merchant = await register({ ownerId: randomUUID(), businessName: 'Shop' })
+  const updated = await updateProfile(merchant.id, { businessName: 'New', bankAccount: 'private', taxId: 'private-tax' })
+  assert.equal(updated.version, 2)
+  await updateProfile(merchant.id, { businessName: 'New', bankAccount: 'private' })
+  const events = await prisma.merchantOutboxEvent.findMany({ orderBy: { aggregateVersion: 'asc' } })
+  assert.equal(events.length, 2)
+  assert.equal(events[1].eventType, 'merchant.profile_updated')
+  assert.equal((events[1].payload as any).data.version, 2)
+  assert.equal((events[1].payload as any).data.bankAccount, undefined)
+  assert.equal((events[1].payload as any).data.taxId, undefined)
+  const original = prisma.$transaction.bind(prisma)
+  stub(prisma, '$transaction', (callback: any, options: any) => original(async tx => {
+    tx.merchantOutboxEvent.create = (async () => { throw new Error('Injected outbox failure') }) as any
+    return callback(tx)
+  }, options))
+  await assert.rejects(updateProfile(merchant.id, { businessName: 'Must rollback' }))
+  const unchanged = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } })
+  assert.equal(unchanged.businessName, 'New')
+  assert.equal(unchanged.version, 2)
+  assert.equal(await prisma.merchantOutboxEvent.count(), 2)
+})
+
+test('concurrent profile and status updates retain one ordered event per version', async () => {
+  const merchant = await register({ ownerId: randomUUID(), businessName: 'Shop' })
+  await Promise.all([
+    updateProfile(merchant.id, { businessName: 'New' }),
+    updateProfile(merchant.id, { businessName: 'New' }),
+    changeStatus(merchant.id, 'APPROVED')
+  ])
+  const events = await prisma.merchantOutboxEvent.findMany({ orderBy: { aggregateVersion: 'asc' } })
+  assert.deepEqual(events.map(event => event.aggregateVersion), [1, 2, 3])
+  assert.equal(events.filter(event => event.eventType === 'merchant.profile_updated').length, 1)
+  assert.equal(events.filter(event => event.eventType === 'merchant.status_updated').length, 1)
+  const sent: number[] = []
+  for (let i = 0; i < 3; i++) await publishOne(async event => { sent.push(event.aggregateVersion) })
+  assert.deepEqual(sent, [1, 2, 3])
 })
 test('expired worker leases recover; parallel claims cannot overtake prior aggregate events', async () => {
   const merchant = await register({ ownerId: randomUUID(), businessName: 'Shop' })

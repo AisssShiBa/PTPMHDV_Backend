@@ -1,13 +1,13 @@
+import { createTestGatewayToken } from 'finvault-internal-auth'
 import './setup'
 import { stub } from './stub'
 import { test } from 'node:test'
 import request from 'supertest'
-import jwt from 'jsonwebtoken'
 import app from '../src/app'
 import { prisma } from '../src/config/prisma'
 const ownerId = '10000000-0000-4000-8000-000000000001'
 const id = '20000000-0000-4000-8000-000000000001'
-const headers = (userId = ownerId) => ({ 'x-gateway-verified': 'true', authorization: 'Bearer ' + jwt.sign({ userId, role: 'USER' }, process.env.ACCESS_TOKEN_SECRET!) })
+const headers = (userId = ownerId) => ({ 'x-gateway-token': createTestGatewayToken(userId, 'USER') })
 test('another owner cannot read or change banking details', async () => {
   stub(prisma.merchant, 'findFirst', async () => ({ id, ownerId, bankAccount: 'private', status: 'PENDING' }))
   const attacker = { ...headers('10000000-0000-4000-8000-000000000002'), 'x-user-id': ownerId }
