@@ -199,8 +199,8 @@ services:
 
   wallet-service:
     build:
-      context: ./services/wallet-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./services/wallet-service/Dockerfile
     container_name: finvault-wallet-service
     expose:
       - "3004"
@@ -218,8 +218,8 @@ services:
 
   payment-service:
     build:
-      context: ./services/payment-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./services/payment-service/Dockerfile
     container_name: finvault-payment-service
     ports:
       - "3005:3005"
