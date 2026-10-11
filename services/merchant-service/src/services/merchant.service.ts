@@ -40,3 +40,25 @@ export async function changeStatus(id: string, status: Merchant['status']) {
     return merchant
   })
 }
+
+export async function updateProfile(id: string, data: {
+  businessName?: string; taxId?: string | null; bankAccount?: string | null
+}) {
+  return transaction(async tx => {
+    const current = await tx.merchant.findFirst({ where: { id, deletedAt: null } })
+    if (!current) throw new HttpError(404, 'NOT_FOUND', 'Merchant not found')
+    // Whitelist editable fields even for callers other than the HTTP controller.
+    const changes: typeof data = {}
+    for (const field of ['businessName', 'taxId', 'bankAccount'] as const) {
+      if (data[field] !== undefined && data[field] !== current[field]) {
+        Object.assign(changes, { [field]: data[field] })
+      }
+    }
+    if (Object.keys(changes).length === 0) return current
+    const merchant = await tx.merchant.update({
+      where: { id, deletedAt: null }, data: { ...changes, version: { increment: 1 } }
+    })
+    await enqueue(tx, merchant, 'merchant.profile_updated')
+    return merchant
+  })
+}

@@ -3,17 +3,27 @@ import { RequestWithContext } from '../middlewares/requestId'
 import { prisma } from '../config/prisma'
 import { requireAdmin, requireOwner } from '../utils/access'
 import { HttpError } from '../utils/errors'
-import { findMerchant, register, changeStatus } from '../services/merchant.service'
+import { findMerchant, register, changeStatus, updateProfile } from '../services/merchant.service'
 
 export async function registerMerchant(req: RequestWithContext, res: Response) {
-  const ownerId = req.isInternalCall ? (req.body.ownerId || req.userId) : req.userId
+  const callerId = req.auth?.userId ?? req.internalUserId
+  const ownerId = req.isInternalCall ? (req.body.ownerId || callerId) : callerId
   if (!ownerId) throw new HttpError(400, 'OWNER_REQUIRED', 'Owner identity required')
-  if (!req.isInternalCall && req.body.ownerId !== undefined && req.body.ownerId !== req.userId)
+  if (!req.isInternalCall && req.body.ownerId !== undefined && req.body.ownerId !== callerId)
     throw new HttpError(403, 'FORBIDDEN', 'Cannot register for another owner')
   const { businessName, taxId, bankAccount } = req.body
   const merchant = await register({ ownerId, businessName, taxId, bankAccount })
   return res.status(201).json({ success: true, data: merchant })
 }
+// Identity comes from verified authentication, never a query/body ownerId.
+// Explicit null distinguishes no registration from a missing endpoint or server error.
+export async function getMyMerchant(req: RequestWithContext, res: Response) {
+  const ownerId = req.auth?.userId ?? req.internalUserId
+  if (!ownerId) throw new HttpError(401, 'UNAUTHORIZED', 'Authenticated owner required')
+  const merchant = await prisma.merchant.findFirst({ where: { ownerId, deletedAt: null } })
+  return res.json({ success: true, data: merchant })
+}
+
 export async function getMerchantById(req: RequestWithContext, res: Response) {
   const merchant = await findMerchant(String(req.params.id))
   requireOwner(req, merchant.ownerId)
@@ -22,7 +32,7 @@ export async function getMerchantById(req: RequestWithContext, res: Response) {
 export async function updateMerchant(req: RequestWithContext, res: Response) {
   const merchant = await findMerchant(String(req.params.id))
   requireOwner(req, merchant.ownerId)
-  const updated = await prisma.merchant.update({ where: { id: merchant.id, deletedAt: null }, data: { ...req.body, version: { increment: 1 } } })
+  const updated = await updateProfile(merchant.id, req.body)
   return res.json({ success: true, data: updated })
 }
 export async function updateMerchantStatus(req: RequestWithContext, res: Response) {

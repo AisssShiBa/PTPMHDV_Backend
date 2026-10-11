@@ -1,0 +1,85 @@
+name: finvault-runtime-check
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports: ["127.0.0.1:25434:5432"]
+    volumes:
+      - runtime_db:/var/lib/postgresql/data
+      - ../../init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  rabbitmq:
+    image: rabbitmq:4-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+    ports: ["127.0.0.1:25673:5672"]
+    volumes: [runtime_broker:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  minio:
+    image: finvault-user-merchant-tests-minio:latest
+    pull_policy: never
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports: ["127.0.0.1:19003:9000"]
+    volumes: [runtime_storage:/data]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9000/minio/health/live"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  storage-init:
+    extends: { file: ../../docker-compose.yml, service: storage-init }
+  user-migrate:
+    extends: { file: ../../docker-compose.yml, service: user-migrate }
+  merchant-migrate:
+    extends: { file: ../../docker-compose.yml, service: merchant-migrate }
+  user-service:
+    extends: { file: ../../docker-compose.yml, service: user-service }
+    environment:
+      S3_PUBLIC_ENDPOINT: http://localhost:19003
+      STORAGE_CLEANUP_ENABLED: 'false'
+    ports: ["127.0.0.1:13002:3002"]
+  merchant-service:
+    extends: { file: ../../docker-compose.yml, service: merchant-service }
+    ports: ["127.0.0.1:13003:3003"]
+  user-consumer:
+    extends: { file: ../../docker-compose.yml, service: user-consumer }
+  broker-init:
+    extends: { file: ../../docker-compose.yml, service: broker-init }
+  merchant-publisher:
+    extends: { file: ../../docker-compose.yml, service: merchant-publisher }
+  gateway:
+    build: { context: ../../gateway }
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET}
+      GATEWAY_PRIVATE_KEY_FILE: /run/secrets/gateway_private_key
+      GATEWAY_PUBLIC_KEY_FILE: /run/secrets/gateway_public_key
+      USER_SERVICE_URL: http://user-service:3002
+      MERCHANT_SERVICE_URL: http://merchant-service:3003
+    secrets: [gateway_private_key, gateway_public_key]
+    ports: ["127.0.0.1:13000:3000"]
+    depends_on: [user-service, merchant-service]
+secrets:
+  gateway_private_key:
+    file: ../../.cache/deployment/keys/gateway-private.pem
+  gateway_public_key:
+    file: ../../.cache/deployment/keys/gateway-public.pem
+volumes:
+  runtime_db:
+  runtime_broker:
+  runtime_storage:

@@ -39,7 +39,7 @@ aeFpVr9DWDOaA02OcsSGq1K+pmzspers77x41nFYSqe/bQgOL9XONKkRwQ==
    ========================================================================== */
 export const getGatewayPrivateKey = (): string => {
     const keyPath = process.env.GATEWAY_PRIVATE_KEY_FILE
-    if (keyPath && fs.existsSync(keyPath)) {
+    if (keyPath) {
         return fs.readFileSync(keyPath, 'utf-8').trim()
     }
 
@@ -47,12 +47,13 @@ export const getGatewayPrivateKey = (): string => {
         return process.env.GATEWAY_PRIVATE_KEY.trim()
     }
 
+    if (process.env.NODE_ENV === 'production') throw new Error('GATEWAY_PRIVATE_KEY is required in production')
     return DEV_STUB_PRIVATE_KEY
 }
 
 export const getGatewayPublicKey = (): string => {
     const keyPath = process.env.GATEWAY_PUBLIC_KEY_FILE
-    if (keyPath && fs.existsSync(keyPath)) {
+    if (keyPath) {
         return fs.readFileSync(keyPath, 'utf-8').trim()
     }
 
@@ -60,6 +61,7 @@ export const getGatewayPublicKey = (): string => {
         return process.env.GATEWAY_PUBLIC_KEY.trim()
     }
 
+    if (process.env.NODE_ENV === 'production') throw new Error('GATEWAY_PUBLIC_KEY is required in production')
     return DEV_STUB_PUBLIC_KEY
 }
 
@@ -68,6 +70,10 @@ export const getGatewayPublicKey = (): string => {
    Nhận trực tiếp 3 tham số, không cần bọc thêm interface trung gian rườm rà.
    ========================================================================== */
 export const signGatewayToken = (userId: string, role: string, kycTier: number = 0): string => {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId) ||
+        !['USER', 'ADMIN', 'MERCHANT'].includes(role) || !Number.isInteger(kycTier) || kycTier < 0 || kycTier > 2) {
+        throw new Error('Invalid access identity')
+    }
     const payload: GatewayPayload = {
         iss: 'finvault-gateway',
         aud: 'finvault-internal-services',
@@ -81,6 +87,19 @@ export const signGatewayToken = (userId: string, role: string, kycTier: number =
         algorithm: 'ES256',
         expiresIn: '60s',
     })
+}
+
+// Called before serving traffic, so an invalid/mismatched deployment fails visibly.
+export const validateGatewayKeys = (): void => {
+    const privateKey = crypto.createPrivateKey(getGatewayPrivateKey())
+    const publicKey = crypto.createPublicKey(getGatewayPublicKey())
+    if (privateKey.asymmetricKeyType !== 'ec' || privateKey.asymmetricKeyDetails?.namedCurve !== 'prime256v1')
+        throw new Error('Gateway signing requires an ES256 key')
+    const derived = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).toString().trim()
+    if (derived !== publicKey.export({ type: 'spki', format: 'pem' }).toString().trim())
+        throw new Error('Gateway public/private keys do not match')
+    if (process.env.NODE_ENV === 'production' && derived === DEV_STUB_PUBLIC_KEY)
+        throw new Error('Development Gateway key is not permitted in production')
 }
 
 /* ==========================================================================

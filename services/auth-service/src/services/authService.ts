@@ -57,7 +57,7 @@ export const AuthService = {
     const syncResults = await Promise.allSettled([
       internalApi.post(
         `${env.userServiceUrl}/api/users`,
-        { authUserId: newUser.id, email, fullName: `${firstName} ${lastName}` },
+        { authUserId: newUser.id, email },
         { headers: { 'X-Request-Id': requestId }, timeout: 2000 }
       ),
       internalApi.post(

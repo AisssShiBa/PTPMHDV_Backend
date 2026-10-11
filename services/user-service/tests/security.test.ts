@@ -1,3 +1,4 @@
+import { createTestGatewayToken } from 'finvault-internal-auth'
 import './setup'
 import { spawnSync } from 'node:child_process'
 import { stub } from './stub'
@@ -11,7 +12,7 @@ import { prisma } from '../src/config/prisma'
 const userId = '10000000-0000-4000-8000-000000000001'
 const resourceId = '20000000-0000-4000-8000-000000000001'
 function auth(role = 'USER', id = userId) {
-  return { 'x-gateway-verified': 'true', authorization: 'Bearer ' + jwt.sign({ userId: id, role }, process.env.ACCESS_TOKEN_SECRET!, { expiresIn: '5m' }) }
+  return { 'x-gateway-token': createTestGatewayToken(id, role) }
 }
 afterEach(() => mock.restoreAll())
 test('missing internal key fails startup instead of using a fallback', () => {
@@ -20,7 +21,7 @@ test('missing internal key fails startup instead of using a fallback', () => {
   })
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /Invalid environment: INTERNAL_KEY/)
-  assert.equal(result.stderr.includes(process.env.ACCESS_TOKEN_SECRET!), false)
+  assert.equal(result.stderr.includes(process.env.INTERNAL_KEY!), false)
 })
 test('health is public', async () => { await request(app).get('/health').expect(200) })
 test('malformed JSON still has a correlation ID and a consistent error envelope', async () => {
@@ -39,9 +40,9 @@ test('wrong internal key is rejected even with spoofed role', async () => {
 })
 test('expired and wrong-signature tokens are rejected', async () => {
   for (const token of [
-    jwt.sign({ userId, role: 'ADMIN' }, process.env.ACCESS_TOKEN_SECRET!, { expiresIn: -1 }),
+    createTestGatewayToken(userId, 'ADMIN', 0, -1),
     jwt.sign({ userId, role: 'ADMIN' }, 'wrong-secret')
-  ]) await request(app).get('/api/users').set({ 'x-gateway-verified': 'true', authorization: 'Bearer ' + token }).expect(401)
+  ]) await request(app).get('/api/users').set({ 'x-gateway-token': token }).expect(401)
 })
 test('invalid pagination is rejected before database access', async () => {
   for (const query of ['page=0', 'limit=-1', 'page=abc', 'limit=101', 'page=1.5', 'page=1&page=2'])

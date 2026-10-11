@@ -5,6 +5,8 @@ import { prisma } from '../config/prisma'
 import { transaction } from '../utils/transaction'
 import { HttpError } from '../utils/errors'
 import { storage } from './storage'
+import { env } from '../config/env'
+import { lockKycObject, removeUnreferenced } from './storage-cleanup'
 
 export async function normalizeImage(file: { buffer: Buffer; mimetype: string }) {
   if (!['image/jpeg', 'image/png'].includes(file.mimetype)) throw new HttpError(400, 'INVALID_IMAGE', 'Only JPEG and PNG images are supported')
@@ -23,10 +25,14 @@ export async function submitDocument(user: User, idNumber: string, file: { buffe
   const image = await normalizeImage(file)
   const key = 'kyc/' + user.id + '/' + randomUUID() + '.jpg'
   // Persist cleanup intent BEFORE upload: a process crash cannot leave an untracked object.
-  await prisma.storageCleanup.create({ data: { objectKey: key, nextAttemptAt: new Date(Date.now() + 86400000) } })
+  await prisma.storageCleanup.create({ data: { objectKey: key, nextAttemptAt: new Date(Date.now() + env.cleanupGraceMs) } })
   try {
     await storage.put(key, image)
     return await transaction(async tx => {
+      await lockKycObject(tx, key)
+      // Storage deletion cannot roll back with PostgreSQL. If deletion succeeded
+      // but its DB commit failed, an old intent can survive for a missing object.
+      await storage.assertExists(key)
       const result = await tx.user.updateMany({
         where: { id: user.id, deletedAt: null, version: user.version },
         data: { idNumber, idImageUrl: null, kycObjectKey: key, kycMimeType: 'image/jpeg',
@@ -55,9 +61,7 @@ export async function cleanupStorage() {
   const jobs = await prisma.storageCleanup.findMany({ where: { nextAttemptAt: { lte: new Date() } }, take: 20 })
   for (const job of jobs) {
     try {
-      const referenced = await prisma.user.findFirst({ where: { kycObjectKey: job.objectKey } })
-      if (!referenced) await storage.remove(job.objectKey)
-      await prisma.storageCleanup.deleteMany({ where: { objectKey: job.objectKey } })
+      await removeUnreferenced(job.objectKey, true)
     } catch {
       await prisma.storageCleanup.updateMany({ where: { objectKey: job.objectKey },
         data: { attempts: { increment: 1 }, nextAttemptAt: new Date(Date.now() + 3600000) } })

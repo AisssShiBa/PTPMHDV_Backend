@@ -1,9 +1,9 @@
+import { createTestGatewayToken } from 'finvault-internal-auth'
 import './setup'
 import { stub } from './stub'
 import { test, afterEach, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import request from 'supertest'
-import jwt from 'jsonwebtoken'
 import sharp from 'sharp'
 import app from '../src/app'
 import { prisma } from '../src/config/prisma'
@@ -12,9 +12,9 @@ const owner = '10000000-0000-4000-8000-000000000001'
 const other = '10000000-0000-4000-8000-000000000002'
 const id = '20000000-0000-4000-8000-000000000001'
 const profile = { id, authUserId: owner, email: 'a@example.com', deletedAt: null, kycStatus: 'NONE', version: 0 }
-const headers = (userId = owner) => ({ 'x-gateway-verified': 'true', authorization: 'Bearer ' + jwt.sign({ userId, role: 'USER' }, process.env.ACCESS_TOKEN_SECRET!) })
+const headers = (userId = owner) => ({ 'x-gateway-token': createTestGatewayToken(userId, 'USER') })
 afterEach(() => mock.restoreAll())
-const adminHeaders = () => ({ 'x-gateway-verified': 'true', authorization: 'Bearer ' + jwt.sign({ userId: owner, role: 'ADMIN' }, process.env.ACCESS_TOKEN_SECRET!) })
+const adminHeaders = () => ({ 'x-gateway-token': createTestGatewayToken(owner, 'ADMIN') })
 
 test('user directory preserves both KYC filter aliases, pagination, search and privacy', async () => {
   let findQuery: any

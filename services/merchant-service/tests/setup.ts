@@ -1,8 +1,6 @@
 process.env.NODE_ENV = 'test'
 process.env.INTERNAL_KEY = 'test-internal-key-01234567890123456789'
-process.env.ACCESS_TOKEN_SECRET = 'test-jwt-secret-012345678901234567890'
-process.env.DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:55432/finvault_test?schema=merchant_test'
-process.env.DISABLE_GATEWAY_CHECK = 'false'
+process.env.DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:25432/finvault_test?schema=merchant_test'
 process.env.RABBITMQ_URL = 'amqp://guest:guest@127.0.0.1:5673'
 process.env.EVENT_EXCHANGE = 'finvault.tests.merchant'
 process.env.EVENT_RETRY_MS = '100'
@@ -14,3 +12,5 @@ process.env.S3_ACCESS_KEY_ID = 'finvault_test'
 process.env.S3_SECRET_ACCESS_KEY = 'finvault_test_password'
 process.env.S3_REGION = 'us-east-1'
 process.env.S3_FORCE_PATH_STYLE = 'true'
+delete process.env.GATEWAY_PUBLIC_KEY
+delete process.env.GATEWAY_PUBLIC_KEY_FILE

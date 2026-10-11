@@ -3,7 +3,6 @@ import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import authRoute from './routes/authRoute'
 import { attachRequestId } from './middlewares/requestId'
-import { requireGateway } from './middlewares/requireGateway'
 import { errorHandler } from './middlewares/errorHandler'
 import { env } from './config/env'
 
@@ -46,10 +45,8 @@ app.get('/api/auth/health', (_req, res) => {
   res.status(200).json({ status: 'ok', service: 'auth-service' })
 })
 
-// 4. Bảo vệ microservice khỏi truy cập trực tiếp bypass Gateway
-app.use('/api/auth', requireGateway)
-
-// 5. Mount Routes
+// Signup/signin/refresh/signout are public auth endpoints. Their handlers validate
+// credentials/cookies and apply route rate limits; a legacy marker is not authentication.
 app.use('/api/auth', authRoute)
 
 // 6. Xử lý Route không tồn tại (404)
