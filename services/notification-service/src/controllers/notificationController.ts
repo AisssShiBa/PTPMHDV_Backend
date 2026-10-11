@@ -42,15 +42,7 @@ export const createNotification = async (req: Request, res: Response) => {
 // ===================================================================
 export const getNotifications = async (req: Request, res: Response) => {
   try {
-    const { userId } = req.params as { userId: string }
-
-    // SELF-GUARD CỨNG — trước khi query
-    if (req.userId !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: { code: 'FORBIDDEN', message: 'Không có quyền xem thông báo của người khác' }
-      })
-    }
+    const userId = req.auth!.userId
 
     // Phân trang từ query (clamp: page ≥ 1, 1 ≤ limit ≤ 50)
     const page = Math.max(parseInt(req.query.page as string) || 1, 1)
@@ -103,7 +95,7 @@ export const markNotificationRead = async (req: Request, res: Response) => {
         error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' }
       })
     }
-    if (existing.userId !== req.userId) {
+    if (existing.userId !== req.auth!.userId) {
       return res.status(403).json({
         success: false,
         error: { code: 'FORBIDDEN', message: 'Không có quyền thao tác thông báo này' }
@@ -134,13 +126,7 @@ export const markNotificationRead = async (req: Request, res: Response) => {
 
 export const markAllNotificationsRead = async (req: Request, res: Response) => {
   try {
-    const { userId } = req.params as { userId: string }
-    if (req.userId !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: { code: 'FORBIDDEN', message: 'Không có quyền thao tác thông báo của người khác' }
-      })
-    }
+    const userId = req.auth!.userId
     const result = await prisma.notification.updateMany({
       where: { userId, read: false },
       data: { read: true }

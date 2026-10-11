@@ -1,6 +1,6 @@
 import express from 'express'
+import { requireGateway } from 'finvault-internal-auth'
 import { internalAuth } from '../middlewares/internalAuth'
-import { clientAuth } from '../middlewares/clientAuth'
 import {
   createNotification,
   getNotifications,
@@ -14,10 +14,11 @@ const route = express.Router()
 // 1. Nội bộ: chỉ Outbox Scheduler của Payment/Wallet gọi
 route.post('/', internalAuth, createNotification)
 
-// 2. CLIENT routes — tự-guard: user chỉ xem/đọc thông báo của CHÍNH MÌNH
-//    `read-all` khai báo TRƯỚC `read` để Express khớp đuôi dài hơn trước.
-route.patch('/:userId/read-all', clientAuth, markAllNotificationsRead)
-route.patch('/:id/read', clientAuth, markNotificationRead)
-route.get('/:userId', clientAuth, getNotifications)
+// 2. Mọi route client phía dưới phải có Gateway Token hợp lệ.
+route.use(requireGateway)
+
+route.patch('/:userId/read-all', markAllNotificationsRead)
+route.patch('/:id/read', markNotificationRead)
+route.get('/:userId', getNotifications)
 
 export default route

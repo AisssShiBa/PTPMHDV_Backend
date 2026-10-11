@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
+import { timingSafeEqual } from 'node:crypto'
 import { env } from '../config/env'
 
 // InternalAuth: xác thực cho các route Internal (do Payment/Wallet Outbox Scheduler gọi).
@@ -7,14 +8,14 @@ export const internalAuth = (req: Request, res: Response, next: NextFunction) =>
   const internalKey = req.headers['x-internal-key']
   const expectedKey = env.internalKey
 
-  if (!expectedKey) {
-    return res.status(500).json({
-      success: false,
-      error: { code: 'INTERNAL_SERVER_ERROR', message: 'INTERNAL_KEY chưa được cấu hình' }
-    })
-  }
+  const providedKey = typeof internalKey === 'string' ? Buffer.from(internalKey) : null
+  const expectedKeyBuffer = Buffer.from(expectedKey)
+  const isValid =
+    providedKey !== null &&
+    providedKey.length === expectedKeyBuffer.length &&
+    timingSafeEqual(providedKey, expectedKeyBuffer)
 
-  if (!internalKey || internalKey !== expectedKey) {
+  if (!isValid) {
     return res.status(401).json({
       success: false,
       error: { code: 'UNAUTHORIZED', message: 'Invalid or missing x-internal-key' }
