@@ -1,7 +1,11 @@
 import { Request, Response } from 'express'
 import { prisma } from '../config/prisma'
 import { notificationIO } from '../socket'
-import { createNotificationRecord, isNotificationType } from '../services/notificationService'
+import {
+  ingestNotification,
+  isNotificationType,
+  NotificationIngestError
+} from '../services/notificationService'
 
 export const getSocketTicket = async (req: Request, res: Response) => {
   const ticket = req.headers['x-gateway-token']
@@ -24,26 +28,38 @@ export const getSocketTicket = async (req: Request, res: Response) => {
 // ===================================================================
 export const createNotification = async (req: Request, res: Response) => {
   try {
-    const { userId, type, message } = req.body
-    if (!userId || !type || !message) {
+    const { eventId, userId, type, message } = req.body
+    if (
+      typeof userId !== 'string' ||
+      userId.trim().length === 0 ||
+      !isNotificationType(type) ||
+      typeof message !== 'string' ||
+      (eventId !== undefined && (typeof eventId !== 'string' || eventId.trim().length === 0))
+    ) {
       return res.status(400).json({
         success: false,
-        error: { code: 'BAD_REQUEST', message: 'userId, type và message là bắt buộc' }
+        error: { code: 'BAD_REQUEST', message: 'userId, type và message hợp lệ là bắt buộc' }
       })
     }
-    if (!isNotificationType(type)) {
-      return res.status(400).json({
-        success: false,
-        error: { code: 'BAD_REQUEST', message: `type không hợp lệ: ${type}` }
-      })
+
+    const result = await ingestNotification({ eventId, userId, type, message, source: 'http' })
+    if (result.duplicate) {
+      return res.status(200).json({ success: true, data: null, duplicate: true })
     }
-    const notification = await createNotificationRecord(userId, type, message)
-    notificationIO?.to(`user:${userId}`).emit('notification:new', notification)
+    if (result.notification) {
+      notificationIO?.to(`user:${userId}`).emit('notification:new', result.notification)
+    }
     return res.status(201).json({
       message: 'Tạo thông báo thành công',
-      data: notification
+      data: result.notification
     })
   } catch (error) {
+    if (error instanceof NotificationIngestError && error.code === 'EVENT_CONFLICT') {
+      return res.status(409).json({
+        success: false,
+        error: { code: error.code, message: error.message }
+      })
+    }
     console.error('Lỗi tạo thông báo:', error)
     return res.status(500).json({
       success: false,
