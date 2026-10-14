@@ -86,7 +86,7 @@ export const AdminController = {
       })
     }
 
-    const adminId = req.userId || 'admin-system'
+    const adminId = req.auth?.userId || req.userId || 'admin-system'
 
     try {
       const result = await KycService.reviewKyc(
@@ -165,7 +165,7 @@ export const AdminController = {
       })
     }
 
-    const adminId = req.userId || 'admin-system'
+    const adminId = req.auth?.userId || req.userId || 'admin-system'
 
     try {
       const result = await MerchantAdminService.reviewMerchant(

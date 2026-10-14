@@ -21,6 +21,7 @@
                          "cors":  "^2.8.6",
                          "dotenv":  "^17.4.2",
                          "express":  "^5.2.1",
+                         "finvault-internal-auth": "file:../../packages/finvault-internal-auth",
                          "jsonwebtoken":  "^9.0.3"
                      },
     "devDependencies":  {

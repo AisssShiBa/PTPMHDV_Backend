@@ -14,6 +14,7 @@ export const env = {
     clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
     // ACCESS_TOKEN_SECRET bắt buộc phải có, nếu thiếu Gateway sẽ tự tắt để báo động
     accessTokenSecret: required('ACCESS_TOKEN_SECRET'),
+    internalKey: process.env.INTERNAL_KEY || '',
 
     // Danh bạ định tuyến tới các Microservices nội bộ
     services: {

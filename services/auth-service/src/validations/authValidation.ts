@@ -12,7 +12,14 @@ export type SignUpInput = z.infer<typeof signUpSchema>
 
 export const signInSchema = z.object({
   username: z.string().min(1, 'Tên đăng nhập là bắt buộc').max(50, 'Tên đăng nhập không được vượt quá 50 ký tự'),
-  password: z.string().min(1, 'Mật khẩu là bắt buộc').max(128, 'Mật khẩu không được vượt quá 128 ký tự')
+  password: z.string().min(1, 'Mật khẩu là bắt buộc').max(128, 'Mật khẩu không được vượt quá 128 ký tự'),
+  platform: z.enum(['web', 'mobile']).optional()
 })
 
 export type SignInInput = z.infer<typeof signInSchema>
+
+export const refreshSchema = z.object({
+  refreshToken: z.string().optional()
+})
+
+export type RefreshInput = z.infer<typeof refreshSchema>

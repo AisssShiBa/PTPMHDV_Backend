@@ -19,5 +19,8 @@ export const sanitizeHeaders = (req: Request, _res: Response, next: NextFunction
     delete req.headers['x-user-id']
     delete req.headers['x-user-role']
 
+    // 4. Xóa header khóa nội bộ x-internal-key nếu client bên ngoài cố tình gửi lên
+    delete req.headers['x-internal-key']
+
     next()
 }
