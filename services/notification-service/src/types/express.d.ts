@@ -1,7 +1,7 @@
 import { Request } from 'express'
 
 // Mở rộng Express Request: req.userId được gán bởi clientAuth
-// (đọc từ header x-user-id do Gateway tiêm sau khi xác thực JWT).
+// (lấy từ req.auth.userId sau khi kiểm tra chữ ký Gateway Token).
 declare global {
   namespace Express {
     interface Request {

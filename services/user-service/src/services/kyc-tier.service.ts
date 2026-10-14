@@ -12,19 +12,20 @@ export async function updateKycTier(profileId: string, nextTier: number) {
     const current = await tx.user.findFirst({ where: { id: profileId, deletedAt: null } })
     if (!current) throw new HttpError(404, 'NOT_FOUND', 'User not found')
     if (current.kycTier === nextTier) return current
-    const user = await tx.user.update({
+    const profile = await tx.user.update({
       where: { id: profileId, deletedAt: null, version: current.version },
       data: { kycTier: nextTier, version: { increment: 1 } }
     })
     const eventId = randomUUID()
     await tx.userOutboxEvent.create({ data: {
-      id: eventId, aggregateId: user.id, aggregateVersion: user.version,
+      // aggregateId identifies the local profile; data.authUserId identifies the account.
+      id: eventId, aggregateId: profile.id, aggregateVersion: profile.version,
       eventType: 'user.kyc_updated',
       payload: {
         eventId, eventType: 'user.kyc_updated', eventVersion: 1, occurredAt: new Date().toISOString(),
-        data: { authUserId: user.authUserId, kycTier: user.kycTier }
+        data: { authUserId: profile.authUserId, kycTier: profile.kycTier }
       }
     } })
-    return user
+    return profile
   })
 }

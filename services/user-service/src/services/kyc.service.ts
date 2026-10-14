@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import sharp from 'sharp'
-import { User } from '@prisma/client'
+import { User as UserProfile } from '@prisma/client'
 import { prisma } from '../config/prisma'
 import { transaction } from '../utils/transaction'
 import { HttpError } from '../utils/errors'
@@ -20,10 +20,11 @@ export async function normalizeImage(file: { buffer: Buffer; mimetype: string })
   } catch { throw new HttpError(400, 'INVALID_IMAGE', 'Image is invalid, truncated or too large') }
 }
 
-export async function submitDocument(user: User, idNumber: string, file: { buffer: Buffer; mimetype: string }) {
-  if (user.kycStatus === 'APPROVED') throw new HttpError(409, 'INVALID_TRANSITION', 'Approved KYC must be rejected before resubmission')
+export async function submitDocument(profile: UserProfile, idNumber: string, file: { buffer: Buffer; mimetype: string }) {
+  if (profile.kycStatus === 'APPROVED') throw new HttpError(409, 'INVALID_TRANSITION', 'Approved KYC must be rejected before resubmission')
+  const profileId = profile.id
   const image = await normalizeImage(file)
-  const key = 'kyc/' + user.id + '/' + randomUUID() + '.jpg'
+  const key = 'kyc/' + profileId + '/' + randomUUID() + '.jpg'
   // Persist cleanup intent BEFORE upload: a process crash cannot leave an untracked object.
   await prisma.storageCleanup.create({ data: { objectKey: key, nextAttemptAt: new Date(Date.now() + env.cleanupGraceMs) } })
   try {
@@ -34,17 +35,17 @@ export async function submitDocument(user: User, idNumber: string, file: { buffe
       // but its DB commit failed, an old intent can survive for a missing object.
       await storage.assertExists(key)
       const result = await tx.user.updateMany({
-        where: { id: user.id, deletedAt: null, version: user.version },
+        where: { id: profileId, deletedAt: null, version: profile.version },
         data: { idNumber, idImageUrl: null, kycObjectKey: key, kycMimeType: 'image/jpeg',
           kycFileSize: image.length, kycStatus: 'PENDING', version: { increment: 1 } }
       })
       if (result.count !== 1) throw new HttpError(409, 'CONCURRENT_UPDATE', 'Profile changed; reload and retry')
       await tx.storageCleanup.delete({ where: { objectKey: key } })
-      if (user.kycObjectKey) await tx.storageCleanup.upsert({
-        where: { objectKey: user.kycObjectKey },
-        create: { objectKey: user.kycObjectKey }, update: { nextAttemptAt: new Date() }
+      if (profile.kycObjectKey) await tx.storageCleanup.upsert({
+        where: { objectKey: profile.kycObjectKey },
+        create: { objectKey: profile.kycObjectKey }, update: { nextAttemptAt: new Date() }
       })
-      return tx.user.findUniqueOrThrow({ where: { id: user.id } })
+      return tx.user.findUniqueOrThrow({ where: { id: profileId } })
     })
   } catch (error) {
     // A failed commit response may be ambiguous. The durable cleanup job checks references
@@ -53,9 +54,9 @@ export async function submitDocument(user: User, idNumber: string, file: { buffe
     throw new HttpError(503, 'KYC_SUBMISSION_FAILED', 'Could not save KYC; retry after reloading the profile')
   }
 }
-export async function documentUrl(user: User) {
-  if (!user.kycObjectKey) throw new HttpError(404, 'NOT_FOUND', 'No uploaded KYC document')
-  return { url: await storage.url(user.kycObjectKey), expiresIn: 60 }
+export async function documentUrl(profile: UserProfile) {
+  if (!profile.kycObjectKey) throw new HttpError(404, 'NOT_FOUND', 'No uploaded KYC document')
+  return { url: await storage.url(profile.kycObjectKey), expiresIn: 60 }
 }
 export async function cleanupStorage() {
   const jobs = await prisma.storageCleanup.findMany({ where: { nextAttemptAt: { lte: new Date() } }, take: 20 })

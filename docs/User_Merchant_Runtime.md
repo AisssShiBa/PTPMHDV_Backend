@@ -24,18 +24,24 @@ Package build ra JavaScript/declaration trong `dist`; dependency local cần pac
 ## Compose chính
 
 ```powershell
-rtk proxy node scripts/prepare-deployment.mjs
-rtk proxy docker compose --env-file .cache/deployment/runtime.env config --quiet
-rtk proxy docker compose --env-file .cache/deployment/runtime.env up -d --build
+rtk proxy node scripts/init-secrets.js
+rtk proxy docker compose config --quiet
+rtk proxy docker compose up -d --build --wait --wait-timeout 180
 ```
 
 Script tạo key/credential cục bộ khi chưa tồn tại, không ghi đè credential đã có. Với môi trường đang dùng volume RabbitMQ/MinIO cũ, cấu hình credential phù hợp với volume hiện tại trước khi chạy; không xóa volume để xử lý lỗi xác thực. Môi trường thật dùng secret manager và quy trình triển khai của nhóm.
+
+Quick Start dùng `.env` và `secrets/`. `prepare-deployment.mjs` cùng `.cache/deployment/runtime.env` chỉ dành cho bộ kiểm chứng image biệt lập bên dưới. Khóa dev mẫu được `init-secrets.js` sao lưu và thay bằng khóa mới để các service production chấp nhận.
 
 User/Merchant migration là job riêng; HTTP và worker chờ migration thành công. Consumer/publisher là container riêng. Bucket private; account S3 của User chỉ có ListBucket prefix `kyc/` và Get/Put/DeleteObject trong prefix này. `S3_ENDPOINT` phục vụ truy cập nội bộ; `S3_PUBLIC_ENDPOINT` dùng lúc ký URL để browser đọc được (mặc định `http://localhost:19002`). Không thay hostname sau khi ký.
 
 `broker-init` tạo queue **quan sát demo** `finvault.demo.merchant-events.v1` nhận ba loại Merchant event. Queue này giúp kiểm chứng publish, không thay thế consumer nghiệp vụ; khi triển khai với consumer thật cần owner và binding riêng.
 
 Các Dockerfile User/Merchant/Admin cần build context là root backend. MinIO server/client được build từ source; client dùng release cố định vì image registry không có sẵn trong lần kiểm chứng này.
+
+## Nghiệm thu toàn cụm từ Compose chính
+
+Xem [README mục 7](../README.md#7-kiểm-thử-nghiệm-thu-hệ-thống-dod-tuần-1) để chạy project `finvault-full-check` và `tests/deployment/full-smoke.mjs`. Bài này dùng Auth/Gateway/Admin thật cùng PostgreSQL, MinIO và RabbitMQ; kết quả ngày 14/10/2026 đã đạt. Chi tiết sửa lỗi, bằng chứng và giới hạn nằm trong [báo cáo Docker](Docker_Runtime_Review_2026-10-14.md).
 
 ## Integration test biệt lập
 

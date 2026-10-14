@@ -1,6 +1,7 @@
 name: finvault-runtime-check
 services:
   postgres:
+    networks: [internal_net]
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: postgres
@@ -15,6 +16,7 @@ services:
       timeout: 2s
       retries: 30
   rabbitmq:
+    networks: [internal_net]
     image: rabbitmq:4-alpine
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
@@ -27,6 +29,7 @@ services:
       timeout: 3s
       retries: 30
   minio:
+    networks: [internal_net]
     image: finvault-user-merchant-tests-minio:latest
     pull_policy: never
     command: server /data
@@ -62,6 +65,7 @@ services:
   merchant-publisher:
     extends: { file: ../../docker-compose.yml, service: merchant-publisher }
   gateway:
+    networks: [internal_net]
     build: { context: ../../gateway }
     environment:
       NODE_ENV: production
@@ -83,3 +87,6 @@ volumes:
   runtime_db:
   runtime_broker:
   runtime_storage:
+
+networks:
+  internal_net:

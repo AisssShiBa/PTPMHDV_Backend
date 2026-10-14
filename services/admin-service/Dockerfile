@@ -4,7 +4,7 @@ WORKDIR /app
 # 1. Copy và cài dependencies cho package nội bộ finvault-internal-auth
 COPY packages/finvault-internal-auth ./packages/finvault-internal-auth
 WORKDIR /app/packages/finvault-internal-auth
-RUN npm install --omit=dev
+RUN npm ci
 
 # 2. Copy dependencies và Prisma schema của admin-service
 WORKDIR /app/services/admin-service

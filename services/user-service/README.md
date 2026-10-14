@@ -1,5 +1,7 @@
 # User Service
 
+**Rà soát 14/10/2026:** đã sửa ưu tiên Gateway Token và kiểm tra lại quyền; kết quả test/build và phần cấu hình cần bàn giao có trong [báo cáo xác thực](docs/auth-review-2026-10-14.md).
+
 **Cập nhật 11/10/2026:** auth dùng `finvault-internal-auth`; xem [trạng thái](docs/week1-status.md), [OpenAPI](docs/openapi.json) và [hướng dẫn runtime](../../docs/User_Merchant_Runtime.md).
 
 Quản lý hồ sơ, KYC riêng tư và consumer `user.registered`. API mặc định `http://localhost:3002/api/users`.
@@ -24,8 +26,10 @@ Cấu hình service: `DATABASE_URL`, `INTERNAL_KEY` (ít nhất 32 ký tự), `P
 ## Xác thực và quyền
 
 Request người dùng gửi Bearer token tới Gateway. Gateway chuyển `x-gateway-token` ES256; service xác thực qua package chung và đọc `req.auth`. Thiếu/sai token trả 401; thiếu quyền trả 403.
+
+- Khi có `X-Gateway-Token`, service luôn kiểm tra token và quyền trong claims, kể cả khi Gateway gắn thêm `X-Internal-Key`. Token rỗng/sai/hết hạn trả 401 `INVALID_GATEWAY_TOKEN`; không chuyển sang xác thực nội bộ.
 - `req.auth.userId` là Auth ID; role và tier lấy từ claims đã kiểm chứng. Header ID/role/marker do client gửi không nâng quyền.
-- Request nội bộ cần `X-Internal-Key` hợp lệ. Có thể gửi `X-User-Id` dạng UUID nếu cần ngữ cảnh.
+- Lời gọi Auth/Admin không có `X-Gateway-Token` dùng `X-Internal-Key` hợp lệ. Có thể gửi `X-User-Id` dạng UUID nếu cần ngữ cảnh. Cơ chế này vẫn tin cậy khóa dùng chung; service phải nằm trong mạng nội bộ.
 - ADMIN và internal call được quản trị hồ sơ; USER chỉ xem/sửa/KYC chính mình.
 - `X-Request-Id` được nhận nếu hợp lệ hoặc tự sinh; trả lại trong header và lỗi. Lỗi server không trả chi tiết database.
 
@@ -50,7 +54,7 @@ Ngoài ra có `GET /health`. Phân trang: page 1–100000, limit 1–100; mặc 
 
 Nếu một identifier khớp profile ID và Auth ID của hai hồ sơ khác nhau, API trả 409 `AMBIGUOUS_IDENTIFIER`; dùng endpoint `/by-auth/...` để chỉ rõ. Kiểm tra quyền luôn dùng `user.authUserId`.
 
-Response thành công: `{ success: true, data: ... }`. Danh sách có `content, page, limit, totalElements, totalPages`. Hồ sơ trả `hasKycDocument`, không trả object key hoặc URL KYC cũ.
+Response nghiệp vụ thành công: `{ success: true, data: ..., message: "Success" }`. Lỗi: `{ success: false, error: { code, message }, requestId }`. Health giữ `{ status: "ok", service: "user-service" }`. Danh sách có `content, page, limit, totalElements, totalPages`. Hồ sơ trả `hasKycDocument`, không trả object key hoặc URL KYC cũ.
 
 Lọc danh sách theo trạng thái KYC bằng `status` hoặc `kycStatus`: `NONE`, `PENDING`, `APPROVED`, `REJECTED` (không phân biệt hoa/thường, bỏ khoảng trắng). Giá trị rỗng không lọc; nếu gửi cả hai thì ưu tiên `status` không rỗng. Trạng thái không hợp lệ trả 400.
 

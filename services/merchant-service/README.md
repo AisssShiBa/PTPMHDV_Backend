@@ -1,5 +1,7 @@
 # Merchant Service
 
+**Rà soát 14/10/2026:** đã sửa ưu tiên Gateway Token và kiểm tra lại quyền; kết quả test/build và phần cấu hình cần bàn giao có trong [báo cáo xác thực](../user-service/docs/auth-review-2026-10-14.md).
+
 **Cập nhật 11/10/2026:** auth dùng `finvault-internal-auth`; xem [trạng thái](docs/week1-status.md), [OpenAPI](docs/openapi.json) và [hướng dẫn runtime](../../docs/User_Merchant_Runtime.md).
 
 Quản lý đăng ký, duyệt Merchant và phát event qua transactional outbox. API mặc định `http://localhost:3003/api/merchants`.
@@ -32,6 +34,8 @@ Nếu database cũ được tạo bằng db push, cần baseline migration phù 
 
 Request người dùng gửi Bearer token tới Gateway. Gateway chuyển `x-gateway-token` ES256; service xác thực qua package chung và đọc `req.auth`. Thiếu/sai token trả 401; thiếu quyền trả 403.
 
+- Khi có `X-Gateway-Token`, service luôn kiểm tra token và quyền trong claims, kể cả khi Gateway gắn thêm `X-Internal-Key`. Token rỗng/sai/hết hạn trả 401 `INVALID_GATEWAY_TOKEN`; không chuyển sang xác thực nội bộ.
+- Lời gọi Auth/Admin không có `X-Gateway-Token` dùng `X-Internal-Key` hợp lệ; `X-User-Id` nếu có phải là UUID. Cơ chế này vẫn tin cậy khóa dùng chung; service phải nằm trong mạng nội bộ.
 
 | Method | Đường dẫn | Quyền | Nội dung |
 |---|---|---|---|
@@ -45,7 +49,7 @@ Request người dùng gửi Bearer token tới Gateway. Gateway chuyển `x-gat
 
 Ngoài ra có `GET /health`. `ownerId` là Auth ID trong token. Người dùng không được đăng ký hộ bằng cách thay `ownerId` trong body. UUID, chuỗi và query được validate; page 1–100000, limit 1–100 (mặc định 1/10); search tối đa 200 ký tự. Hồ sơ có `deletedAt` bị loại khỏi xem/sửa/danh sách/active.
 
-Response thành công: `{ success: true, data: ... }`. Lỗi: `{ success: false, error: { code, message }, requestId }`. Danh sách có `content, page, limit, totalElements, totalPages`.
+Response nghiệp vụ thành công: `{ success: true, data: ..., message: "Success" }`. Lỗi: `{ success: false, error: { code, message }, requestId }`. Health giữ `{ status: "ok", service: "merchant-service" }`. Danh sách có `content, page, limit, totalElements, totalPages`.
 
 ### Trạng thái
 
@@ -64,6 +68,7 @@ Response thành công: `{ success: true, data: ... }`. Lỗi: `{ success: false,
 ```json
 {
   "success": true,
+  "message": "Success",
   "data": {
     "id": "merchant-uuid",
     "ownerId": "owner-auth-uuid",
