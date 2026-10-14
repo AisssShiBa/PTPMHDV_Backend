@@ -3,8 +3,7 @@ import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import adminRoute from './routes/adminRoute'
 import { attachRequestId } from './middlewares/requestId'
-import { requireGateway } from './middlewares/requireGateway'
-import { requireAdmin } from './middlewares/requireAdmin'
+import { requireGateway, requireRole } from 'finvault-internal-auth'
 import { errorHandler } from './middlewares/errorHandler'
 import { env } from './config/env'
 
@@ -49,8 +48,8 @@ app.get('/api/admin/health', (_req, res) => {
   res.status(200).json({ status: 'ok', service: 'admin-service', port: env.port })
 })
 
-// 5. Tuyến đường API Admin chính - Phải qua Gateway & Quyền ADMIN
-app.use('/api/admin', requireGateway, requireAdmin, adminRoute)
+// 5. Tuyến đường API Admin chính - Bảo vệ Zero-Trust: Phải qua Gateway & Có Role ADMIN tối cao
+app.use('/api/admin', requireGateway, requireRole('ADMIN'), adminRoute)
 
 // 6. Xử lý Route không tồn tại (404)
 app.use((_req, res) => {

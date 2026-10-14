@@ -1,10 +1,7 @@
 **/node_modules
-**/dist
+**/.git
 **/.env
 **/.env.*
-!**/.env.example
-.git
-.cache
-**/*.log
-tests
-docs
+**/dist
+**/build
+*.log

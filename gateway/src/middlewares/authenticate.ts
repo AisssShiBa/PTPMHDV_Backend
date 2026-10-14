@@ -30,8 +30,9 @@ const PUBLIC_ROUTES: PublicRoute[] = [
     { method: 'POST', path: '/api/auth/refresh' },
     { method: 'POST', path: '/api/auth/signout' },
     { method: '*', path: '/health' },
-    { method: 'GET', path: /^\/api\/payments\/topups\/vnpay\/.*/ },
-    { method: 'GET', path: /^\/api\/funding\/vnpay\/.*/ }, // Whitelist webhook/IPN VNPAY
+    { method: '*', path: /^\/api\/payments\/topups\/vnpay\/.*/ },
+    { method: '*', path: /^\/api\/funding(\/.*)?$/ }, // Whitelist webhook/IPN VNPAY
+    { method: '*', path: /^\/socket\.io(\/.*)?$/ },    // Whitelist WebSocket handshake (notification-service tự xác thực)
 ]
 
 /* ==========================================================================

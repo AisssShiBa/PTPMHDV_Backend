@@ -4,15 +4,16 @@ services:
     container_name: finvault-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
-      interval: 3s
-      timeout: 3s
-      retries: 30
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    expose:
+      - "5432"
     ports:
       - "5432:5432"
+    networks:
+      - internal_net
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
@@ -21,12 +22,16 @@ services:
     image: rabbitmq:3-management
     container_name: finvault-rabbitmq
     restart: unless-stopped
-    ports:
-      - "5672:5672"
-      - "15672:15672"
+    expose:
+      - "5672"
+      - "15672"
+    networks:
+      - internal_net
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASS}
+    secrets:
+      - rabbitmq_pass
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -63,13 +68,20 @@ services:
         condition: service_healthy
 
   user-service:
-    build: *user-build
-    image: finvault-user-service:local
-    restart: unless-stopped
-    init: true
-    expose: ["3002"]
-    environment: *user-env
-    secrets: [gateway_public_key]
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile
+    container_name: finvault-user-service
+    expose:
+      - "3002"
+    networks:
+      - internal_net
+    environment:
+      - PORT=3002
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/user_service
+      - JWT_SECRET=${ACCESS_TOKEN_SECRET}
+      - INTERNAL_KEY=${INTERNAL_KEY}
+      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
     depends_on:
       user-migrate:
         condition: service_completed_successfully
@@ -146,33 +158,19 @@ services:
 
   minio:
     build:
-      context: services/user-service/tests
-      dockerfile: minio.Dockerfile
-    command: server /data
-    restart: unless-stopped
+      context: ./services/merchant-service
+      dockerfile: Dockerfile
+    container_name: finvault-merchant-service
+    expose:
+      - "3003"
+    networks:
+      - internal_net
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?run scripts/prepare-deployment.mjs}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?run scripts/prepare-deployment.mjs}
-    ports: ["127.0.0.1:19002:9000"]
-    volumes: [minio_data:/data]
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-
-  storage-init:
-    build:
-      context: scripts
-      dockerfile: mc.Dockerfile
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      S3_BUCKET: ${S3_BUCKET:-finvault-kyc}
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
-    volumes: [./scripts/init-storage.sh:/init-storage.sh:ro]
-    entrypoint: ["/bin/sh", "/init-storage.sh"]
+      - PORT=3003
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/merchant_service
+      - JWT_SECRET=${ACCESS_TOKEN_SECRET}
+      - INTERNAL_KEY=${INTERNAL_KEY}
+      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
     depends_on:
       minio:
         condition: service_healthy
@@ -182,15 +180,17 @@ services:
       context: ./services/notification-service
       dockerfile: Dockerfile
     container_name: finvault-notification-service
-    ports:
-      - "3006:3006"
+    expose:
+      - "3006"
+    networks:
+      - internal_net
     environment:
       - PORT=3006
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/notification_service
-      - INTERNAL_KEY=${INTERNAL_KEY:?run scripts/prepare-deployment.mjs}
-      - CLIENT_URL=http://localhost:5173
-      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET:?run scripts/prepare-deployment.mjs}
-      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/notification_service
+      - INTERNAL_KEY=${INTERNAL_KEY}
+      - CLIENT_URL=${CLIENT_URL}
+      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
+      - RABBITMQ_URL=${RABBITMQ_URL:-amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672}
     depends_on:
       postgres:
         condition: service_started
@@ -204,12 +204,14 @@ services:
     container_name: finvault-wallet-service
     expose:
       - "3004"
+    networks:
+      - internal_net
     environment:
       - PORT=3004
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/wallet_service
-      - INTERNAL_KEY=${INTERNAL_KEY:?run scripts/prepare-deployment.mjs}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/wallet_service
+      - INTERNAL_KEY=${INTERNAL_KEY}
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
-      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672
+      - RABBITMQ_URL=${RABBITMQ_URL:-amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672}
     depends_on:
       postgres:
         condition: service_started
@@ -221,20 +223,24 @@ services:
       context: .
       dockerfile: ./services/payment-service/Dockerfile
     container_name: finvault-payment-service
-    ports:
-      - "3005:3005"
+    expose:
+      - "3005"
+    networks:
+      - internal_net
     environment:
       - PORT=3005
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/payment_service
-      - INTERNAL_KEY=${INTERNAL_KEY:?run scripts/prepare-deployment.mjs}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/payment_service
+      - INTERNAL_KEY=${INTERNAL_KEY}
       - WALLET_SERVICE_URL=http://wallet-service:3004
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
-      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672
-      - VNP_TMN_CODE=9OJY037K
-      - VNP_HASH_SECRET=AIWWJEDQTSPYEMVZYUXJKMOZDNWFTGRQ
-      - VNP_URL=https://sandbox.vnpayment.vn/paymentv2/vpcpay.html
-      - VNP_RETURN_URL=http://localhost:3000/api/payments/topups/vnpay/return
-      - VNP_IPN_URL=http://localhost:3000/api/payments/topups/vnpay/ipn
+      - RABBITMQ_URL=${RABBITMQ_URL:-amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672}
+      - VNP_TMN_CODE=${VNP_TMN_CODE}
+      - VNP_HASH_SECRET=${VNP_HASH_SECRET}
+      - VNP_URL=${VNP_URL}
+      - VNP_RETURN_URL=${VNP_RETURN_URL}
+      - VNP_IPN_URL=${VNP_IPN_URL}
+    secrets:
+      - vnp_hash_secret
     depends_on:
       postgres:
         condition: service_started
@@ -248,35 +254,37 @@ services:
     container_name: finvault-auth-service
     expose:
       - "3001"
+    networks:
+      - internal_net
     environment:
       - PORT=3001
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/auth_service
-      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET:?run scripts/prepare-deployment.mjs}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/auth_service
+      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
       - USER_SERVICE_URL=http://user-service:3002
       - WALLET_SERVICE_URL=http://wallet-service:3004
-      - INTERNAL_KEY=${INTERNAL_KEY:?run scripts/prepare-deployment.mjs}
-      - CLIENT_URL=http://localhost:5173
+      - INTERNAL_KEY=${INTERNAL_KEY}
+      - CLIENT_URL=${CLIENT_URL}
     depends_on:
       - postgres
 
   admin-service:
     build:
       context: .
-      dockerfile: services/admin-service/Dockerfile
+      dockerfile: ./services/admin-service/Dockerfile
     container_name: finvault-admin-service
     secrets: [gateway_public_key]
     expose:
       - "3007"
+    networks:
+      - internal_net
     environment:
       - PORT=3007
-      - NODE_ENV=production
-      - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/admin_service
-      - INTERNAL_KEY=${INTERNAL_KEY:?run scripts/prepare-deployment.mjs}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/admin_service
+      - INTERNAL_KEY=${INTERNAL_KEY}
       - USER_SERVICE_URL=http://user-service:3002
       - MERCHANT_SERVICE_URL=http://merchant-service:3003
       - WALLET_SERVICE_URL=http://wallet-service:3004
-      - CLIENT_URL=http://localhost:5173
+      - CLIENT_URL=${CLIENT_URL}
     depends_on:
       - postgres
 
@@ -287,14 +295,18 @@ services:
     container_name: finvault-gateway
     secrets: [gateway_private_key, gateway_public_key]
     ports:
-      - "3000:3000"
+      - "${GATEWAY_PORT:-3000}:3000"
+    networks:
+      - public_net
+      - internal_net
+    secrets:
+      - gateway_private_key
     environment:
       - PORT=3000
-      - NODE_ENV=production
+      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
+      - INTERNAL_KEY=${INTERNAL_KEY}
+      - CLIENT_URL=${CLIENT_URL}
       - GATEWAY_PRIVATE_KEY_FILE=/run/secrets/gateway_private_key
-      - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
-      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET:?run scripts/prepare-deployment.mjs}
-      - CLIENT_URL=http://localhost:5173
       - USER_SERVICE_URL=http://user-service:3002
       - MERCHANT_SERVICE_URL=http://merchant-service:3003
       - AUTH_SERVICE_URL=http://auth-service:3001
@@ -315,10 +327,20 @@ volumes:
   postgres_data:
   rabbitmq_data:
 
-  minio_data:
+networks:
+  public_net:
+    driver: bridge
+  internal_net:
+    driver: bridge
 
 secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  rabbitmq_pass:
+    file: ./secrets/rabbitmq_pass.txt
   gateway_private_key:
-    file: ./.cache/deployment/keys/gateway-private.pem
+    file: ./secrets/gateway_private.pem
   gateway_public_key:
-    file: ./.cache/deployment/keys/gateway-public.pem
+    file: ./secrets/gateway_public.pem
+  vnp_hash_secret:
+    file: ./secrets/vnp_hash_secret.txt

@@ -62,6 +62,11 @@ const createServiceProxy = (pathFilter: string, target: string, ws: boolean = fa
                 if (req.headers['x-user-role']) proxyReq.setHeader('x-user-role', req.headers['x-user-role'] as string)
                 if (req.headers['x-request-id']) proxyReq.setHeader('x-request-id', req.headers['x-request-id'] as string)
 
+                // 3. Gắn khóa nội bộ x-internal-key để chứng thực request đã đi qua API Gateway
+                if (env.internalKey) {
+                    proxyReq.setHeader('x-internal-key', env.internalKey)
+                }
+
                 // LƯU Ý BẢO MẬT: ĐÃ XÓA BỎ HOÀN TOÀN cờ tĩnh cũ proxyReq.setHeader('x-gateway-verified', 'true')
             },
             error: (err, req, res) => {
