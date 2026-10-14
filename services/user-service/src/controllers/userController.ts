@@ -3,52 +3,58 @@ import { prisma } from '../config/prisma'
 import { RequestWithContext } from '../middlewares/requestId'
 import { requireAdmin, requireOwner } from '../utils/access'
 import { HttpError } from '../utils/errors'
-import { resolveUser, setKycStatus, userResponse } from '../services/user.service'
+import { findProfileByAuthUserId, resolveProfileByIdOrAuthUserId, setKycStatus, userResponse } from '../services/user.service'
 import { kycBody, ListUsersQuery } from '../validations/user.validation'
 import { submitDocument, documentUrl } from '../services/kyc.service'
 
 export async function createUser(req: RequestWithContext, res: Response) {
   if (!req.isInternalCall) throw new HttpError(401, 'UNAUTHORIZED', 'Internal service credentials required')
-  const user = await prisma.user.create({ data: req.body })
-  return res.status(201).json({ success: true, data: userResponse(user) })
+  const profile = await prisma.user.create({ data: req.body })
+  return res.status(201).json({ success: true, message: 'Success', data: userResponse(profile) })
 }
 export async function getUserById(req: RequestWithContext, res: Response) {
-  const user = await resolveUser(String(req.params.id))
-  requireOwner(req, user.authUserId)
-  return res.json({ success: true, data: userResponse(user) })
+  const profile = await resolveProfileByIdOrAuthUserId(String(req.params.id))
+  requireOwner(req, profile.authUserId)
+  return res.json({ success: true, message: 'Success', data: userResponse(profile) })
 }
 export async function getUserByAuthUserId(req: RequestWithContext, res: Response) {
-  const user = await resolveUser(String(req.params.authUserId), true)
-  requireOwner(req, user.authUserId)
-  return res.json({ success: true, data: userResponse(user) })
+  const profile = await findProfileByAuthUserId(String(req.params.authUserId))
+  requireOwner(req, profile.authUserId)
+  return res.json({ success: true, message: 'Success', data: userResponse(profile) })
+}
+function findRequestedProfile(req: RequestWithContext) {
+  return req.params.authUserId
+    ? findProfileByAuthUserId(String(req.params.authUserId))
+    : resolveProfileByIdOrAuthUserId(String(req.params.id))
 }
 export async function updateUser(req: RequestWithContext, res: Response) {
-  const user = await resolveUser(String(req.params.authUserId || req.params.id), Boolean(req.params.authUserId))
-  requireOwner(req, user.authUserId)
-  const updated = await prisma.user.update({ where: { id: user.id, deletedAt: null }, data: { ...req.body, version: { increment: 1 } } })
-  return res.json({ success: true, data: userResponse(updated) })
+  const profile = await findRequestedProfile(req)
+  requireOwner(req, profile.authUserId)
+  const profileId = profile.id
+  const updated = await prisma.user.update({ where: { id: profileId, deletedAt: null }, data: { ...req.body, version: { increment: 1 } } })
+  return res.json({ success: true, message: 'Success', data: userResponse(updated) })
 }
 // Runs before multer buffers a file.
 export async function authorizeKyc(req: RequestWithContext, res: Response, next: import('express').NextFunction) {
-  const user = await resolveUser(String(req.params.authUserId || req.params.id), Boolean(req.params.authUserId))
-  requireOwner(req, user.authUserId)
-  res.locals.user = user
+  const profile = await findRequestedProfile(req)
+  requireOwner(req, profile.authUserId)
+  res.locals.profile = profile
   next()
 }
 export async function submitKyc(req: RequestWithContext, res: Response) {
   const { idNumber } = kycBody.parse(req.body)
   if (!req.file) throw new HttpError(400, 'KYC_DOCUMENT_REQUIRED', 'Upload a JPEG or PNG using the document field')
-  const user = await submitDocument(res.locals.user, idNumber, req.file)
-  return res.json({ success: true, data: userResponse(user) })
+  const profile = await submitDocument(res.locals.profile, idNumber, req.file)
+  return res.json({ success: true, message: 'Success', data: userResponse(profile) })
 }
 export async function getKycDocument(_req: RequestWithContext, res: Response) {
   res.setHeader('Cache-Control', 'no-store')
-  return res.json({ success: true, data: await documentUrl(res.locals.user) })
+  return res.json({ success: true, message: 'Success', data: await documentUrl(res.locals.profile) })
 }
 export async function updateKycStatus(req: RequestWithContext, res: Response) {
   requireAdmin(req)
-  const user = await resolveUser(String(req.params.id))
-  return res.json({ success: true, data: userResponse(await setKycStatus(user, req.body.kycStatus)) })
+  const profile = await resolveProfileByIdOrAuthUserId(String(req.params.id))
+  return res.json({ success: true, message: 'Success', data: userResponse(await setKycStatus(profile, req.body.kycStatus)) })
 }
 export async function getUsers(req: RequestWithContext, res: Response) {
   requireAdmin(req)
@@ -57,27 +63,27 @@ export async function getUsers(req: RequestWithContext, res: Response) {
     { email: { contains: search, mode: 'insensitive' as const } },
     { fullName: { contains: search, mode: 'insensitive' as const } }
   ] } : {}) }
-  const [users, totalElements] = await Promise.all([
+  const [profiles, totalElements] = await Promise.all([
     prisma.user.findMany({ where, skip: (page - 1) * limit, take: limit, orderBy: { createdAt: 'desc' } }),
     prisma.user.count({ where })
   ])
-  return res.json({ success: true, data: { content: users.map(userResponse), page, limit, totalElements, totalPages: Math.max(1, Math.ceil(totalElements / limit)) } })
+  return res.json({ success: true, message: 'Success', data: { content: profiles.map(userResponse), page, limit, totalElements, totalPages: Math.max(1, Math.ceil(totalElements / limit)) } })
 }
-async function currentUser(req: RequestWithContext) {
-  const userId = req.auth?.userId ?? req.internalUserId
-  if (!userId) throw new HttpError(401, 'UNAUTHORIZED', 'Authenticated user required')
-  return resolveUser(userId, true)
+async function currentProfile(req: RequestWithContext) {
+  const callerAuthUserId = req.auth?.userId ?? req.internalUserId
+  if (!callerAuthUserId) throw new HttpError(401, 'UNAUTHORIZED', 'Authenticated user required')
+  return findProfileByAuthUserId(callerAuthUserId)
 }
 export async function getMe(req: RequestWithContext, res: Response) {
-  return res.json({ success: true, data: userResponse(await currentUser(req)) })
+  return res.json({ success: true, message: 'Success', data: userResponse(await currentProfile(req)) })
 }
 export async function getMyKyc(req: RequestWithContext, res: Response) {
-  const user = await currentUser(req)
-  return res.json({ success: true, data: {
-    kycStatus: user.kycStatus, kycTier: user.kycTier, hasKycDocument: Boolean(user.kycObjectKey)
+  const profile = await currentProfile(req)
+  return res.json({ success: true, message: 'Success', data: {
+    kycStatus: profile.kycStatus, kycTier: profile.kycTier, hasKycDocument: Boolean(profile.kycObjectKey)
   } })
 }
 export async function authorizeMyKyc(req: RequestWithContext, res: Response, next: import('express').NextFunction) {
-  res.locals.user = await currentUser(req)
+  res.locals.profile = await currentProfile(req)
   next()
 }

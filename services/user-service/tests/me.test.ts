@@ -17,7 +17,8 @@ test('me uses signed Auth ID rather than profile ID or spoofed query/header iden
     assert.deepEqual(query.where, { authUserId: owner })
     return [profile]
   })
-  const result = await request(app).get('/api/users/me?authUserId=' + id).set({ ...headers, 'x-user-id': id }).expect(200)
+  const result = await request(app).get('/api/users/me?authUserId=' + id)
+    .set({ ...headers, 'x-user-id': id, 'x-internal-key': process.env.INTERNAL_KEY! }).expect(200)
   assert.equal(result.body.data.id, id)
   assert.equal(result.body.data.kycTier, 0)
   assert.equal(result.body.data.hasKycDocument, true)

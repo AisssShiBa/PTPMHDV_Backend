@@ -20,14 +20,14 @@ test('me resolves the verified owner and ignores spoofed owner identity', async 
     return merchant
   })
   const res = await request(app).get('/api/merchants/me?ownerId=' + otherOwner)
-    .set({ ...headers, 'x-user-id': otherOwner }).expect(200)
-  assert.deepEqual(res.body, { success: true, data: merchant })
+    .set({ ...headers, 'x-user-id': otherOwner, 'x-internal-key': process.env.INTERNAL_KEY! }).expect(200)
+  assert.deepEqual(res.body, { success: true, message: 'Success', data: merchant })
 })
 
 test('me returns explicit null when owner has no active record', async () => {
   stub(prisma.merchant, 'findFirst', async () => null)
   const res = await request(app).get('/api/merchants/me').set(headers).expect(200)
-  assert.deepEqual(res.body, { success: true, data: null })
+  assert.deepEqual(res.body, { success: true, message: 'Success', data: null })
 })
 
 test('me requires a valid token', async () => {

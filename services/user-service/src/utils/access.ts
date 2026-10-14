@@ -4,7 +4,8 @@ import { HttpError } from './errors'
 export function requireAdmin(req: RequestWithContext) {
   if (!req.isInternalCall && req.auth?.role !== 'ADMIN') throw new HttpError(403, 'FORBIDDEN', 'Administrator access required')
 }
-export function requireOwner(req: RequestWithContext, ownerId: string) {
-  if (!req.isInternalCall && req.auth?.role !== 'ADMIN' && req.auth?.userId !== ownerId)
+// Both sides are Auth IDs, never local profile IDs.
+export function requireOwner(req: RequestWithContext, ownerAuthUserId: string) {
+  if (!req.isInternalCall && req.auth?.role !== 'ADMIN' && req.auth?.userId !== ownerAuthUserId)
     throw new HttpError(403, 'FORBIDDEN', 'You cannot access this resource')
 }

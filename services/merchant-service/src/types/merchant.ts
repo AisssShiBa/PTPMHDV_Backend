@@ -9,7 +9,9 @@ export interface ApiResponse<T> {
 }
 
 export interface MerchantResponse {
+  /** Merchant record ID. */
   id: string
+  /** Owner's Auth ID, not their local profile ID. */
   ownerId: string
   businessName: string
   taxId?: string | null
@@ -20,7 +22,9 @@ export interface MerchantResponse {
 }
 
 export interface MerchantActiveResponse {
+  /** Merchant record ID. */
   id: string
+  /** Owner's Auth ID, not their local profile ID. */
   ownerId?: string
   businessName?: string
   status?: string

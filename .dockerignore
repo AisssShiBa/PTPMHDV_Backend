@@ -5,3 +5,8 @@
 **/dist
 **/build
 *.log
+.cache
+.tmp
+secrets
+**/*.pem
+repomix-output.xml

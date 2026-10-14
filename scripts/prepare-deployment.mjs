@@ -1,5 +1,6 @@
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
-import { mkdirSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdirSync, existsSync, writeFileSync, readFileSync, appendFileSync } from 'node:fs'
+import { parseEnv } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 
@@ -26,4 +27,7 @@ if (!existsSync(env)) {
     'S3_BUCKET=finvault-kyc', 'S3_PUBLIC_ENDPOINT=http://localhost:19002'
   ].join('\n') + '\n', { mode: 0o600, flag: 'wx' })
 }
-console.log('Deployment configuration ready in ignored .cache/deployment; existing credentials preserved.')
+const config = parseEnv(readFileSync(env, 'utf8'))
+if (!config.RABBITMQ_URL) appendFileSync(env, '\nRABBITMQ_URL=amqp://' +
+  encodeURIComponent(config.RABBITMQ_USER) + ':' + encodeURIComponent(config.RABBITMQ_PASS) + '@rabbitmq:5672\n')
+console.log('Isolated runtime-test configuration ready in .cache/deployment; existing credentials preserved. Main Quick Start uses node scripts/init-secrets.js.')

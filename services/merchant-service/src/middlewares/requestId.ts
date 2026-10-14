@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 
 export interface RequestWithContext extends Request {
   requestId?: string
+  // Auth ID from a verified internal request, not a merchant or profile ID.
   internalUserId?: string
   isInternalCall?: boolean
 }

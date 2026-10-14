@@ -21,18 +21,19 @@
 
 ## 1. Khởi động nhanh trong 2 bước
 
-Để các thành viên (Khoa, Hữu, Nguyên) khi kéo nhánh `dat` hoặc `main` về máy sạch có thể chạy ngay toàn bộ cụm 10 Microservices mà không gặp bất kỳ lỗi thiếu file môi trường hay secrets:
+Dùng Node.js 22 trở lên và Docker Compose. Cụm gồm 8 API (Gateway và 7 service), PostgreSQL, RabbitMQ, MinIO, 2 worker và 4 job migration/khởi tạo.
 
 ### 🔹 Bước 1: Khởi tạo Bí mật & Biến môi trường
 Mở Terminal tại thư mục `Backend/` và chạy lệnh:
 ```bash
 node scripts/init-secrets.js
 ```
-*Script sẽ tự động tạo thư mục `Backend/secrets/` với các cặp khóa mật mã ECDSA ES256 (`.pem`), file mật khẩu Docker Secrets (`.txt`) và tạo file `.env` chuẩn từ `.env.example`.*
+Script tạo `.env`, mật khẩu ngẫu nhiên và cặp khóa ES256 mới trong `secrets/`. Chạy lại giữ nguyên credentials và kiểm tra cặp khóa. Khóa dev mẫu cũ được sao lưu rồi thay bằng cặp khóa mới; cấu hình mật khẩu mâu thuẫn giữa `.env` và secret file sẽ báo lỗi để tránh kết nối sai volume đang dùng.
 
-### 🔹 Bước 2: Khởi chạy cụm Docker 10 Containers
+### 🔹 Bước 2: Khởi chạy cụm Docker
 ```bash
-docker compose up -d --build
+docker compose config --quiet
+docker compose up -d --build --wait --wait-timeout 180
 ```
 Kiểm tra sức khỏe hệ thống:
 ```bash
@@ -40,13 +41,16 @@ curl http://localhost:3000/health
 # Kết quả mong đợi: {"status":"ok","service":"api-gateway"}
 ```
 
+User/Merchant chờ migration; storage-init tạo bucket KYC riêng tư và account chỉ truy cập prefix `kyc/`; worker chờ RabbitMQ mở cổng AMQP. Gateway chờ các API healthy. Không xóa volume cũ để xử lý lỗi mật khẩu. Cần điền credentials VNPAY Sandbox của nhóm trước khi thử thanh toán bên ngoài; giá trị khởi tạo chỉ phục vụ chạy local.
+
 ---
 
 ## 2. Kiến trúc Mạng Zero-Trust & Single Entrypoint
 
-* **Mạng công khai (`public_net`):** Chỉ duy nhất **API Gateway** được cấp quyền mở cổng ra máy chủ thật (`0.0.0.0:3000 -> 3000`).
+* **Mạng công khai (`public_net`):** **API Gateway** mở cổng ứng dụng `0.0.0.0:3000 -> 3000`.
 * **Mạng nội bộ (`internal_net`):** Toàn bộ 7 Microservices con (`auth`, `user`, `wallet`, `payment`, `merchant`, `notification`, `admin`) và Message Broker RabbitMQ nằm hoàn toàn trong mạng cô lập. Không service con nào mở cổng ra ngoài Internet.
-* **Cơ sở dữ liệu PostgreSQL:** Expose cổng `5432` cục bộ để phục vụ lập trình viên kết nối qua DBeaver / TablePlus. Trong `docker-compose.yml`, các service kết nối qua hostname nội bộ `postgres:5432`.
+* **Cơ sở dữ liệu PostgreSQL:** Bind `127.0.0.1:5432` để lập trình viên dùng DBeaver/TablePlus. Các service kết nối nội bộ qua `postgres:5432`. Có thể đổi cổng host bằng `POSTGRES_HOST_PORT`.
+* **MinIO:** Bind `127.0.0.1:19002` để browser đọc URL KYC có chữ ký; bucket không cho đọc ẩn danh. Nếu đổi `MINIO_HOST_PORT`, đặt `S3_PUBLIC_ENDPOINT` tương ứng. User truy cập storage nội bộ qua `http://minio:9000`.
 
 > ⚠️ **LƯU Ý BẢO MẬT:**
 > Client bên ngoài **tuyệt đối không thể gọi thẳng** vào các cổng `3001` - `3007`. Mọi yêu cầu bắt buộc phải đi qua API Gateway cổng `3000`. Cờ tĩnh cũ `x-gateway-verified: true` đã bị **xóa bỏ hoàn toàn** tại Gateway bằng middleware `sanitizeHeaders` để chống tấn công giả mạo header.
@@ -239,23 +243,28 @@ Tại `auth-service`, cơ chế trả và xoay vòng Refresh Token (RTR) đã đ
 
 ## 7. Kiểm thử Nghiệm thu Hệ thống (DoD Tuần 1)
 
-Đạt đã xây dựng sẵn kịch bản kiểm thử toàn diện E2E. Sau khi khởi động Docker, chạy lệnh sau để nghiệm thu:
+Kịch bản `tests/deployment/full-smoke.mjs` kiểm chứng cụm thật từ Compose chính. Chạy tại root với Node.js 22 trở lên; cài dependency User để script tạo ảnh KYC tổng hợp bằng `sharp`:
 
 ```bash
-node scratch/test_system.mjs
+npm ci --prefix packages/finvault-internal-auth
+npm ci --prefix services/user-service
+node scripts/init-secrets.js
+docker compose -p finvault-full-check up -d --build --wait --wait-timeout 180
+node tests/deployment/full-smoke.mjs
 ```
 
-### Kết quả nghiệm thu thực tế:
-* `[PASS]` 1. Health Check Gateway (`200 OK`)
-* `[PASS]` 2. Chặn đứng Header giả mạo `x-gateway-verified` (`401 UNAUTHORIZED`)
-* `[PASS]` 3. Đăng ký tài khoản mới qua Gateway (`201 Created`)
-* `[PASS]` 4. Đăng nhập Web qua HTTP-Only Cookie (`200 OK`)
-* `[PASS]` 5. Đăng nhập Mobile nhận Refresh Token qua Body (`200 OK`)
-* `[PASS]` 6. Xoay vòng Refresh Token Rotation cho Mobile (`200 OK`)
-* `[PASS]` 7. Gọi `user-service` có bảo vệ với Bearer Token (`200 OK`)
-* `[PASS]` 8. Chặn User thường truy cập vào route Admin (`403 FORBIDDEN`)
-* `[PASS]` 9. Whitelist IPN VNPAY bypass Gateway Auth không bị chặn (`Status 404 upstream`)
-* `[PASS]` 10. Handshake và Upgrade WebSocket Socket.IO qua Gateway (`101 Switching Protocols`)
+Project `finvault-full-check` dùng volume riêng nhưng dùng cùng cổng host trong `.env`; không chạy đồng thời với project Quick Start trên cùng các cổng. Script chỉ thêm tài khoản/hồ sơ tổng hợp, cấp ADMIN cho tài khoản vừa tạo và giữ lại dữ liệu để kiểm tra; không reset DB hoặc xóa volume.
+
+### Kết quả đã kiểm chứng ngày 14/10/2026
+
+- Health của Gateway và cả 7 API đạt; 3 thành phần hạ tầng healthy, 2 worker đang chạy, 4 job hoàn tất với exit code 0.
+- Đăng ký, đăng nhập Web bằng HttpOnly cookie, refresh Web và xoay refresh token Mobile đạt.
+- Truy cập User, Wallet, Payment, Notification qua Gateway đạt; truy cập Notification của người khác bị chặn.
+- Header giả mạo không vượt qua xác thực/phân quyền; client không gọi được endpoint nội bộ Notification/Payment qua Gateway.
+- Upload KYC lên MinIO, đọc bằng URL có chữ ký, chặn URL không chữ ký và Admin duyệt KYC đạt.
+- Đăng ký, sửa, duyệt Merchant đạt; publisher xuất bản 3 sự kiện; User consumer xử lý sự kiện đăng ký gửi trùng đúng một lần.
+
+Bằng chứng không chứa secret được ghi vào `.cache/deployment/full-smoke-result.json`. Báo cáo sửa cấu hình và giới hạn nghiệm thu: [Docker Runtime Review](docs/Docker_Runtime_Review_2026-10-14.md). Bài này không nghiệm thu giao dịch VNPAY bên ngoài, WebSocket hoặc toàn bộ nghiệp vụ Wallet/Payment.
 
 ---
 *Tài liệu được biên soạn và bảo chứng bởi Đạt — FinVault Lead Security.*

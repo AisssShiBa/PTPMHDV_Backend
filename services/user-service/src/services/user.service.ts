@@ -1,22 +1,31 @@
-import { Prisma, User } from '@prisma/client'
+import { Prisma, User as UserProfile } from '@prisma/client'
 import { prisma } from '../config/prisma'
 import { HttpError } from '../utils/errors'
 import { transaction } from '../utils/transaction'
 
-export async function resolveUser(identifier: string, byAuth = false): Promise<User> {
+export function findProfileByAuthUserId(authUserId: string): Promise<UserProfile> {
+  return findProfile({ authUserId })
+}
+
+// Legacy /:id routes accept either ID. Keep ambiguity detection for compatibility.
+export function resolveProfileByIdOrAuthUserId(profileIdOrAuthUserId: string): Promise<UserProfile> {
+  return findProfile({ OR: [{ id: profileIdOrAuthUserId }, { authUserId: profileIdOrAuthUserId }] })
+}
+
+async function findProfile(where: Prisma.UserWhereInput): Promise<UserProfile> {
   const matches = await prisma.user.findMany({
-    where: byAuth ? { authUserId: identifier } : { OR: [{ id: identifier }, { authUserId: identifier }] },
+    where,
     take: 2
   })
   // Include tombstones in ambiguity detection; never resolve an identifier to another account.
   if (matches.length > 1) throw new HttpError(409, 'AMBIGUOUS_IDENTIFIER', 'Use the explicit by-auth endpoint')
-  const user = matches[0]
-  if (!user || user.deletedAt) throw new HttpError(404, 'NOT_FOUND', 'User not found')
-  return user
+  const profile = matches[0]
+  if (!profile || profile.deletedAt) throw new HttpError(404, 'NOT_FOUND', 'User not found')
+  return profile
 }
 
-export function userResponse(user: User) {
-  const { kycObjectKey, idImageUrl, ...data } = user
+export function userResponse(profile: UserProfile) {
+  const { kycObjectKey, idImageUrl, ...data } = profile
   return { ...data, hasKycDocument: Boolean(kycObjectKey) }
 }
 export async function provisionProfile(tx: Prisma.TransactionClient, authUserId: string, email: string) {
@@ -29,20 +38,21 @@ export async function provisionProfile(tx: Prisma.TransactionClient, authUserId:
   if (duplicate) throw new HttpError(409, 'PROFILE_CONFLICT', 'Email belongs to another profile')
   return tx.user.create({ data: { authUserId, email } })
 }
-export async function setKycStatus(user: User, status: User['kycStatus']) {
-  if (user.kycStatus === status) return user
-  const transitions: Record<User['kycStatus'], User['kycStatus'][]> = {
+export async function setKycStatus(profile: UserProfile, status: UserProfile['kycStatus']) {
+  if (profile.kycStatus === status) return profile
+  const transitions: Record<UserProfile['kycStatus'], UserProfile['kycStatus'][]> = {
     NONE: [], PENDING: ['APPROVED', 'REJECTED'], APPROVED: ['REJECTED'], REJECTED: []
   }
-  if (!transitions[user.kycStatus].includes(status)) throw new HttpError(409, 'INVALID_TRANSITION', 'Invalid KYC status transition')
-  if (status === 'APPROVED' && (!user.kycObjectKey || !user.idNumber))
+  if (!transitions[profile.kycStatus].includes(status)) throw new HttpError(409, 'INVALID_TRANSITION', 'Invalid KYC status transition')
+  if (status === 'APPROVED' && (!profile.kycObjectKey || !profile.idNumber))
     throw new HttpError(409, 'KYC_DOCUMENT_REQUIRED', 'A verified upload is required before approval')
+  const profileId = profile.id
   return transaction(async tx => {
     const result = await tx.user.updateMany({
-      where: { id: user.id, version: user.version, deletedAt: null },
+      where: { id: profileId, version: profile.version, deletedAt: null },
       data: { kycStatus: status, version: { increment: 1 } }
     })
     if (result.count !== 1) throw new HttpError(409, 'CONCURRENT_UPDATE', 'Profile changed; reload and retry')
-    return tx.user.findUniqueOrThrow({ where: { id: user.id } })
+    return tx.user.findUniqueOrThrow({ where: { id: profileId } })
   })
 }
