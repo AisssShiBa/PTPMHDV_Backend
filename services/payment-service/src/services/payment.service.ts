@@ -1,7 +1,9 @@
 import { DomainException } from '../utils/domain.exception';
 import { PaymentStatus, OutboxEventStatus, PaymentType } from '../utils/enums';
+import { IdempotencyStatus } from '@prisma/client';
 import { prisma } from '../utils/prisma';
 import { randomUUID } from 'crypto';
+import * as crypto from 'crypto';
 import { WalletClient } from '../clients/wallet.client';
 
 export interface CheckoutDto {
@@ -17,65 +19,112 @@ export class PaymentService {
   constructor(private walletClient: WalletClient) {}
 
   async checkout(dto: CheckoutDto) {
-    const existing = await prisma.payment.findUnique({
-      where: { idempotencyKey: dto.idempotencyKey }
-    });
-    if (existing) {
-      console.log(`Idempotency key ${dto.idempotencyKey} already exists. Returning existing payment.`);
-      return { payment: existing, replayed: true };
+    const hashData = `${dto.amount}|${dto.type}|${dto.referenceId || ''}|${dto.callbackTopic}`;
+    const requestHash = crypto.createHash('sha256').update(hashData).digest('hex');
+    
+    const paymentId = randomUUID();
+    const holdId = randomUUID();
+    const holdExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 phút
+    const idempotencyExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 giờ
+
+    let payment: any;
+
+    // 1. Thử tranh khóa (Acquire Lock) bằng cách CREATE thẳng
+    try {
+      payment = await prisma.payment.create({
+        data: {
+          id: paymentId,
+          userId: dto.userId,
+          amount: dto.amount,
+          type: dto.type,
+          referenceId: dto.referenceId || '',
+          callbackTopic: dto.callbackTopic,
+          idempotencyKey: dto.idempotencyKey,
+          requestHash,
+          idempotencyStatus: IdempotencyStatus.PROCESSING,
+          idempotencyExpiresAt,
+          status: PaymentStatus.PENDING,
+          holdId: holdId,
+          holdExpiresAt: holdExpiresAt,
+          histories: {
+            create: {
+              id: randomUUID(),
+              toStatus: PaymentStatus.PENDING,
+              note: 'Payment checkout created in PROCESSING state',
+            }
+          }
+        }
+      });
+    } catch (err: any) {
+      if (err.code === 'P2002') { // Lỗi Unique Constraint (Idempotency Key đã tồn tại)
+        const existing = await prisma.payment.findUnique({
+          where: { userId_idempotencyKey: { userId: dto.userId, idempotencyKey: dto.idempotencyKey } }
+        });
+        
+        if (!existing) throw new DomainException(500, 'INTERNAL_ERROR', 'Idempotency conflict but record missing');
+        
+        // Kiểm tra tính toàn vẹn Payload
+        if (existing.requestHash !== requestHash && existing.requestHash !== 'LEGACY') {
+          throw new DomainException(422, 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD', 'Idempotency key reused with different payload');
+        }
+
+        // Xử lý State Machine
+        if (existing.idempotencyStatus === IdempotencyStatus.PROCESSING) {
+          throw new DomainException(409, 'IDEMPOTENCY_REQUEST_IN_PROGRESS', 'Request in progress. Please retry later.');
+        }
+
+        if (existing.idempotencyStatus === IdempotencyStatus.COMPLETED) {
+          return { payment: existing, replayed: true };
+        }
+
+        if (existing.idempotencyStatus === IdempotencyStatus.FAILED) {
+          // Retry an toàn
+          const updateRes = await prisma.payment.updateMany({
+            where: { id: existing.id, idempotencyStatus: IdempotencyStatus.FAILED },
+            data: { 
+              idempotencyStatus: IdempotencyStatus.PROCESSING, 
+              requestHash, 
+              holdId, 
+              holdExpiresAt,
+              idempotencyExpiresAt 
+            }
+          });
+          if (updateRes.count === 0) {
+            throw new DomainException(409, 'IDEMPOTENCY_REQUEST_IN_PROGRESS', 'Request in progress by another thread.');
+          }
+          payment = { ...existing, idempotencyStatus: IdempotencyStatus.PROCESSING, holdId, holdExpiresAt };
+        }
+      } else {
+        throw err;
+      }
     }
 
-    const holdId = randomUUID();
-    const holdExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
-
+    // 2. Chạy nghiệp vụ Side-effect (Call sang Wallet Service)
     let holdSucceeded = false;
-
-    // 1. Call Wallet hold
     try {
-      await this.walletClient.createHold(dto.userId, dto.amount.toString(), holdId, holdExpiresAt.toISOString());
+      await this.walletClient.createHold(dto.userId, dto.amount.toString(), payment.holdId!, payment.holdExpiresAt!.toISOString());
       holdSucceeded = true;
     } catch (err: any) {
-      console.error(`Hold failed for user ${dto.userId}:`, err);
+      // Nếu hold xịt, nhả khóa về FAILED cho phép retry
+      await prisma.payment.update({
+        where: { id: payment.id! },
+        data: { 
+          idempotencyStatus: IdempotencyStatus.FAILED, 
+          status: PaymentStatus.FAILED, 
+          failureReason: 'Hold failed: ' + (err.message || 'Unknown')
+        }
+      });
       if (err instanceof DomainException) throw err;
       throw new DomainException(500, 'INTERNAL_ERROR', 'Failed to communicate with wallet service for hold');
     }
 
-    // 2. Create Payment
-    try {
-      return await prisma.$transaction(async (tx) => {
-        const payment = await tx.payment.create({
-          data: {
-            id: randomUUID(),
-            userId: dto.userId,
-            amount: dto.amount,
-            type: dto.type,
-            referenceId: dto.referenceId || '',
-            callbackTopic: dto.callbackTopic,
-            idempotencyKey: dto.idempotencyKey,
-            status: PaymentStatus.PENDING,
-            holdId: holdId,
-            holdExpiresAt: holdExpiresAt,
-            histories: {
-              create: {
-                id: randomUUID(),
-                toStatus: PaymentStatus.PENDING,
-                note: 'Payment checkout created and amount held',
-              }
-            }
-          }
-        });
-        return { payment, replayed: false };
-      });
-    } catch (error: any) {
-      console.error(`Checkout DB save failed for idempotencyKey ${dto.idempotencyKey}:`, error);
+    // 3. Hoàn tất Idempotency Lock
+    const finalizedPayment = await prisma.payment.update({
+      where: { id: payment.id! },
+      data: { idempotencyStatus: IdempotencyStatus.COMPLETED }
+    });
 
-      if (holdSucceeded) {
-        console.log(`[Saga Compensate] DB save failed. Calling release to free up user's money...`);
-        await this.walletClient.releaseHold(dto.userId, holdId);
-      }
-
-      throw new DomainException(500, 'INTERNAL_ERROR', 'Database error during checkout. Wallet hold has been released.');
-    }
+    return { payment: finalizedPayment, replayed: false };
   }
 
   async confirm(id: string) {

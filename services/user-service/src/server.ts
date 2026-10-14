@@ -8,7 +8,7 @@ async function startServer() {
   const server = app.listen(env.port, () => console.log('user-service listening on ' + env.port))
   let cleanup: Promise<void> | undefined
   const timer = setInterval(() => {
-    if (!cleanup && env.s3.bucket) cleanup = cleanupStorage().catch(() => {
+    if (!cleanup && env.s3.bucket && env.cleanupEnabled) cleanup = cleanupStorage().catch(() => {
       console.error(JSON.stringify({ code: 'STORAGE_CLEANUP_FAILED' }))
     }).finally(() => { cleanup = undefined })
   }, 60000)

@@ -15,6 +15,5 @@ RUN npm install
 # 3. Copy mã nguồn và generate Prisma client
 COPY services/admin-service .
 RUN npx prisma generate
-
 EXPOSE 3007
 CMD ["sh", "-c", "npx prisma migrate deploy && npm run start"]

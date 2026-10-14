@@ -40,6 +40,33 @@ services:
       timeout: 5s
       retries: 10
 
+  user-migrate:
+    build: &user-build
+      context: .
+      dockerfile: services/user-service/Dockerfile
+    image: finvault-user-service:local
+    environment: &user-env
+      NODE_ENV: production
+      PORT: 3002
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/user_service
+      INTERNAL_KEY: ${INTERNAL_KEY:?run scripts/prepare-deployment.mjs}
+      GATEWAY_PUBLIC_KEY_FILE: /run/secrets/gateway_public_key
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672
+      EVENT_EXCHANGE: finvault.events
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19002}
+      S3_REGION: us-east-1
+      S3_BUCKET: ${S3_BUCKET:-finvault-kyc}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?run scripts/prepare-deployment.mjs}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?run scripts/prepare-deployment.mjs}
+      S3_FORCE_PATH_STYLE: 'true'
+      KYC_CLEANUP_GRACE_MS: ${KYC_CLEANUP_GRACE_MS:-86400000}
+      STORAGE_CLEANUP_ENABLED: ${STORAGE_CLEANUP_ENABLED:-true}
+    command: ["npx", "prisma", "migrate", "deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   user-service:
     build:
       context: ./services/user-service
@@ -56,9 +83,80 @@ services:
       - INTERNAL_KEY=${INTERNAL_KEY}
       - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
     depends_on:
-      - postgres
+      user-migrate:
+        condition: service_completed_successfully
+      storage-init:
+        condition: service_completed_successfully
+
+  user-consumer:
+    image: finvault-user-service:local
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment: *user-env
+    secrets: [gateway_public_key]
+    command: ["node", "dist/events/worker.js"]
+    depends_on:
+      user-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+
+  merchant-migrate:
+    build: &merchant-build
+      context: .
+      dockerfile: services/merchant-service/Dockerfile
+    image: finvault-merchant-service:local
+    environment: &merchant-env
+      NODE_ENV: production
+      PORT: 3003
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/merchant_service
+      INTERNAL_KEY: ${INTERNAL_KEY:?run scripts/prepare-deployment.mjs}
+      GATEWAY_PUBLIC_KEY_FILE: /run/secrets/gateway_public_key
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672
+      EVENT_EXCHANGE: finvault.events
+    command: ["npx", "prisma", "migrate", "deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   merchant-service:
+    build: *merchant-build
+    image: finvault-merchant-service:local
+    restart: unless-stopped
+    init: true
+    expose: ["3003"]
+    environment: *merchant-env
+    secrets: [gateway_public_key]
+    depends_on:
+      merchant-migrate:
+        condition: service_completed_successfully
+
+  broker-init:
+    image: finvault-merchant-service:local
+    environment: *merchant-env
+    command: ["node", "scripts/init-broker.cjs"]
+    depends_on:
+      merchant-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+
+  merchant-publisher:
+    image: finvault-merchant-service:local
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment: *merchant-env
+    secrets: [gateway_public_key]
+    command: ["node", "dist/events/worker.js"]
+    depends_on:
+      merchant-migrate:
+        condition: service_completed_successfully
+      broker-init:
+        condition: service_completed_successfully
+
+  minio:
     build:
       context: ./services/merchant-service
       dockerfile: Dockerfile
@@ -74,7 +172,8 @@ services:
       - INTERNAL_KEY=${INTERNAL_KEY}
       - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
     depends_on:
-      - postgres
+      minio:
+        condition: service_healthy
 
   notification-service:
     build:
@@ -100,8 +199,8 @@ services:
 
   wallet-service:
     build:
-      context: ./services/wallet-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./services/wallet-service/Dockerfile
     container_name: finvault-wallet-service
     expose:
       - "3004"
@@ -121,8 +220,8 @@ services:
 
   payment-service:
     build:
-      context: ./services/payment-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./services/payment-service/Dockerfile
     container_name: finvault-payment-service
     expose:
       - "3005"
@@ -173,6 +272,7 @@ services:
       context: .
       dockerfile: ./services/admin-service/Dockerfile
     container_name: finvault-admin-service
+    secrets: [gateway_public_key]
     expose:
       - "3007"
     networks:
@@ -193,6 +293,7 @@ services:
       context: ./gateway
       dockerfile: Dockerfile
     container_name: finvault-gateway
+    secrets: [gateway_private_key, gateway_public_key]
     ports:
       - "${GATEWAY_PORT:-3000}:3000"
     networks:

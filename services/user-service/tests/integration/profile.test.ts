@@ -1,9 +1,10 @@
+import { createTestGatewayToken } from 'finvault-internal-auth'
 import '../setup'
+import { stub } from '../stub'
 import { test, before, beforeEach, after, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import request from 'supertest'
-import jwt from 'jsonwebtoken'
 import { prisma } from '../../src/config/prisma'
 import app from '../../src/app'
 import { consumeRegistration } from '../../src/events/registration'
@@ -12,7 +13,7 @@ import { storage } from '../../src/services/storage'
 import sharp from 'sharp'
 
 const internal = { 'x-internal-key': process.env.INTERNAL_KEY! }
-const auth = (userId: string, role = 'USER') => ({ 'x-gateway-verified': 'true', authorization: 'Bearer ' + jwt.sign({ userId, role }, process.env.ACCESS_TOKEN_SECRET!) })
+const auth = (userId: string, role = 'USER') => ({ 'x-gateway-token': createTestGatewayToken(userId, role) })
 before(async () => {
   assert.ok(process.env.DATABASE_URL?.includes('/finvault_test?schema=user_test'))
   await prisma.$connect()
@@ -49,6 +50,28 @@ test('consumer conflicts roll back inbox and never revive deleted users', async 
   }
   assert.equal(await prisma.consumedEvent.count(), 0)
   assert.equal(await prisma.user.count(), 1)
+})
+
+test('inbox insert failure rolls back a newly provisioned profile', async () => {
+  const original = prisma.$transaction.bind(prisma)
+  stub(prisma, '$transaction', (callback: any, options: any) => original(async tx => {
+    tx.consumedEvent.create = (async () => { throw new Error('Injected inbox failure') }) as any
+    return callback(tx)
+  }, options))
+  await assert.rejects(consumeRegistration({ eventId: randomUUID(), eventType: 'user.registered', eventVersion: 1,
+    occurredAt: new Date().toISOString(), data: { authUserId: randomUUID(), email: 'rollback@example.com' } }))
+  assert.equal(await prisma.user.count(), 0)
+  assert.equal(await prisma.consumedEvent.count(), 0)
+})
+
+test('registration after HTTP provisioning preserves profile fields', async () => {
+  const authUserId = randomUUID()
+  await request(app).post('/api/users').set(internal).send({ authUserId, email: 'http@example.com', fullName: 'Existing name' }).expect(201)
+  await consumeRegistration({ eventId: randomUUID(), eventType: 'user.registered', eventVersion: 1,
+    occurredAt: new Date().toISOString(), data: { authUserId, email: 'http@example.com' } })
+  assert.equal(await prisma.user.count(), 1)
+  assert.equal((await prisma.user.findFirstOrThrow()).fullName, 'Existing name')
+  assert.equal(await prisma.consumedEvent.count(), 1)
 })
 test('owner update uses Auth ID, list validates query, soft-deleted profiles disappear', async () => {
   const user = await prisma.user.create({ data: { authUserId: randomUUID(), email: 'owner@example.com' } })

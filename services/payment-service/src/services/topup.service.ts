@@ -69,9 +69,9 @@ export class TopupService {
     const allParams: any = { ...vnp_Params, vnp_SecureHash: signed };
     const paymentUrl = vnpUrl + '?' + new URLSearchParams(allParams).toString();
 
-    await prisma.topupRequest.update({ 
-      where: { id: topup.id }, 
-      data: { paymentUrl } 
+    await prisma.topupRequest.update({
+      where: { id: topup.id },
+      data: { paymentUrl }
     });
 
     return { topupId: topup.id, paymentUrl };
@@ -128,15 +128,15 @@ export class TopupService {
       try {
         const walletRes = await walletClient.topupCredit(topup.userId, topup.amount.toString(), topup.code);
         if (!walletRes.success) {
-           await prisma.topupRequest.update({
-             where: { id: topup.id },
-             data: { 
-               status: TopupStatus.FAILED, 
-               vnpResponseCode: rspCode,
-               auditLogs: { create: { actorId: 'SYSTEM', action: 'WALLET_ERROR', toStatus: TopupStatus.FAILED, reason: walletRes.errorData?.error?.message } } 
-             }
-           });
-           return { RspCode: '00', Message: 'Confirm Success' };
+          await prisma.topupRequest.update({
+            where: { id: topup.id },
+            data: {
+              status: TopupStatus.FAILED,
+              vnpResponseCode: rspCode,
+              auditLogs: { create: { actorId: 'SYSTEM', action: 'WALLET_ERROR', toStatus: TopupStatus.FAILED, reason: walletRes.errorData?.error?.message } }
+            }
+          });
+          return { RspCode: '00', Message: 'Confirm Success' };
         }
 
         await prisma.topupRequest.update({
@@ -193,7 +193,7 @@ export class TopupService {
     if (secureHash !== signed) {
       throw new DomainException(400, 'INVALID_SIGNATURE', 'Chữ ký VNPAY không hợp lệ');
     }
-    
+
     return vnp_Params;
   }
 
@@ -242,7 +242,7 @@ export class TopupService {
     // Chuyển đổi sang múi giờ Việt Nam (UTC+7)
     const tzOffset = 7 * 60; // 7 hours in minutes
     const localTime = new Date(date.getTime() + tzOffset * 60000);
-    
+
     const yyyy = localTime.getUTCFullYear().toString();
     const mm = (localTime.getUTCMonth() + 1).toString().padStart(2, '0');
     const dd = localTime.getUTCDate().toString().padStart(2, '0');

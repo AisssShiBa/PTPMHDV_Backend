@@ -17,7 +17,8 @@ export interface UserResponse {
   address?: string | null
   kycStatus: string
   idNumber?: string | null
-  idImageUrl?: string | null
+  kycTier: number
+  hasKycDocument: boolean
   createdAt: Date | string
   updatedAt: Date | string
 }

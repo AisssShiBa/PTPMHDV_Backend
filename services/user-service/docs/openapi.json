@@ -1,0 +1,866 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "FinVault User API",
+    "version": "1.0.0",
+    "description": "Client API through Gateway. Frontend sends Bearer access tokens; Gateway signs ES256 x-gateway-token (60s). Services verify finvault-internal-auth claims. Internal authentication headers are never client inputs."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000/api",
+      "description": "Local Gateway"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/users/me": {
+      "get": {
+        "operationId": "getCurrentUser",
+        "summary": "Get the signed-in user's profile",
+        "description": "Resolves the signed Auth ID, not a body/query/header owner ID. Missing or deleted profile returns 404.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "20000000-0000-4000-8000-000000000001",
+                    "authUserId": "10000000-0000-4000-8000-000000000001",
+                    "email": "user@example.com",
+                    "fullName": null,
+                    "phone": null,
+                    "address": null,
+                    "kycStatus": "NONE",
+                    "kycTier": 0,
+                    "idNumber": null,
+                    "kycMimeType": null,
+                    "kycFileSize": null,
+                    "version": 0,
+                    "createdAt": "2026-10-07T08:00:00.000Z",
+                    "updatedAt": "2026-10-07T08:00:00.000Z",
+                    "deletedAt": null,
+                    "hasKycDocument": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/me/kyc": {
+      "get": {
+        "operationId": "getCurrentUserKyc",
+        "summary": "Get current KYC status and tier",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KycResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "kycStatus": "NONE",
+                    "kycTier": 0,
+                    "hasKycDocument": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "submitCurrentUserKyc",
+        "summary": "Submit a KYC document",
+        "description": "JPEG or PNG up to 5 MiB. Normalized into a private JPEG. APPROVED profiles must first be rejected by an authorized reviewer. Tier does not change. Unknown fields are rejected.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "idNumber",
+                  "document"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "idNumber": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 50
+                  },
+                  "document": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Exactly one JPEG/PNG image, maximum 5 MiB."
+                  }
+                }
+              },
+              "encoding": {
+                "document": {
+                  "contentType": "image/jpeg, image/png"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "20000000-0000-4000-8000-000000000001",
+                    "authUserId": "10000000-0000-4000-8000-000000000001",
+                    "email": "user@example.com",
+                    "fullName": null,
+                    "phone": null,
+                    "address": null,
+                    "kycStatus": "PENDING",
+                    "kycTier": 0,
+                    "idNumber": "123456",
+                    "kycMimeType": "image/jpeg",
+                    "kycFileSize": 1024,
+                    "version": 1,
+                    "createdAt": "2026-10-07T08:00:00.000Z",
+                    "updatedAt": "2026-10-07T08:00:00.000Z",
+                    "deletedAt": null,
+                    "hasKycDocument": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate resource, concurrent update or invalid transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "CONCURRENT_UPDATE",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Upload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FILE_TOO_LARGE",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage or submission unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "KYC_SUBMISSION_FAILED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/by-auth/{authUserId}/kyc/document": {
+      "get": {
+        "operationId": "getKycDocumentUrl",
+        "summary": "Get an authorized, short-lived KYC document URL",
+        "parameters": [
+          {
+            "name": "authUserId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "URL expires in 60 seconds; Cache-Control: no-store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "url",
+                        "expiresIn"
+                      ],
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "expiresIn": {
+                          "type": "integer",
+                          "enum": [
+                            60
+                          ]
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "url": "http://localhost:19000/finvault-kyc/kyc/example.jpg?signature=example",
+                    "expiresIn": 60
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage or submission unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "KYC_SUBMISSION_FAILED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "success",
+          "error",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      },
+      "Profile": {
+        "type": "object",
+        "required": [
+          "id",
+          "authUserId",
+          "email",
+          "fullName",
+          "phone",
+          "address",
+          "kycStatus",
+          "kycTier",
+          "idNumber",
+          "kycMimeType",
+          "kycFileSize",
+          "version",
+          "createdAt",
+          "updatedAt",
+          "deletedAt",
+          "hasKycDocument"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "authUserId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "fullName": {
+            "type": "string",
+            "nullable": true
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "address": {
+            "type": "string",
+            "nullable": true
+          },
+          "kycStatus": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "PENDING",
+              "APPROVED",
+              "REJECTED"
+            ]
+          },
+          "kycTier": {
+            "type": "integer",
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "default": 0,
+            "description": "Independent of KYC status; not writable through profile/upload APIs."
+          },
+          "idNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "kycMimeType": {
+            "type": "string",
+            "nullable": true
+          },
+          "kycFileSize": {
+            "type": "integer",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "hasKycDocument": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProfileResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/Profile"
+          }
+        }
+      },
+      "Kyc": {
+        "type": "object",
+        "required": [
+          "kycStatus",
+          "kycTier",
+          "hasKycDocument"
+        ],
+        "properties": {
+          "kycStatus": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "PENDING",
+              "APPROVED",
+              "REJECTED"
+            ]
+          },
+          "kycTier": {
+            "type": "integer",
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "default": 0,
+            "description": "Independent of KYC status; not writable through profile/upload APIs."
+          },
+          "hasKycDocument": {
+            "type": "boolean"
+          }
+        }
+      },
+      "KycResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/Kyc"
+          }
+        }
+      }
+    }
+  }
+}

@@ -63,3 +63,21 @@ export async function getUsers(req: RequestWithContext, res: Response) {
   ])
   return res.json({ success: true, data: { content: users.map(userResponse), page, limit, totalElements, totalPages: Math.max(1, Math.ceil(totalElements / limit)) } })
 }
+async function currentUser(req: RequestWithContext) {
+  const userId = req.auth?.userId ?? req.internalUserId
+  if (!userId) throw new HttpError(401, 'UNAUTHORIZED', 'Authenticated user required')
+  return resolveUser(userId, true)
+}
+export async function getMe(req: RequestWithContext, res: Response) {
+  return res.json({ success: true, data: userResponse(await currentUser(req)) })
+}
+export async function getMyKyc(req: RequestWithContext, res: Response) {
+  const user = await currentUser(req)
+  return res.json({ success: true, data: {
+    kycStatus: user.kycStatus, kycTier: user.kycTier, hasKycDocument: Boolean(user.kycObjectKey)
+  } })
+}
+export async function authorizeMyKyc(req: RequestWithContext, res: Response, next: import('express').NextFunction) {
+  res.locals.user = await currentUser(req)
+  next()
+}

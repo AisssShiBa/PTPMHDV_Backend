@@ -15,6 +15,7 @@ model User {
   phone       String?
   address     String?
   kycStatus   KycStatus @default(NONE) @map("kyc_status")
+  kycTier     Int       @default(0) @map("kyc_tier")
   idNumber    String?   @map("id_number")
   idImageUrl  String?   @map("id_image_url")
   kycObjectKey String? @map("kyc_object_key")
@@ -50,4 +51,19 @@ model StorageCleanup {
   createdAt DateTime @default(now()) @map("created_at")
   @@index([nextAttemptAt])
   @@map("storage_cleanup")
+}
+
+model UserOutboxEvent {
+  id               String    @id @default(uuid())
+  aggregateId      String    @map("aggregate_id")
+  aggregateVersion Int       @map("aggregate_version")
+  eventType        String    @map("event_type")
+  payload          Json
+  status           String    @default("PENDING")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  publishedAt      DateTime? @map("published_at")
+
+  @@unique([aggregateId, aggregateVersion])
+  @@index([status, createdAt])
+  @@map("user_outbox_events")
 }

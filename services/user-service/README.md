@@ -1,5 +1,7 @@
 # User Service
 
+**Cập nhật 11/10/2026:** auth dùng `finvault-internal-auth`; xem [trạng thái](docs/week1-status.md), [OpenAPI](docs/openapi.json) và [hướng dẫn runtime](../../docs/User_Merchant_Runtime.md).
+
 Quản lý hồ sơ, KYC riêng tư và consumer `user.registered`. API mặc định `http://localhost:3002/api/users`.
 
 ## Chạy local
@@ -7,7 +9,8 @@ Quản lý hồ sơ, KYC riêng tư và consumer `user.registered`. API mặc đ
 Dùng Node.js 22 trở lên, PostgreSQL và file `.env` sao chép từ `.env.example`.
 
 ```powershell
-npm ci
+rtk npm ci --prefix ../../packages/finvault-internal-auth
+rtk npm ci
 npm run db:generate
 npm run db:migrate
 npm run build
@@ -16,18 +19,16 @@ npm start
 
 Migration mới bổ sung metadata KYC, version hồ sơ, inbox `consumed_events` và hàng đợi `storage_cleanup`. Không cần reset database. Database cũ được tạo bằng `db push` cần được baseline migration trước khi dùng `migrate deploy`; không đánh dấu migration đã chạy khi chưa đối chiếu schema.
 
-`PORT=3002`, `DATABASE_URL`, `INTERNAL_KEY`, `ACCESS_TOKEN_SECRET` và `CLIENT_URL` được đọc từ môi trường. Khóa bắt buộc dài tối thiểu 32 ký tự; không còn fallback khóa mặc định trong mã. `ACCESS_TOKEN_SECRET` phải khớp khóa ký token; `INTERNAL_KEY` phải khớp caller nội bộ. Khi chạy container, database/storage/broker dùng hostname có thể truy cập từ container.
+Cấu hình service: `DATABASE_URL`, `INTERNAL_KEY` (ít nhất 32 ký tự), `PORT`, `CLIENT_URL`. Production cần `GATEWAY_PUBLIC_KEY_FILE` hoặc `GATEWAY_PUBLIC_KEY`. User/Merchant không đọc access-token secret.
 
 ## Xác thực và quyền
 
-- Request người dùng cần `Authorization: Bearer <token>` và `X-Gateway-Verified: true`.
-- Service kiểm chứng JWT HS256 và lấy `userId` (Auth ID), `role` từ token. Header `X-User-Id`, `X-User-Role` hoặc alias do caller tự gửi không thể nâng quyền.
+Request người dùng gửi Bearer token tới Gateway. Gateway chuyển `x-gateway-token` ES256; service xác thực qua package chung và đọc `req.auth`. Thiếu/sai token trả 401; thiếu quyền trả 403.
+- `req.auth.userId` là Auth ID; role và tier lấy từ claims đã kiểm chứng. Header ID/role/marker do client gửi không nâng quyền.
 - Request nội bộ cần `X-Internal-Key` hợp lệ. Có thể gửi `X-User-Id` dạng UUID nếu cần ngữ cảnh.
-- `DISABLE_GATEWAY_CHECK=true` chỉ bỏ yêu cầu marker ngoài production; vẫn phải có token hợp lệ hoặc internal key.
 - ADMIN và internal call được quản trị hồ sơ; USER chỉ xem/sửa/KYC chính mình.
 - `X-Request-Id` được nhận nếu hợp lệ hoặc tự sinh; trả lại trong header và lỗi. Lỗi server không trả chi tiết database.
 
-Việc kiểm chứng lại token là cần thiết vì marker hiện không có chữ ký và chỉ sửa trong phạm vi service này. Không coi marker đơn lẻ là bằng chứng xác thực.
 
 ## API
 
@@ -133,7 +134,7 @@ npm run test:db
 npm run test:integration
 ```
 
-Trên Windows có thể dùng `powershell -File tests/start-infra.ps1` để khởi động Docker Desktop và bộ test. PostgreSQL test: `127.0.0.1:55432/finvault_test`, schema `user_test`; RabbitMQ: 5673; S3: 19000, bucket `finvault-kyc-test`. Tests chỉ dọn dữ liệu tại các vị trí test cố định này. Không thay URL test bằng database thật.
+Trên Windows có thể dùng `powershell -File tests/start-infra.ps1` để khởi động Docker Desktop và bộ test. PostgreSQL test: `127.0.0.1:25432/finvault_test`, schema `user_test`; RabbitMQ: 5673; S3: 19000, bucket `finvault-kyc-test`. Tests chỉ dọn dữ liệu tại các vị trí test cố định này. Không thay URL test bằng database thật.
 
 MinIO test được build từ mã nguồn vì image legacy không tải được từ registry. Đây là hạ tầng test local, không phải manifest triển khai production. Hướng dẫn nguồn: [MinIO](https://github.com/minio/minio), [amqplib confirm channel](https://amqp-node.github.io/amqplib/channel_api.html), [AWS S3 SDK](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/javascript_s3_code_examples.html).
 

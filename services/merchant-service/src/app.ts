@@ -3,7 +3,7 @@ import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import merchantRoute from './routes/merchantRoute'
 import { attachRequestId } from './middlewares/requestId'
-import { requireGateway } from './middlewares/requireGateway'
+import { authenticateServiceRequest } from './middlewares/authenticateServiceRequest'
 import { notFound } from './middlewares/notFound'
 import { errorHandler } from './middlewares/errorHandler'
 import { HttpError } from './utils/errors'
@@ -41,7 +41,7 @@ app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', service: 
 app.get('/api/merchants/health', (_req, res) => res.status(200).json({ status: 'ok', service: 'merchant-service' }))
 
 // Protected routes (must pass through Gateway or internal call)
-app.use('/api/merchants', requireGateway, merchantRoute)
+app.use('/api/merchants', authenticateServiceRequest, merchantRoute)
 
 // 404 & Error Handler
 app.use(notFound)

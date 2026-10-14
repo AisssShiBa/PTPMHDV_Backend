@@ -16,6 +16,7 @@
     "license": "ISC",
     "type": "commonjs",
     "dependencies": {
+        "finvault-internal-auth": "file:../../packages/finvault-internal-auth",
         "@prisma/client": "^6.19.3",
         "amqplib": "^2.2.0",
         "class-transformer": "^0.5.1",
