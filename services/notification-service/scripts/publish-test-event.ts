@@ -13,8 +13,9 @@ const publishTestEvent = async () => {
     channel = confirmChannel
     await confirmChannel.assertExchange('wallet.events', 'topic', { durable: true })
 
-    const eventId = process.env.NOTIFICATION_TEST_EVENT_ID ?? randomUUID()
-    const userId = process.env.NOTIFICATION_TEST_USER_ID ?? randomUUID()
+    const eventId = process.env.NOTIFICATION_TEST_EVENT_ID ?? 'notification-inbox-manual-test-event'
+    const userId =
+      process.env.NOTIFICATION_TEST_USER_ID ?? '00000000-0000-4000-8000-000000000010'
     const body = Buffer.from(JSON.stringify({
       eventId,
       userId,
@@ -37,6 +38,7 @@ const publishTestEvent = async () => {
     await publishOnce()
     await confirmChannel.waitForConfirms()
     console.log(`Published the same test event twice with messageId ${eventId} for user ${userId}`)
+    console.log('Set NOTIFICATION_TEST_EVENT_ID to a new value to run an independent test again.')
   } finally {
     try {
       if (channel) await channel.close()
