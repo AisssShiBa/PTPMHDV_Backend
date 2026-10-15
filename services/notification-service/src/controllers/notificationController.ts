@@ -1,33 +1,65 @@
 import { Request, Response } from 'express'
 import { prisma } from '../config/prisma'
 import { notificationIO } from '../socket'
-import { createNotificationRecord, isNotificationType } from '../services/notificationService'
+import {
+  ingestNotification,
+  isNotificationType,
+  NotificationIngestError
+} from '../services/notificationService'
+
+export const getSocketTicket = async (req: Request, res: Response) => {
+  const ticket = req.headers['x-gateway-token']
+  if (typeof ticket !== 'string' || ticket.length === 0) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'INVALID_GATEWAY_TOKEN', message: 'Gateway Token không hợp lệ hoặc đã hết hạn.' }
+    })
+  }
+
+  // Ticket chỉ chứng minh danh tính đã xác thực của user hiện tại trong tối đa 60 giây; không ghi ticket vào log.
+  return res.status(200).json({
+    success: true,
+    data: { ticket }
+  })
+}
 
 // ===================================================================
 // INTERNAL — chỉ Outbox Scheduler của Payment/Wallet gọi (POST /)
 // ===================================================================
 export const createNotification = async (req: Request, res: Response) => {
   try {
-    const { userId, type, message } = req.body
-    if (!userId || !type || !message) {
+    const { eventId, userId, type, message } = req.body
+    if (
+      typeof userId !== 'string' ||
+      userId.trim().length === 0 ||
+      !isNotificationType(type) ||
+      typeof message !== 'string' ||
+      (eventId !== undefined && (typeof eventId !== 'string' || eventId.trim().length === 0))
+    ) {
       return res.status(400).json({
         success: false,
-        error: { code: 'BAD_REQUEST', message: 'userId, type và message là bắt buộc' }
+        error: { code: 'BAD_REQUEST', message: 'userId, type và message hợp lệ là bắt buộc' }
       })
     }
-    if (!isNotificationType(type)) {
-      return res.status(400).json({
-        success: false,
-        error: { code: 'BAD_REQUEST', message: `type không hợp lệ: ${type}` }
-      })
+
+    const result = await ingestNotification({ eventId, userId, type, message, source: 'http' })
+    if (result.duplicate) {
+      return res.status(200).json({ success: true, data: null, duplicate: true })
     }
-    const notification = await createNotificationRecord(userId, type, message)
-    notificationIO?.to(`user:${userId}`).emit('notification:new', notification)
+    if (result.notification) {
+      notificationIO?.to(`user:${userId}`).emit('notification:new', result.notification)
+    }
     return res.status(201).json({
       message: 'Tạo thông báo thành công',
-      data: notification
+      data: result.notification
     })
   } catch (error) {
+    if (error instanceof NotificationIngestError && error.code === 'EVENT_CONFLICT') {
+      return res.status(409).json({
+        success: false,
+        error: { code: error.code, message: error.message }
+      })
+    }
     console.error('Lỗi tạo thông báo:', error)
     return res.status(500).json({
       success: false,
@@ -42,18 +74,11 @@ export const createNotification = async (req: Request, res: Response) => {
 // ===================================================================
 export const getNotifications = async (req: Request, res: Response) => {
   try {
-    const { userId } = req.params as { userId: string }
-
-    // SELF-GUARD CỨNG — trước khi query
-    if (req.userId !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: { code: 'FORBIDDEN', message: 'Không có quyền xem thông báo của người khác' }
-      })
-    }
+    const userId = req.auth!.userId
 
     // Phân trang từ query (clamp: page ≥ 1, 1 ≤ limit ≤ 50)
-    const page = Math.max(parseInt(req.query.page as string) || 1, 1)
+    const requestedPage = Number.parseInt(req.query.page as string, 10)
+    const page = Number.isFinite(requestedPage) ? Math.max(requestedPage, 1) : 1
     const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 10, 1), 50)
     const skip = (page - 1) * limit
 
@@ -70,21 +95,24 @@ export const getNotifications = async (req: Request, res: Response) => {
     ])
 
     return res.status(200).json({
-      userId,
-      notifications,
-      unreadCount,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit)
+      success: true,
+      data: {
+        notifications,
+        unreadCount,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        }
       }
     })
   } catch (error) {
     console.error('Lỗi lấy thông báo:', error)
     return res.status(500).json({
       success: false,
-      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' }
+      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' },
+      requestId: req.get('x-request-id')
     })
   }
 }
@@ -96,65 +124,59 @@ export const getNotifications = async (req: Request, res: Response) => {
 export const markNotificationRead = async (req: Request, res: Response) => {
   try {
     const { id } = req.params as { id: string }
-    const existing = await prisma.notification.findUnique({ where: { id } })
-    if (!existing) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' }
-      })
-    }
-    if (existing.userId !== req.userId) {
-      return res.status(403).json({
-        success: false,
-        error: { code: 'FORBIDDEN', message: 'Không có quyền thao tác thông báo này' }
-      })
-    }
-    const notification = await prisma.notification.update({
-      where: { id },
+    const userId = req.auth!.userId
+    const result = await prisma.notification.updateMany({
+      where: { id, userId },
       data: { read: true }
     })
+    if (result.count === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' },
+        requestId: req.get('x-request-id')
+      })
+    }
+    const notification = await prisma.notification.findFirst({
+      where: { id, userId }
+    })
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' },
+        requestId: req.get('x-request-id')
+      })
+    }
     return res.status(200).json({
-      message: 'Đánh dấu đã đọc thành công',
+      success: true,
       data: notification
     })
   } catch (error) {
-    if ((error as { code?: string }).code === 'P2025') {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thông báo' }
-      })
-    }
     console.error('Lỗi đánh dấu đã đọc:', error)
     return res.status(500).json({
       success: false,
-      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' }
+      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' },
+      requestId: req.get('x-request-id')
     })
   }
 }
 
 export const markAllNotificationsRead = async (req: Request, res: Response) => {
   try {
-    const { userId } = req.params as { userId: string }
-    if (req.userId !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: { code: 'FORBIDDEN', message: 'Không có quyền thao tác thông báo của người khác' }
-      })
-    }
+    const userId = req.auth!.userId
     const result = await prisma.notification.updateMany({
       where: { userId, read: false },
       data: { read: true }
     })
     return res.status(200).json({
-      message: 'Đánh dấu tất cả đã đọc thành công',
-      userId,
-      updatedCount: result.count
+      success: true,
+      data: { updatedCount: result.count }
     })
   } catch (error) {
     console.error('Lỗi đánh dấu tất cả đã đọc:', error)
     return res.status(500).json({
       success: false,
-      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' }
+      error: { code: 'INTERNAL_ERROR', message: 'Lỗi hệ thống' },
+      requestId: req.get('x-request-id')
     })
   }
 }

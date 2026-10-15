@@ -17,7 +17,6 @@ app.get('/api/notifications/health', (_req, res) => {
 })
 
 // internal + client routes
-// Each route selects clientAuth (Gateway Token) or internalAuth (service key).
 app.use('/api/notifications', notificationRoute)
 
 // Xử lý Route không tồn tại (404)
@@ -27,7 +26,8 @@ app.use((_req, res) => {
     error: {
       code: 'NOT_FOUND',
       message: 'Endpoint không tồn tại'
-    }
+    },
+    requestId: _req.headers['x-request-id']
   })
 })
 

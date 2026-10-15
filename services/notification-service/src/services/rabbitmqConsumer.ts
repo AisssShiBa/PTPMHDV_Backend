@@ -1,30 +1,177 @@
-import amqp, { type ConsumeMessage } from 'amqplib'
+import amqp, { type ConfirmChannel, type ConsumeMessage } from 'amqplib'
 import { env } from '../config/env'
 import { notificationIO } from '../socket'
-import { createNotificationRecord, isNotificationType } from './notificationService'
+import {
+  ingestNotification,
+  isNotificationType,
+  NotificationIngestError,
+  type NotificationTypeValue
+} from './notificationService'
 
 const exchanges = ['wallet.events', 'payment.events', 'kyc.events']
+const deadLetterQueue = 'notification-service.dlq'
+const maxRetries = 3
 
-interface NotificationEvent {
-  userId?: unknown
-  type?: unknown
-  message?: unknown
+export type ParsedNotificationEvent = {
+  eventId?: string
+  userId: string
+  type: NotificationTypeValue
+  message: string
 }
 
-const handleMessage = async (message: ConsumeMessage) => {
-  const event = JSON.parse(message.content.toString()) as { data?: NotificationEvent; payload?: NotificationEvent } & NotificationEvent
-  const payload = event.data ?? event.payload ?? event
+export type NotificationAmqpMessage = {
+  content: Buffer
+  properties: {
+    messageId?: string
+  }
+}
+
+export class InvalidNotificationEventError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidNotificationEventError'
+  }
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+export const parseEvent = (message: NotificationAmqpMessage): ParsedNotificationEvent => {
+  let body: unknown
+  try {
+    body = JSON.parse(message.content.toString()) as unknown
+  } catch {
+    throw new InvalidNotificationEventError('Invalid JSON notification event')
+  }
+
+  if (!isRecord(body)) {
+    throw new InvalidNotificationEventError('Notification event must be an object')
+  }
+
+  const payload = isRecord(body.data)
+    ? body.data
+    : isRecord(body.payload)
+      ? body.payload
+      : body
+  const eventId = body.eventId ?? message.properties.messageId
+  const type = payload.type ?? body.eventType
 
   if (
     typeof payload.userId !== 'string' ||
-    !isNotificationType(payload.type) ||
-    typeof payload.message !== 'string'
+    payload.userId.trim().length === 0 ||
+    !isNotificationType(type) ||
+    typeof payload.message !== 'string' ||
+    (eventId !== undefined && (typeof eventId !== 'string' || eventId.trim().length === 0))
   ) {
-    throw new Error('Invalid notification event payload')
+    throw new InvalidNotificationEventError('Invalid notification event payload')
   }
 
-  const notification = await createNotificationRecord(payload.userId, payload.type, payload.message)
-  notificationIO?.to(`user:${payload.userId}`).emit('notification:new', notification)
+  return {
+    ...(eventId !== undefined ? { eventId } : {}),
+    userId: payload.userId,
+    type,
+    message: payload.message
+  }
+}
+
+const retryCountFrom = (message: ConsumeMessage): number => {
+  const value = message.properties.headers?.['x-retry-count']
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) return value
+  if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value)
+  return 0
+}
+
+const republishForRetry = (
+  channel: ConfirmChannel,
+  queueName: string,
+  message: ConsumeMessage,
+  retryCount: number
+) =>
+  new Promise<void>((resolve, reject) => {
+    channel.publish(
+      '',
+      queueName,
+      message.content,
+      {
+        ...message.properties,
+        headers: { ...message.properties.headers, 'x-retry-count': retryCount + 1 },
+        persistent: true
+      },
+      (error) => (error ? reject(error) : resolve())
+    )
+  })
+
+const deadLetter = async (channel: ConfirmChannel, message: ConsumeMessage, reason: string) => {
+  console.error(`[RabbitMQ] Đưa message từ ${message.fields.exchange} vào DLQ: ${reason}`)
+  try {
+    await new Promise<void>((resolve, reject) => {
+      channel.sendToQueue(
+        deadLetterQueue,
+        message.content,
+        {
+          ...message.properties,
+          headers: { ...message.properties.headers, 'x-dead-letter-reason': reason },
+          persistent: true
+        },
+        (error) => (error ? reject(error) : resolve())
+      )
+    })
+    channel.ack(message)
+  } catch (error) {
+    console.error('[RabbitMQ] Không thể ghi message vào DLQ:', error)
+    channel.nack(message, false, true)
+  }
+}
+
+const handleMessage = async (
+  channel: ConfirmChannel,
+  queueName: string,
+  message: ConsumeMessage
+) => {
+  let event: ParsedNotificationEvent
+  try {
+    event = parseEvent(message)
+  } catch (error) {
+    await deadLetter(
+      channel,
+      message,
+      error instanceof Error ? error.message : 'Invalid notification event'
+    )
+    return
+  }
+
+  try {
+    const result = await ingestNotification({
+      ...event,
+      source: message.fields.exchange
+    })
+    if (!result.duplicate && result.notification) {
+      notificationIO?.to(`user:${event.userId}`).emit('notification:new', result.notification)
+    }
+    channel.ack(message)
+  } catch (error) {
+    if (
+      error instanceof NotificationIngestError &&
+      (error.code === 'EVENT_CONFLICT' || error.code === 'INVALID_NOTIFICATION')
+    ) {
+      await deadLetter(channel, message, error.code)
+      return
+    }
+
+    const retryCount = retryCountFrom(message)
+    if (retryCount >= maxRetries) {
+      await deadLetter(channel, message, 'Maximum retry count exceeded')
+      return
+    }
+
+    try {
+      await republishForRetry(channel, queueName, message, retryCount)
+      channel.ack(message)
+    } catch (retryError) {
+      console.error('[RabbitMQ] Không thể phát lại message để retry:', retryError)
+      channel.nack(message, false, true)
+    }
+  }
 }
 
 export const startRabbitMqConsumer = async () => {
@@ -35,7 +182,9 @@ export const startRabbitMqConsumer = async () => {
 
   try {
     const connection = await amqp.connect(env.rabbitmqUrl)
-    const channel = await connection.createChannel()
+    const channel = await connection.createConfirmChannel()
+
+    await channel.assertQueue(deadLetterQueue, { durable: true })
 
     for (const exchange of exchanges) {
       await channel.assertExchange(exchange, 'topic', { durable: true })
@@ -44,11 +193,10 @@ export const startRabbitMqConsumer = async () => {
       await channel.consume(queue.queue, async (message) => {
         if (!message) return
         try {
-          await handleMessage(message)
-          channel.ack(message)
+          await handleMessage(channel, queue.queue, message)
         } catch (error) {
-          console.error(`[RabbitMQ] Bỏ qua message không hợp lệ từ ${exchange}:`, error)
-          channel.nack(message, false, false)
+          console.error('[RabbitMQ] Lỗi không mong đợi khi xử lý message:', error)
+          channel.nack(message, false, true)
         }
       })
     }

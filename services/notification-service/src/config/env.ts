@@ -1,5 +1,8 @@
 import 'dotenv/config'
 
+const defaultSocketMaxAgeMs = 14 * 60 * 1000
+const configuredSocketMaxAgeMs = Number.parseInt(process.env.SOCKET_MAX_AGE_MS ?? '', 10)
+
 function required(key: string): string {
   const value = process.env[key]
   if (!value) {
@@ -14,9 +17,12 @@ export const env = {
   isProduction: process.env.NODE_ENV === 'production',
   // INTERNAL_KEY — ĐỒNG BỘ với Gateway + Payment + Wallet (header: x-internal-key)
   internalKey: required('INTERNAL_KEY'),
-  accessTokenSecret: required('ACCESS_TOKEN_SECRET'),
   rabbitmqUrl: process.env.RABBITMQ_URL,
   rabbitmqQueue: process.env.RABBITMQ_QUEUE || 'notification-service',
+  socketMaxAgeMs:
+    Number.isFinite(configuredSocketMaxAgeMs) && configuredSocketMaxAgeMs > 0
+      ? configuredSocketMaxAgeMs
+      : defaultSocketMaxAgeMs,
   // CLIENT_URL — optional: thiếu thì fallback về origin dev cục bộ
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
   databaseUrl: required('DATABASE_URL')

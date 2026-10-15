@@ -10,18 +10,21 @@ datasource db {
 enum NotificationType {
   PAYMENT_SUCCESS
   PAYMENT_FAILED
+  PAYMENT_EXPIRED
   PAYMENT_REFUNDED
   PAYMENT_CANCELLED
   WALLET_CREDITED
   WALLET_DEBITED
   KYC_APPROVED
   KYC_REJECTED
+  KYC_TIER_CHANGED
   MERCHANT_APPROVED
   MERCHANT_REJECTED
 }
 
 model Notification {
   id        String           @id @default(uuid())
+  eventId   String?          @unique
   userId    String
   type      NotificationType
   message   String
@@ -29,4 +32,11 @@ model Notification {
   createdAt DateTime         @default(now())
 
   @@index([userId])
+}
+
+model NotificationInbox {
+  eventId     String   @id
+  source      String
+  payloadHash String
+  receivedAt  DateTime @default(now())
 }
