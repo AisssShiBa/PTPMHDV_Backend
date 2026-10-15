@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 import type { AddressInfo } from 'node:net'
 import { createTestGatewayToken } from 'finvault-internal-auth'
+import { env } from '../src/config/env'
+import { prisma } from '../src/config/prisma'
 import app from '../src/app'
 
 let server: ReturnType<typeof app.listen>
@@ -102,6 +105,45 @@ test('internal notification creation still requires x-internal-key', async () =>
     })
   })
   assert.equal(response.status, 401)
+})
+
+test('internal notification creation is idempotent when eventId is supplied', async () => {
+  const eventId = `http-notification-${randomUUID()}`
+  const payload = {
+    eventId,
+    userId: randomUUID(),
+    type: 'PAYMENT_SUCCESS',
+    message: 'Payment succeeded'
+  }
+  const request = () =>
+    fetch(`${baseUrl}/api/notifications`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-internal-key': env.internalKey
+      },
+      body: JSON.stringify(payload)
+    })
+
+  try {
+    const first = await request()
+    assert.equal(first.status, 201)
+    const firstBody = await first.json()
+    assert.equal(firstBody.success, true)
+    assert.equal(firstBody.data.eventId, eventId)
+
+    const duplicate = await request()
+    assert.equal(duplicate.status, 200)
+    assert.deepEqual(await duplicate.json(), {
+      success: true,
+      data: null,
+      duplicate: true
+    })
+    assert.equal(await prisma.notification.count({ where: { eventId } }), 1)
+  } finally {
+    await prisma.notificationInbox.deleteMany({ where: { eventId } })
+    await prisma.notification.deleteMany({ where: { eventId } })
+  }
 })
 
 test('health endpoints remain public', async () => {
