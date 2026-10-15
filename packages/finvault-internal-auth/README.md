@@ -1,6 +1,19 @@
 # FinVault Internal Auth (`finvault-internal-auth`)
 > **Thư viện xác thực nội bộ dùng chung cho toàn bộ Microservices của FinVault**  
-> *Phiên bản: 1.0.0 (Dev Stub - Bàn giao cuối Ngày 1 bởi Đạt)*
+> *Phiên bản: 1.0.0 — tích hợp runtime User/Merchant ngày 11/10/2026; giữ API middleware/helper đã bàn giao.*
+
+## Cập nhật runtime
+
+- Package xuất `dist/index.js` và declaration; `npm ci` tại thư mục package chạy build qua `prepare`. Cài/build package trước khi cài service dùng dependency `file:`.
+- Từ root backend: `rtk npm ci --prefix packages/finvault-internal-auth`, sau đó `rtk npm ci --prefix services/user-service` (tương tự Merchant/Admin).
+- Test package: `rtk npm test --prefix packages/finvault-internal-auth`. Test dùng assertion, trả exit code lỗi khi không đạt.
+- Production cần `GATEWAY_PUBLIC_KEY_FILE` hoặc `GATEWAY_PUBLIC_KEY` ES256. Thiếu key, file sai, key sai curve hoặc public key dev đều bị từ chối. HTTP/worker User/Merchant kiểm tra key ngay khi khởi động.
+- Claims bắt buộc: UUID `sub`, role `USER/ADMIN/MERCHANT`, tier nguyên 0–2, `jti` không rỗng, `iat`/`exp` hợp lệ; TTL tối đa 60 giây; issuer/audience như mô tả bên dưới.
+- `jti` dùng định danh token; package chưa lưu replay cache, không tuyên bố tự chặn mọi lần phát lại trong TTL.
+- Lỗi middleware giữ `requestId` do middleware correlation gắn trước đó.
+- User/Merchant dùng adapter internal-key đã xác thực cho Auth provision/Admin review; nhánh người dùng gọi `requireGateway` của package. Gateway loại bỏ internal key do client gửi. Không còn bypass marker ở hai service.
+- Private key fixture chỉ dùng helper test, bị vô hiệu khi `NODE_ENV=production`; không phải credential triển khai. Gateway production giữ private key riêng, service chỉ được cấp public key.
+- Dockerfile có package local phải build từ root backend. Xem [hướng dẫn runtime](../../docs/User_Merchant_Runtime.md).
 
 ---
 
@@ -26,7 +39,7 @@ Trước đây, Gateway chỉ gán một cờ tĩnh dạng chữ: `req.headers['
 
 ### ✅ Cơ chế mới (Chuẩn Zero-Trust Cryptography):
 * Gateway sử dụng **Khóa riêng (Private Key)** để ký ra một chuỗi JWT nội bộ siêu ngắn (**TTL = 60 giây**) bằng thuật toán **ES256 (NIST P-256)** gắn vào header `x-gateway-token`.
-* Thư viện `finvault-internal-auth` **chỉ chứa Khóa công khai (Public Key)** của Gateway.
+* Runtime service **chỉ được cấp Khóa công khai (Public Key)** của Gateway; helper test dùng cặp khóa fixture riêng.
 * Các service con chỉ việc import middleware `requireGateway`, thư viện sẽ tự kiểm chứng chữ ký số, kiểm tra thời hạn 60s và tự động giải mã danh tính người dùng vào `req.auth`.
 
 ---
@@ -122,7 +135,7 @@ npm install
 ---
 
 ### 👨‍💻 HỮU: `user-service` & `merchant-service` (Nhiệm vụ H1, H5)
-**Mục tiêu:** Xóa bỏ file `requireGateway.ts` cũ và gỡ bỏ biến `JWT_SECRET` / `ACCESS_TOKEN_SECRET` trong file `.env` của service.
+**Mục tiêu:** Bỏ verify access JWT/marker cũ và cấu hình `JWT_SECRET` / `ACCESS_TOKEN_SECRET` ở hai service. Giữ adapter internal đã xác thực để Auth/Admin tiếp tục gọi được.
 
 1. **Bảo vệ route xem thông tin cá nhân `/api/users/me`:**
    ```typescript
@@ -205,7 +218,7 @@ test('Gọi thẳng không qua Gateway thì bị chặn 401', async () => {
 | `req.auth.userId` | `string` | UUID của chủ tài khoản đang gửi request. |
 | `req.auth.role` | `string` | Vai trò trong hệ thống: `'USER'`, `'MERCHANT'`, `'ADMIN'`. |
 | `req.auth.kycTier` | `number` | Cấp bậc ví: `0` (Chưa KYC), `1` (Cơ bản), `2` (Nâng cao). |
-| `req.auth.jti` | `string` | Mã UUID định danh duy nhất của token (chống replay). |
+| `req.auth.jti` | `string` | Mã định danh token; không thay thế replay cache. |
 
 ### Bảng mã lỗi chuẩn HTTP:
 | Mã HTTP | `error.code` | Tình huống xảy ra | Phản hồi JSON mẫu |

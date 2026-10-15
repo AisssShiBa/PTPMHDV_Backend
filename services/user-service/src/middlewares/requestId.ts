@@ -3,10 +3,9 @@ import { randomUUID } from 'node:crypto'
 
 export interface RequestWithContext extends Request {
   requestId?: string
-  userId?: string
-  userRole?: string
+  // Auth ID from a verified internal request, not the local profile ID.
+  internalUserId?: string
   isInternalCall?: boolean
-  isGatewayVerified?: boolean
 }
 export function attachRequestId(req: RequestWithContext, res: Response, next: NextFunction) {
   const incoming = req.get('x-request-id')

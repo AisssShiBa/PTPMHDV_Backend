@@ -12,6 +12,8 @@ app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
 
+app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'wallet-service' }));
+
 app.use('/api/wallets', walletRoutes);
 app.use('/api/wallets/admin', adminRoutes);
 

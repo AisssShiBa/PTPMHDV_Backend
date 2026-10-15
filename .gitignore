@@ -6,6 +6,10 @@ node_modules/
 .env.local
 .env.*.local
 
+# Secrets & Keys (Do not commit production secrets)
+secrets/
+*.pem
+
 # Logs
 *.log
 npm-debug.log*

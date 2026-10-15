@@ -11,6 +11,7 @@ import { Request, Response, NextFunction } from 'express'
 export const sanitizeHeaders = (req: Request, _res: Response, next: NextFunction): void => {
     // 1. Xóa Gateway Token do client tự chế (nếu có)
     delete req.headers['x-gateway-token']
+    delete req.headers['x-internal-key']
 
     // 2. Xóa cờ tĩnh cũ x-gateway-verified (chống giả mạo hệ thống cũ)
     delete req.headers['x-gateway-verified']
@@ -18,6 +19,9 @@ export const sanitizeHeaders = (req: Request, _res: Response, next: NextFunction
     // 3. Xóa các header thông tin người dùng do client tự điền
     delete req.headers['x-user-id']
     delete req.headers['x-user-role']
+
+    // 4. Xóa header khóa nội bộ x-internal-key nếu client bên ngoài cố tình gửi lên
+    delete req.headers['x-internal-key']
 
     next()
 }

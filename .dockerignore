@@ -1,0 +1,12 @@
+**/node_modules
+**/.git
+**/.env
+**/.env.*
+**/dist
+**/build
+*.log
+.cache
+.tmp
+secrets
+**/*.pem
+repomix-output.xml

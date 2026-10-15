@@ -15,6 +15,8 @@ app.use(cors({
 app.use(morgan('dev'));
 app.use(express.json());
 
+app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'payment-service' }));
+
 app.use('/api/payments', paymentRoutes);
 
 app.use(errorHandler);

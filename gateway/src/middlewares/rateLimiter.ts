@@ -17,7 +17,7 @@ setInterval(() => {
             store.delete(key)
         }
     }
-}, 60_000)
+}, 60_000).unref()
 
 /**
  * Middleware Rate Limiter tại Gateway chặn spam và DDoS toàn hệ thống

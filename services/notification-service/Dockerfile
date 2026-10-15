@@ -1,10 +1,14 @@
 FROM node:20-alpine
 WORKDIR /app
-COPY package*.json ./
-COPY prisma ./prisma
-COPY vendor ./vendor
+COPY packages/finvault-internal-auth ./packages/finvault-internal-auth
+WORKDIR /app/packages/finvault-internal-auth
+RUN npm ci
+WORKDIR /app/services/notification-service
+COPY services/notification-service/package*.json ./
+COPY services/notification-service/prisma ./prisma
 RUN npm install
-COPY . .
+COPY services/notification-service/src ./src
+COPY services/notification-service/tsconfig.json ./
 
 EXPOSE 3006
 CMD ["sh", "-c", "npx prisma generate && npx prisma migrate deploy && npm run start"]

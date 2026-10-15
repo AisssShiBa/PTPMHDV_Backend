@@ -9,7 +9,9 @@ export interface ApiResponse<T> {
 }
 
 export interface UserResponse {
+  /** Local profile ID. The API field name remains id for compatibility. */
   id: string
+  /** Account ID issued by auth-service; matches req.auth.userId. */
   authUserId: string
   email: string
   fullName?: string | null
@@ -17,7 +19,8 @@ export interface UserResponse {
   address?: string | null
   kycStatus: string
   idNumber?: string | null
-  idImageUrl?: string | null
+  kycTier: number
+  hasKycDocument: boolean
   createdAt: Date | string
   updatedAt: Date | string
 }

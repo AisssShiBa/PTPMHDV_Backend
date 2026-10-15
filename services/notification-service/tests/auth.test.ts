@@ -24,10 +24,10 @@ after(async () => {
 })
 
 const getNotifications = (headers: Record<string, string> = {}) =>
-  fetch(`${baseUrl}/api/notifications/user-a`, { headers })
+  fetch(`${baseUrl}/api/notifications/me`, { headers })
 
 test('auth package smoke test creates a Gateway Token', () => {
-  assert.equal(typeof createTestGatewayToken('user-a'), 'string')
+  assert.equal(typeof createTestGatewayToken('00000000-0000-4000-8000-000000000001'), 'string')
 })
 
 test('notification client route rejects missing Gateway Token', async () => {
@@ -43,7 +43,7 @@ test('socket ticket endpoint rejects a missing Gateway Token', async () => {
 })
 
 test('socket ticket endpoint returns the verified request Gateway Token', async () => {
-  const token = createTestGatewayToken('ticket-user')
+  const token = createTestGatewayToken('00000000-0000-4000-8000-000000000002')
   const response = await fetch(`${baseUrl}/api/notifications/socket-ticket`, {
     headers: { 'x-gateway-token': token }
   })
@@ -56,8 +56,14 @@ test('socket ticket endpoint returns the verified request Gateway Token', async 
 })
 
 test('notification client route rejects expired Gateway Token', async () => {
-  const token = createTestGatewayToken('user-a', 'USER', 0, '-1s')
+  const token = createTestGatewayToken('00000000-0000-4000-8000-000000000003', 'USER', 0, '-1s')
   const response = await getNotifications({ 'x-gateway-token': token })
+  assert.equal(response.status, 401)
+  assert.equal((await response.json()).error.code, 'INVALID_GATEWAY_TOKEN')
+})
+
+test('notification client route rejects a forged Gateway Token', async () => {
+  const response = await getNotifications({ 'x-gateway-token': 'not-a-valid-token' })
   assert.equal(response.status, 401)
   assert.equal((await response.json()).error.code, 'INVALID_GATEWAY_TOKEN')
 })
@@ -66,6 +72,14 @@ test('legacy verification header cannot authenticate client requests', async () 
   const response = await getNotifications({
     'x-gateway-verified': 'true',
     'x-user-id': 'user-a'
+  })
+  assert.equal(response.status, 401)
+  assert.equal((await response.json()).error.code, 'INVALID_GATEWAY_TOKEN')
+})
+
+test('internal key cannot authenticate client requests', async () => {
+  const response = await fetch(`${baseUrl}/api/notifications/socket-ticket`, {
+    headers: { 'x-internal-key': process.env.INTERNAL_KEY ?? '' }
   })
   assert.equal(response.status, 401)
   assert.equal((await response.json()).error.code, 'INVALID_GATEWAY_TOKEN')

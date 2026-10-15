@@ -8,7 +8,9 @@ datasource db {
 }
 
 model Merchant {
+  // Merchant record ID; distinct from the owner's Auth ID.
   id           String         @id @default(uuid())
+  // Owner's auth-service.User.id, NOT user-service.User.id (profile ID).
   ownerId      String         @unique @map("owner_id")
   businessName String         @map("business_name")
   taxId        String?        @map("tax_id")

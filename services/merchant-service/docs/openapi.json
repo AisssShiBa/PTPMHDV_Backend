@@ -1,0 +1,940 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "FinVault Merchant API",
+    "version": "1.0.0",
+    "description": "Client API through Gateway. Frontend sends Bearer access tokens; Gateway signs ES256 x-gateway-token (60s). Services verify finvault-internal-auth claims. Internal authentication headers are never client inputs."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000/api",
+      "description": "Local Gateway"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/merchants/register": {
+      "post": {
+        "operationId": "registerMerchant",
+        "summary": "Register a merchant for the signed-in owner",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "businessName"
+                ],
+                "properties": {
+                  "businessName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "taxId": {
+                    "type": "string",
+                    "nullable": true,
+                    "minLength": 1,
+                    "maxLength": 50
+                  },
+                  "bankAccount": {
+                    "type": "string",
+                    "nullable": true,
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "ownerId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Optional; for frontend callers must equal signed Auth ID. Normally omit."
+                  }
+                }
+              },
+              "example": {
+                "businessName": "Demo Shop"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "30000000-0000-4000-8000-000000000001",
+                    "ownerId": "10000000-0000-4000-8000-000000000001",
+                    "businessName": "Demo Shop",
+                    "taxId": null,
+                    "bankAccount": null,
+                    "status": "PENDING",
+                    "version": 1,
+                    "createdAt": "2026-10-07T08:00:00.000Z",
+                    "updatedAt": "2026-10-07T08:00:00.000Z",
+                    "deletedAt": null
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate resource, concurrent update or invalid transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "CONCURRENT_UPDATE",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/merchants/me": {
+      "get": {
+        "operationId": "getMyMerchant",
+        "summary": "Get current owner's merchant",
+        "description": "Returns data: null when no active merchant record exists. Database failures remain errors.",
+        "responses": {
+          "200": {
+            "description": "Current merchant or explicit null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyMerchantResponse"
+                },
+                "examples": {
+                  "registered": {
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "id": "30000000-0000-4000-8000-000000000001",
+                        "ownerId": "10000000-0000-4000-8000-000000000001",
+                        "businessName": "Demo Shop",
+                        "taxId": null,
+                        "bankAccount": null,
+                        "status": "PENDING",
+                        "version": 1,
+                        "createdAt": "2026-10-07T08:00:00.000Z",
+                        "updatedAt": "2026-10-07T08:00:00.000Z",
+                        "deletedAt": null
+                      },
+                      "message": "Success"
+                    }
+                  },
+                  "notRegistered": {
+                    "value": {
+                      "success": true,
+                      "data": null,
+                      "message": "Success"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/merchants/{id}": {
+      "put": {
+        "operationId": "updateMerchantProfile",
+        "summary": "Update merchant profile as owner/admin",
+        "description": "Changed profile and merchant.profile_updated Outbox are committed atomically. Identical values are a no-op. ownerId/status/version cannot be changed here.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "minProperties": 1,
+                "properties": {
+                  "businessName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "taxId": {
+                    "type": "string",
+                    "nullable": true,
+                    "minLength": 1,
+                    "maxLength": 50
+                  },
+                  "bankAccount": {
+                    "type": "string",
+                    "nullable": true,
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                }
+              },
+              "example": {
+                "businessName": "New shop name"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "30000000-0000-4000-8000-000000000001",
+                    "ownerId": "10000000-0000-4000-8000-000000000001",
+                    "businessName": "New shop name",
+                    "taxId": null,
+                    "bankAccount": null,
+                    "status": "PENDING",
+                    "version": 2,
+                    "createdAt": "2026-10-07T08:00:00.000Z",
+                    "updatedAt": "2026-10-07T08:00:00.000Z",
+                    "deletedAt": null
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate resource, concurrent update or invalid transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "CONCURRENT_UPDATE",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/merchants": {
+      "get": {
+        "operationId": "listMerchants",
+        "summary": "List merchants (ADMIN only for frontend callers)",
+        "description": "Not the current-owner lookup; use /merchants/me.",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "APPROVED",
+                "REJECTED"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated merchants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data",
+                    "message"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "content",
+                        "page",
+                        "limit",
+                        "totalElements",
+                        "totalPages"
+                      ],
+                      "properties": {
+                        "content": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Merchant"
+                          }
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "totalElements": {
+                          "type": "integer"
+                        },
+                        "totalPages": {
+                          "type": "integer",
+                          "minimum": 1
+                        }
+                      }
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Success"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "content": [
+                      {
+                        "id": "30000000-0000-4000-8000-000000000001",
+                        "ownerId": "10000000-0000-4000-8000-000000000001",
+                        "businessName": "Demo Shop",
+                        "taxId": null,
+                        "bankAccount": null,
+                        "status": "PENDING",
+                        "version": 1,
+                        "createdAt": "2026-10-07T08:00:00.000Z",
+                        "updatedAt": "2026-10-07T08:00:00.000Z",
+                        "deletedAt": null
+                      }
+                    ],
+                    "page": 1,
+                    "limit": 10,
+                    "totalElements": 1,
+                    "totalPages": 1
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "success",
+          "error",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      },
+      "Merchant": {
+        "type": "object",
+        "required": [
+          "id",
+          "ownerId",
+          "businessName",
+          "taxId",
+          "bankAccount",
+          "status",
+          "version",
+          "createdAt",
+          "updatedAt",
+          "deletedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ownerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "businessName": {
+            "type": "string"
+          },
+          "taxId": {
+            "type": "string",
+            "nullable": true
+          },
+          "bankAccount": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "APPROVED",
+              "REJECTED"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "MerchantResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/Merchant"
+          },
+          "message": {
+            "type": "string",
+            "example": "Success"
+          }
+        }
+      },
+      "MyMerchantResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "object",
+            "nullable": true,
+            "required": [
+              "id",
+              "ownerId",
+              "businessName",
+              "taxId",
+              "bankAccount",
+              "status",
+              "version",
+              "createdAt",
+              "updatedAt",
+              "deletedAt"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "ownerId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "businessName": {
+                "type": "string"
+              },
+              "taxId": {
+                "type": "string",
+                "nullable": true
+              },
+              "bankAccount": {
+                "type": "string",
+                "nullable": true
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "PENDING",
+                  "APPROVED",
+                  "REJECTED"
+                ]
+              },
+              "version": {
+                "type": "integer"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "deletedAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            }
+          },
+          "message": {
+            "type": "string",
+            "example": "Success"
+          }
+        }
+      }
+    }
+  }
+}

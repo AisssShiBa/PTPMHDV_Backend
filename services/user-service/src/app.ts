@@ -3,7 +3,7 @@ import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import userRoute from './routes/userRoute'
 import { attachRequestId } from './middlewares/requestId'
-import { requireGateway } from './middlewares/requireGateway'
+import { authenticateServiceRequest } from './middlewares/authenticateServiceRequest'
 import { notFound } from './middlewares/notFound'
 import { errorHandler } from './middlewares/errorHandler'
 import { HttpError } from './utils/errors'
@@ -44,7 +44,7 @@ app.get('/api/users/health', (_req, res) => res.status(200).json({ status: 'ok',
 // Protected routes (must pass through Gateway or internal call)
 
 
-app.use('/api/users', requireGateway, userRoute)
+app.use('/api/users', authenticateServiceRequest, userRoute)
 
 // 404 & Error Handler
 app.use(notFound)

@@ -73,13 +73,15 @@ test('socket rejects a malformed Gateway Token', async () => {
 })
 
 test('socket rejects an expired Gateway Token', async () => {
-  const token = createTestGatewayToken('expired-user', 'USER', 0, '-1s')
+  const token = createTestGatewayToken('00000000-0000-4000-8000-000000000004', 'USER', 0, '-1s')
   await assertRejected(baseUrl, { auth: { token } })
 })
 
 test('socket rooms deliver notifications only to the matching user', async () => {
-  const tokenA = await makeFreshToken('socket-user-a')
-  const tokenB = await makeFreshToken('socket-user-b')
+  const userA = '00000000-0000-4000-8000-000000000005'
+  const userB = '00000000-0000-4000-8000-000000000006'
+  const tokenA = await makeFreshToken(userA)
+  const tokenB = await makeFreshToken(userB)
   const socketA = await openSocket(baseUrl, { auth: { token: tokenA } })
   const socketB = await openSocket(baseUrl, { auth: { token: tokenB } })
   await delay(20)
@@ -92,7 +94,7 @@ test('socket rooms deliver notifications only to the matching user', async () =>
     receivedByB = true
   })
 
-  socketServer.to('user:socket-user-a').emit('notification:new', { userId: 'socket-user-a' })
+  socketServer.to(`user:${userA}`).emit('notification:new', { userId: userA })
   await receivedByA
   await delay(30)
 
@@ -100,7 +102,7 @@ test('socket rooms deliver notifications only to the matching user', async () =>
 })
 
 test('a Gateway Token jti can be used only once', async () => {
-  const token = await makeFreshToken('single-use-user')
+  const token = await makeFreshToken('00000000-0000-4000-8000-000000000007')
   const firstSocket = await openSocket(baseUrl, { auth: { token } })
   firstSocket.close()
   await delay(10)
@@ -108,12 +110,12 @@ test('a Gateway Token jti can be used only once', async () => {
 })
 
 test('socket ignores Gateway Token supplied only in the query string', async () => {
-  const token = await makeFreshToken('query-token-user')
+  const token = await makeFreshToken('00000000-0000-4000-8000-000000000008')
   await assertRejected(`${baseUrl}?token=${encodeURIComponent(token)}`)
 })
 
 test('socket disconnects when its maximum age is reached', async () => {
-  const token = await makeFreshToken('short-lived-socket-user')
+  const token = await makeFreshToken('00000000-0000-4000-8000-000000000009')
   const socket = await openSocket(baseUrl, { auth: { token } })
   const disconnectReason = new Promise<string>((resolve) => {
     socket.once('disconnect', (reason) => resolve(reason))

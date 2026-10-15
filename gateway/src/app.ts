@@ -62,6 +62,11 @@ const createServiceProxy = (pathFilter: string, target: string, ws: boolean = fa
                 if (req.headers['x-user-role']) proxyReq.setHeader('x-user-role', req.headers['x-user-role'] as string)
                 if (req.headers['x-request-id']) proxyReq.setHeader('x-request-id', req.headers['x-request-id'] as string)
 
+                // 3. Keep service credentials out of public proxy requests.
+                // Public requests keep their signed user identity; shared service
+                // credentials must never be injected into an external request.
+                proxyReq.removeHeader('x-internal-key')
+
                 // LƯU Ý BẢO MẬT: ĐÃ XÓA BỎ HOÀN TOÀN cờ tĩnh cũ proxyReq.setHeader('x-gateway-verified', 'true')
             },
             error: (err, req, res) => {

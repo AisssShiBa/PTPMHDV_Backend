@@ -9,8 +9,8 @@
         "db:push": "prisma db push",
         "db:generate": "prisma generate",
         "postinstall": "prisma generate",
-        "test": "tsx --test tests/auth.test.ts tests/notificationRoutes.test.ts tests/socket.test.ts tests/notificationInbox.test.ts",
-        "vendor:auth": "node scripts/vendor-auth.mjs",
+        "test": "tsx --test tests/*.test.ts",
+        "typecheck": "tsc --noEmit",
         "socket:smoke": "tsx scripts/socket-smoke.ts"
     },
     "keywords": [],
@@ -25,7 +25,7 @@
         "cors": "^2.8.6",
         "dotenv": "^17.4.2",
         "express": "^5.2.1",
-        "finvault-internal-auth": "file:vendor/finvault-internal-auth-1.0.0.tgz",
+        "finvault-internal-auth": "file:../../packages/finvault-internal-auth",
         "jsonwebtoken": "^9.0.3",
         "prisma": "^6.19.3",
         "socket.io": "^4.8.3"

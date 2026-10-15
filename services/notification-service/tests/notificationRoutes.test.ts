@@ -6,8 +6,8 @@ import { createTestGatewayToken } from 'finvault-internal-auth'
 import { prisma } from '../src/config/prisma'
 import app from '../src/app'
 
-const userA = `notification-user-a-${randomUUID()}`
-const userB = `notification-user-b-${randomUUID()}`
+const userA = randomUUID()
+const userB = randomUUID()
 const tokenA = createTestGatewayToken(userA)
 let server: ReturnType<typeof app.listen>
 let baseUrl: string
