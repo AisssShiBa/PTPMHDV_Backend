@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { prisma } from '../src/config/prisma'
-import { parseEvent } from '../src/services/rabbitmqConsumer'
+import { decideRetry, parseEvent } from '../src/services/rabbitmqConsumer'
 import {
   ingestNotification,
   isNotificationType,
@@ -29,6 +29,35 @@ test('consumer uses body.eventId before AMQP messageId', () => {
   assert.equal(isNotificationType('KYC_TIER_CHANGED'), true)
 })
 
+test('consumer parses a flat event and falls back to AMQP messageId', () => {
+  const event = parseEvent({
+    content: Buffer.from(JSON.stringify(notificationPayload)),
+    properties: { messageId: 'flat-message-id' }
+  })
+
+  assert.equal(event.eventId, 'flat-message-id')
+  assert.equal(event.userId, notificationPayload.userId)
+  assert.equal(event.type, notificationPayload.type)
+  assert.equal(event.message, notificationPayload.message)
+})
+
+test('consumer parses an envelope event using its eventType and data', () => {
+  const event = parseEvent({
+    content: Buffer.from(JSON.stringify({
+      eventId: 'envelope-event-id',
+      eventType: 'PAYMENT_EXPIRED',
+      eventVersion: 1,
+      occurredAt: new Date().toISOString(),
+      data: notificationPayload
+    })),
+    properties: { messageId: 'amqp-message-id' }
+  })
+
+  assert.equal(event.eventId, 'envelope-event-id')
+  assert.equal(event.type, 'PAYMENT_EXPIRED')
+  assert.equal(event.userId, notificationPayload.userId)
+})
+
 test('consumer falls back to AMQP messageId when body.eventId is missing', () => {
   const event = parseEvent({
     content: Buffer.from(JSON.stringify({ payload: notificationPayload })),
@@ -36,6 +65,26 @@ test('consumer falls back to AMQP messageId when body.eventId is missing', () =>
   })
 
   assert.equal(event.eventId, 'amqp-message-id')
+})
+
+test('consumer rejects an event without a user ID', () => {
+  assert.throws(
+    () => parseEvent({
+      content: Buffer.from(JSON.stringify({
+        type: 'PAYMENT_EXPIRED',
+        message: 'Payment expired'
+      })),
+      properties: {}
+    }),
+    { name: 'InvalidNotificationEventError' }
+  )
+})
+
+test('temporary failures retry three times before the fourth delivery goes to DLQ', () => {
+  assert.deepEqual(decideRetry(0), { action: 'retry', retryCount: 1 })
+  assert.deepEqual(decideRetry(1), { action: 'retry', retryCount: 2 })
+  assert.deepEqual(decideRetry(2), { action: 'retry', retryCount: 3 })
+  assert.deepEqual(decideRetry(3), { action: 'dead-letter' })
 })
 
 test('notification inbox deduplicates identical event deliveries', async () => {
@@ -62,6 +111,29 @@ test('notification inbox deduplicates identical event deliveries', async () => {
       await prisma.notificationInbox.deleteMany({ where: { eventId } })
       await prisma.notification.deleteMany({ where: { eventId } })
     }
+  }
+})
+
+test('notification inbox deduplicates twenty concurrent deliveries', async () => {
+  const eventId = `notification-event-${randomUUID()}`
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        ingestNotification({
+          ...notificationPayload,
+          eventId,
+          source: 'payment.events'
+        })
+      )
+    )
+
+    assert.equal(results.filter((result) => !result.duplicate).length, 1)
+    assert.equal(results.filter((result) => result.duplicate).length, 19)
+    assert.equal(await prisma.notification.count({ where: { eventId } }), 1)
+    assert.equal(await prisma.notificationInbox.count({ where: { eventId } }), 1)
+  } finally {
+    await prisma.notificationInbox.deleteMany({ where: { eventId } })
+    await prisma.notification.deleteMany({ where: { eventId } })
   }
 })
 

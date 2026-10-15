@@ -17,5 +17,8 @@ npm test
 The database must be running and reachable before applying migrations or testing.
 `npm test` runs auth, notification route, socket, and inbox tests.
 The current tests do not connect to RabbitMQ; the consumer broker is not required.
-If later broker integration tests are added, start RabbitMQ and configure
-`RABBITMQ_URL` before running `npm test`.
+For a manual broker smoke test, start RabbitMQ, configure `RABBITMQ_URL`, run
+`npx tsx scripts/publish-test-event.ts`, and observe one notification/socket
+event for its two publishes. The script uses a fixed event ID; set
+`NOTIFICATION_TEST_EVENT_ID` to a new value for an independent run.
+Malformed broker messages are dead-lettered to `notification-service.dlq`.

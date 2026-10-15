@@ -47,10 +47,14 @@ export const createNotification = async (req: Request, res: Response) => {
       return res.status(200).json({ success: true, data: null, duplicate: true })
     }
     if (result.notification) {
-      notificationIO?.to(`user:${userId}`).emit('notification:new', result.notification)
+      try {
+        notificationIO?.to(`user:${userId}`).emit('notification:new', result.notification)
+      } catch (error) {
+        console.error('[Socket] Không thể gửi notification:new:', error)
+      }
     }
     return res.status(201).json({
-      message: 'Tạo thông báo thành công',
+      success: true,
       data: result.notification
     })
   } catch (error) {

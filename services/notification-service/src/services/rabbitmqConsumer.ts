@@ -10,6 +10,7 @@ import {
 
 const exchanges = ['wallet.events', 'payment.events', 'kyc.events']
 const deadLetterQueue = 'notification-service.dlq'
+const deadLetterExchange = 'notification.dlx'
 const maxRetries = 3
 
 export type ParsedNotificationEvent = {
@@ -32,6 +33,15 @@ export class InvalidNotificationEventError extends Error {
     this.name = 'InvalidNotificationEventError'
   }
 }
+
+export type RetryDecision =
+  | { action: 'retry'; retryCount: number }
+  | { action: 'dead-letter' }
+
+export const decideRetry = (retryCount: number): RetryDecision =>
+  retryCount >= maxRetries
+    ? { action: 'dead-letter' }
+    : { action: 'retry', retryCount: retryCount + 1 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -85,7 +95,8 @@ const republishForRetry = (
   channel: ConfirmChannel,
   queueName: string,
   message: ConsumeMessage,
-  retryCount: number
+  nextRetryCount: number,
+  source: string
 ) =>
   new Promise<void>((resolve, reject) => {
     channel.publish(
@@ -94,33 +105,25 @@ const republishForRetry = (
       message.content,
       {
         ...message.properties,
-        headers: { ...message.properties.headers, 'x-retry-count': retryCount + 1 },
+        headers: {
+          ...message.properties.headers,
+          'x-retry-count': nextRetryCount,
+          'x-notification-source': source
+        },
         persistent: true
       },
       (error) => (error ? reject(error) : resolve())
     )
   })
 
-const deadLetter = async (channel: ConfirmChannel, message: ConsumeMessage, reason: string) => {
+const deadLetter = (channel: ConfirmChannel, message: ConsumeMessage, reason: string) => {
   console.error(`[RabbitMQ] Đưa message từ ${message.fields.exchange} vào DLQ: ${reason}`)
-  try {
-    await new Promise<void>((resolve, reject) => {
-      channel.sendToQueue(
-        deadLetterQueue,
-        message.content,
-        {
-          ...message.properties,
-          headers: { ...message.properties.headers, 'x-dead-letter-reason': reason },
-          persistent: true
-        },
-        (error) => (error ? reject(error) : resolve())
-      )
-    })
-    channel.ack(message)
-  } catch (error) {
-    console.error('[RabbitMQ] Không thể ghi message vào DLQ:', error)
-    channel.nack(message, false, true)
-  }
+  channel.nack(message, false, false)
+}
+
+const sourceFrom = (message: ConsumeMessage) => {
+  const source = message.properties.headers?.['x-notification-source']
+  return typeof source === 'string' ? source : message.fields.exchange
 }
 
 const handleMessage = async (
@@ -132,7 +135,7 @@ const handleMessage = async (
   try {
     event = parseEvent(message)
   } catch (error) {
-    await deadLetter(
+    deadLetter(
       channel,
       message,
       error instanceof Error ? error.message : 'Invalid notification event'
@@ -143,10 +146,14 @@ const handleMessage = async (
   try {
     const result = await ingestNotification({
       ...event,
-      source: message.fields.exchange
+      source: sourceFrom(message)
     })
     if (!result.duplicate && result.notification) {
-      notificationIO?.to(`user:${event.userId}`).emit('notification:new', result.notification)
+      try {
+        notificationIO?.to(`user:${event.userId}`).emit('notification:new', result.notification)
+      } catch (error) {
+        console.error('[Socket] Không thể gửi notification:new:', error)
+      }
     }
     channel.ack(message)
   } catch (error) {
@@ -154,22 +161,23 @@ const handleMessage = async (
       error instanceof NotificationIngestError &&
       (error.code === 'EVENT_CONFLICT' || error.code === 'INVALID_NOTIFICATION')
     ) {
-      await deadLetter(channel, message, error.code)
+      deadLetter(channel, message, error.code)
       return
     }
 
     const retryCount = retryCountFrom(message)
-    if (retryCount >= maxRetries) {
-      await deadLetter(channel, message, 'Maximum retry count exceeded')
+    const decision = decideRetry(retryCount)
+    if (decision.action === 'dead-letter') {
+      deadLetter(channel, message, 'Maximum retry count exceeded')
       return
     }
 
     try {
-      await republishForRetry(channel, queueName, message, retryCount)
+      await republishForRetry(channel, queueName, message, decision.retryCount, sourceFrom(message))
       channel.ack(message)
     } catch (retryError) {
       console.error('[RabbitMQ] Không thể phát lại message để retry:', retryError)
-      channel.nack(message, false, true)
+      deadLetter(channel, message, 'Unable to republish for retry')
     }
   }
 }
@@ -184,11 +192,17 @@ export const startRabbitMqConsumer = async () => {
     const connection = await amqp.connect(env.rabbitmqUrl)
     const channel = await connection.createConfirmChannel()
 
+    await channel.assertExchange(deadLetterExchange, 'fanout', { durable: true })
     await channel.assertQueue(deadLetterQueue, { durable: true })
+    await channel.bindQueue(deadLetterQueue, deadLetterExchange, '')
 
     for (const exchange of exchanges) {
       await channel.assertExchange(exchange, 'topic', { durable: true })
-      const queue = await channel.assertQueue(`${env.rabbitmqQueue}.${exchange}`, { durable: true })
+      // Legacy queues need to be deleted manually after consumers have moved to these versioned queues.
+      const queue = await channel.assertQueue(`${env.rabbitmqQueue}.v2.${exchange}`, {
+        durable: true,
+        deadLetterExchange
+      })
       await channel.bindQueue(queue.queue, exchange, '#')
       await channel.consume(queue.queue, async (message) => {
         if (!message) return
@@ -196,7 +210,7 @@ export const startRabbitMqConsumer = async () => {
           await handleMessage(channel, queue.queue, message)
         } catch (error) {
           console.error('[RabbitMQ] Lỗi không mong đợi khi xử lý message:', error)
-          channel.nack(message, false, true)
+          channel.nack(message, false, false)
         }
       })
     }
