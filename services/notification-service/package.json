@@ -25,6 +25,7 @@
         "cors": "^2.8.6",
         "dotenv": "^17.4.2",
         "express": "^5.2.1",
+        "finvault-events": "file:../../packages/finvault-events",
         "finvault-internal-auth": "file:../../packages/finvault-internal-auth",
         "jsonwebtoken": "^9.0.3",
         "prisma": "^6.19.3",
