@@ -3,9 +3,9 @@ import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
 import type { Channel, ConfirmChannel, ConsumeMessage } from 'amqplib'
 import { publishConfirmed } from '../src/broker'
-import { assertConsumerTopology, NonRetryableError, processConsumerMessage } from '../src/consumer'
+import { assertConsumerTopology, createConsumer, NonRetryableError, processConsumerMessage } from '../src/consumer'
 import { createInMemoryInbox } from '../src/inbox'
-import type { EventHandler } from '../src/inbox'
+import type { EventHandler, InboxAdapter } from '../src/inbox'
 import { addAmounts, compareAmounts } from '../src/money'
 import {
   eventPayloadHash,
@@ -193,6 +193,21 @@ test('confirmed publish resolves only after confirm and rejects nack, timeout, r
   await assert.rejects(pending, error => (error as { code?: string }).code === 'CHANNEL_CLOSED')
 })
 
+test('concurrent confirmed publishes share one return and close listener per channel', async () => {
+  const channel = new FakeConfirmChannel()
+  channel.manualConfirm = true
+  const pending = Array.from({ length: 25 }, (_, index) =>
+    publishConfirmed(confirmChannel(channel), '', 'queue', Buffer.from('{}'), {
+      messageId: `event-${index}`
+    }, 1000))
+  assert.equal(channel.listenerCount('return'), 1)
+  assert.equal(channel.listenerCount('close'), 1)
+  for (let index = 0; index < pending.length; index += 1) channel.confirmNext()
+  await Promise.all(pending)
+  assert.equal(channel.listenerCount('return'), 1)
+  assert.equal(channel.listenerCount('close'), 1)
+})
+
 test('consumer topology declares durable queues and exact bindings', async () => {
   const calls: unknown[][] = []
   const fake = {
@@ -200,15 +215,39 @@ test('consumer topology declares durable queues and exact bindings', async () =>
     assertQueue: async (...args: unknown[]) => { calls.push(['queue', ...args]) },
     bindQueue: async (...args: unknown[]) => { calls.push(['bind', ...args]) }
   } as unknown as Channel
-  await assertConsumerTopology(fake, { queue: 'unit.finvault.events', bindings: ['user.#', 'payment.#'] })
+  await assertConsumerTopology(fake, {
+    queue: 'unit.finvault.events',
+    bindings: ['user.#', 'payment.#'],
+    retryDelaysMs: [1000, 5000, 1000]
+  })
   assert.deepEqual(calls.filter(([kind]) => kind === 'bind'), [
     ['bind', 'unit.finvault.events', 'finvault.events', 'user.#'],
     ['bind', 'unit.finvault.events', 'finvault.events', 'payment.#']
   ])
   assert.deepEqual(calls.filter(([kind]) => kind === 'queue').map(call => call[1]), [
     'unit.finvault.events',
-    'unit.finvault.events.retry',
+    'unit.finvault.events.retry.1000',
+    'unit.finvault.events.retry.5000',
     'unit.finvault.events.dlq'
+  ])
+  assert.deepEqual(calls.filter(([kind, name]) => kind === 'queue' && name !== 'unit.finvault.events.dlq')
+    .slice(1).map(call => call[2]), [
+    {
+      durable: true,
+      arguments: {
+        'x-message-ttl': 1000,
+        'x-dead-letter-exchange': '',
+        'x-dead-letter-routing-key': 'unit.finvault.events'
+      }
+    },
+    {
+      durable: true,
+      arguments: {
+        'x-message-ttl': 5000,
+        'x-dead-letter-exchange': '',
+        'x-dead-letter-routing-key': 'unit.finvault.events'
+      }
+    }
   ])
 })
 
@@ -258,8 +297,8 @@ test('consumer confirms TTL retry before ack, dead-letters permanent failures, a
   assert.equal(failed.acked, 0, 'original delivery must remain unacked before retry confirm')
   failed.confirmNext()
   await retrying
-  assert.equal(failed.published[0].key, 'unit.finvault.events.retry')
-  assert.equal(failed.published[0].options.expiration, '77')
+  assert.equal(failed.published[0].key, 'unit.finvault.events.retry.77')
+  assert.equal(failed.published[0].options.expiration, undefined)
   assert.equal((failed.published[0].options.headers as Record<string, unknown>)['x-retry-count'], 1)
   assert.equal('Authorization' in (failed.published[0].options.headers as Record<string, unknown>), false)
   assert.equal(failed.acked, 1)
@@ -275,6 +314,7 @@ test('consumer confirms TTL retry before ack, dead-letters permanent failures, a
   const permanentOptions = consumerOptions(createInMemoryInbox(), {
     'payment.expired': async () => { throw new NonRetryableError('invalid domain state', 'INVALID_STATE') }
   })
+
   await processConsumerMessage(confirmChannel(permanent),
     delivery('payment.expired', { paymentId: 'p3', senderId: 'u1' }), permanentOptions)
   assert.equal((permanent.published[0].options.headers as Record<string, unknown>)['x-dlq-reason'], 'INVALID_STATE')
@@ -292,4 +332,51 @@ test('consumer confirms TTL retry before ack, dead-letters permanent failures, a
   assert.equal(republishFailure.acked, 0)
   assert.deepEqual(republishFailure.nacked, [true])
   assert.ok(logs.includes('RETRY_PUBLISH_FAILED'))
+})
+
+test('ignored events are acknowledged without handler or inbox; missing handlers still dead-letter', async () => {
+  let inboxCalls = 0
+  const infos: Array<{ message: string; context: unknown }> = []
+  const channel = new FakeConfirmChannel()
+  const inbox: InboxAdapter = {
+    async runOnce() {
+      inboxCalls += 1
+      return { status: 'duplicate' as const }
+    }
+  }
+  const options = consumerOptions(inbox, {})
+  options.ignoredEventTypes = ['user.registered']
+  options.logger = { info: (message, context) => infos.push({ message, context }) }
+
+  await processConsumerMessage(confirmChannel(channel),
+    delivery('user.registered', { authUserId: 'auth-1', email: 'a@example.com' }), options)
+  assert.equal(channel.acked, 1)
+  assert.equal(channel.published.length, 0)
+  assert.equal(inboxCalls, 0)
+  assert.deepEqual(infos, [{
+    message: 'Ignoring configured FinVault event',
+    context: { eventId: uuid, eventType: 'user.registered' }
+  }])
+
+  await processConsumerMessage(confirmChannel(channel),
+    delivery('payment.expired', { paymentId: 'p1', senderId: 'u1' }), options)
+  assert.equal(channel.acked, 2)
+  assert.equal(channel.published.at(-1)?.key, 'unit.finvault.events.dlq')
+  assert.equal((channel.published.at(-1)?.options.headers as Record<string, unknown>)['x-dlq-reason'], 'NO_HANDLER')
+
+  await processConsumerMessage(confirmChannel(channel),
+    delivery('unregistered.event', {}), options)
+  assert.equal((channel.published.at(-1)?.options.headers as Record<string, unknown>)['x-dlq-reason'], 'UNKNOWN_EVENT_TYPE')
+})
+
+test('consumer rejects invalid ignored-event configuration', () => {
+  assert.throws(() => createConsumer({
+    ...consumerOptions(createInMemoryInbox(), { 'user.registered': async () => undefined }),
+    ignoredEventTypes: ['user.registered']
+  }), TypeError)
+  for (const ignoredEventTypes of [[''], [3], [null]] as unknown[][]) {
+    const options = consumerOptions(createInMemoryInbox(), {})
+    Reflect.set(options, 'ignoredEventTypes', ignoredEventTypes)
+    assert.throws(() => createConsumer(options), TypeError)
+  }
 })

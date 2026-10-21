@@ -22,6 +22,16 @@ async function waitFor(predicate: () => boolean, timeoutMs = 15000): Promise<voi
   }
 }
 
+async function waitForQueueMessage(channel: ConfirmChannel, queue: string, timeoutMs = 5000): Promise<void> {
+  const started = Date.now()
+  while (Date.now() - started <= timeoutMs) {
+    const result = await channel.checkQueue(queue)
+    if (result.messageCount > 0) return
+    await delay(25)
+  }
+  throw new Error(`Timed out waiting for a message in ${queue}`)
+}
+
 function event(eventId: string, data: unknown): FinvaultEvent {
   return {
     eventId,
@@ -93,6 +103,55 @@ test('RabbitMQ publish, idempotency, retry/DLQ, and reconnect', { skip: !url }, 
     assert.equal(retryDlq.reason, 'MAX_RETRIES_EXCEEDED')
     assert.equal(retryDlq.retryCount, 2, 'application retry header must survive TTL dead-lettering')
     assert.ok(Array.isArray(retryDlq.deaths), 'RabbitMQ should attach x-death history for retry TTL')
+
+    const headOfLineQueue = `integration.finvault.events.head-of-line.${process.pid}`
+    const headOfLineAttempts = new Map<string, number>()
+    let longRetryQueued!: () => void
+    const longRetryQueuedPromise = new Promise<void>(resolve => { longRetryQueued = resolve })
+    let shortRetryStartedAt = 0
+    let shortRetryRedeliveredAt = 0
+    const longRetryId = randomUUID()
+    const shortRetryId = randomUUID()
+    const headOfLineConsumer = createConsumer({
+      url: url!,
+      exchange,
+      queue: headOfLineQueue,
+      bindings: ['payment.expired'],
+      inbox: createInMemoryInbox(),
+      maxRetries: 3,
+      retryDelaysMs: [500, 6000],
+      handlers: {
+        'payment.expired': async received => {
+          const attempts = (headOfLineAttempts.get(received.eventId) ?? 0) + 1
+          headOfLineAttempts.set(received.eventId, attempts)
+          if (received.eventId === longRetryId && attempts <= 2) {
+            if (attempts === 2) longRetryQueued()
+            throw new Error('deliberate long retry')
+          }
+          if (received.eventId === shortRetryId) {
+            if (attempts === 1) {
+              shortRetryStartedAt = Date.now()
+              throw new Error('deliberate short retry')
+            }
+            shortRetryRedeliveredAt = Date.now()
+          }
+        }
+      }
+    })
+    try {
+      await headOfLineConsumer.start()
+      await publisher.publish(event(longRetryId, { paymentId: 'p-long-retry', senderId: 'u1' }))
+      await longRetryQueuedPromise
+      await waitForQueueMessage(observerChannel, `${headOfLineQueue}.retry.6000`)
+      await publisher.publish(event(shortRetryId, { paymentId: 'p-short-retry', senderId: 'u1' }))
+      await waitFor(() => shortRetryRedeliveredAt > 0, 10000)
+      assert.ok(
+        shortRetryRedeliveredAt - shortRetryStartedAt < 3000,
+        `500ms retry was delayed ${shortRetryRedeliveredAt - shortRetryStartedAt}ms behind the 6000ms retry`
+      )
+    } finally {
+      await headOfLineConsumer.stop()
+    }
 
     const unknown = {
       eventId: randomUUID(),
