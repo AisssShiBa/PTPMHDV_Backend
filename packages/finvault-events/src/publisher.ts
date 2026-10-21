@@ -28,7 +28,12 @@ export function createPublisher(options: PublisherOptions): EventPublisher {
   let closed = false
   const pending = new Set<(error: Error) => void>()
 
-  const discardConnection = (error: Error) => {
+  const discardConnection = (error: Error, sourceConnection: ChannelModel, sourceChannel?: ConfirmChannel) => {
+    if (sourceChannel) {
+      if (connection !== sourceConnection || channel !== sourceChannel) return
+    } else if (connection !== sourceConnection) {
+      return
+    }
     for (const reject of pending) reject(error)
     pending.clear()
     channel = undefined
@@ -48,19 +53,30 @@ export function createPublisher(options: PublisherOptions): EventPublisher {
         let nextChannel: ConfirmChannel | undefined
         try {
           if (closed) throw new Error('Publisher is closed')
-          nextConnection = await amqp.connect(options.url)
-          nextConnection.on('error', () => undefined)
-          nextConnection.once('close', () => discardConnection(new BrokerPublishError('Broker connection closed', 'CONNECTION_CLOSED')))
-          nextChannel = await nextConnection.createConfirmChannel()
-          nextChannel.on('error', () => undefined)
-          nextChannel.once('close', () => discardConnection(new BrokerPublishError('Publisher channel closed', 'CHANNEL_CLOSED')))
-          await nextChannel.assertExchange(exchange, 'topic', { durable: true })
+          const establishedConnection = await amqp.connect(options.url)
+          nextConnection = establishedConnection
+          establishedConnection.on('error', () => undefined)
+          establishedConnection.once('close', () => discardConnection(
+            new BrokerPublishError('Broker connection closed', 'CONNECTION_CLOSED'),
+            establishedConnection
+          ))
+          const establishedChannel = await establishedConnection.createConfirmChannel()
+          nextChannel = establishedChannel
+          establishedChannel.on('error', () => undefined)
+          establishedChannel.once('close', () => discardConnection(
+            new BrokerPublishError('Publisher channel closed', 'CHANNEL_CLOSED'),
+            establishedConnection,
+            establishedChannel
+          ))
+          await establishedChannel.assertExchange(exchange, 'topic', { durable: true })
           if (closed) throw new Error('Publisher is closed')
-          connection = nextConnection
-          channel = nextChannel
-          return nextChannel
+          connection = establishedConnection
+          channel = establishedChannel
+          return establishedChannel
         } catch (error) {
           lastError = error
+          if (connection === nextConnection) connection = undefined
+          if (channel === nextChannel) channel = undefined
           await nextChannel?.close().catch(() => {})
           await nextConnection?.close().catch(() => {})
         }

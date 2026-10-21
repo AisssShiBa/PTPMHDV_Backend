@@ -26,6 +26,7 @@ export interface ConsumerOptions {
   prefetch?: number
   maxRetries?: number
   retryDelaysMs?: number[]
+  ignoredEventTypes?: string[]
   confirmTimeoutMs?: number
   reconnectDelayMs?: number
   allowLegacyKycUpdated?: boolean
@@ -41,21 +42,25 @@ export interface EventConsumer {
 
 export async function assertConsumerTopology(
   channel: Channel,
-  options: Pick<ConsumerOptions, 'queue' | 'bindings' | 'exchange'>
+  options: Pick<ConsumerOptions, 'queue' | 'bindings' | 'exchange' | 'retryDelaysMs'>
 ): Promise<void> {
   const exchange = options.exchange ?? 'finvault.events'
+  const retryDelaysMs = options.retryDelaysMs ?? [1000, 5000, 30000]
   await channel.assertExchange(exchange, 'topic', { durable: true })
   await channel.assertQueue(options.queue, { durable: true })
   for (const binding of options.bindings) {
     await channel.bindQueue(options.queue, exchange, binding)
   }
-  await channel.assertQueue(`${options.queue}.retry`, {
-    durable: true,
-    arguments: {
-      'x-dead-letter-exchange': '',
-      'x-dead-letter-routing-key': options.queue
-    }
-  })
+  for (const delayMs of new Set(retryDelaysMs)) {
+    await channel.assertQueue(`${options.queue}.retry.${delayMs}`, {
+      durable: true,
+      arguments: {
+        'x-message-ttl': delayMs,
+        'x-dead-letter-exchange': '',
+        'x-dead-letter-routing-key': options.queue
+      }
+    })
+  }
   await channel.assertQueue(`${options.queue}.dlq`, { durable: true })
 }
 
@@ -89,13 +94,17 @@ function logError(logger: EventLogger | undefined, message: string, context: { e
   else console.error('[finvault-events]', message, context)
 }
 
+function logInfo(logger: EventLogger | undefined, message: string, context: { eventId: string; eventType: string }): void {
+  if (logger?.info) logger.info(message, context)
+  else console.info('[finvault-events]', message, context)
+}
+
 async function publishToQueue(
   channel: ConfirmChannel,
   queue: string,
   message: ConsumeMessage,
   headers: Record<string, unknown>,
-  timeoutMs: number,
-  expiration?: string
+  timeoutMs: number
 ): Promise<void> {
   await publishConfirmed(channel, '', queue, message.content, {
     persistent: true,
@@ -103,8 +112,7 @@ async function publishToQueue(
     type: message.properties.type,
     messageId: message.properties.messageId ?? randomUUID(),
     correlationId: message.properties.correlationId,
-    headers: { ...forwardedHeaders(message.properties.headers), ...headers },
-    expiration
+    headers: { ...forwardedHeaders(message.properties.headers), ...headers }
   } satisfies Options.Publish, timeoutMs)
 }
 
@@ -151,6 +159,14 @@ export async function processConsumerMessage(
   }
 
   const handler = options.handlers[event.eventType]
+  if (options.ignoredEventTypes?.includes(event.eventType)) {
+    logInfo(options.logger, 'Ignoring configured FinVault event', {
+      eventId: event.eventId,
+      eventType: event.eventType
+    })
+    channel.ack(message)
+    return
+  }
   if (!handler) {
     await deadLetter(channel, options, message, 'NO_HANDLER', count, confirmTimeoutMs)
     return
@@ -182,11 +198,11 @@ export async function processConsumerMessage(
     }
     const delayMs = retryDelaysMs[Math.min(count, retryDelaysMs.length - 1)]
     try {
-      await publishToQueue(channel, `${options.queue}.retry`, message, {
+      await publishToQueue(channel, `${options.queue}.retry.${delayMs}`, message, {
         'x-retry-count': count + 1,
         'x-original-routing-key': safeHeaderString(message.properties.headers?.['x-original-routing-key']) ||
           message.fields.routingKey
-      }, confirmTimeoutMs, String(delayMs))
+      }, confirmTimeoutMs)
       channel.ack(message)
     } catch (publishError) {
       logError(options.logger, publishError instanceof BrokerPublishError ? publishError.code : 'RETRY_PUBLISH_FAILED', {
@@ -210,6 +226,16 @@ function validateConsumerOptions(options: ConsumerOptions): void {
   }
   if (options.retryDelaysMs?.some(value => !Number.isInteger(value) || value < 1)) {
     throw new TypeError('Retry delays must be positive integer milliseconds')
+  }
+  if (options.ignoredEventTypes !== undefined) {
+    if (!Array.isArray(options.ignoredEventTypes) ||
+        options.ignoredEventTypes.some(eventType =>
+          typeof eventType !== 'string' || eventType.trim().length === 0)) {
+      throw new TypeError('ignoredEventTypes must contain only non-empty strings')
+    }
+    if (options.ignoredEventTypes.some(eventType => Object.prototype.hasOwnProperty.call(options.handlers, eventType))) {
+      throw new TypeError('An event type cannot have both a handler and be ignored')
+    }
   }
   if (options.reconnectDelayMs !== undefined &&
       (!Number.isInteger(options.reconnectDelayMs) || options.reconnectDelayMs < 1)) {

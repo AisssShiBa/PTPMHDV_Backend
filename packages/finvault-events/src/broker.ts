@@ -13,6 +13,38 @@ export class BrokerPublishError extends Error {
   }
 }
 
+interface PendingConfirmation {
+  messageId: string
+  finish: (error?: Error | null) => void
+  markReturned: () => void
+}
+
+interface ConfirmationState {
+  pending: Set<PendingConfirmation>
+}
+
+const confirmationStates = new WeakMap<ConfirmChannel, ConfirmationState>()
+
+function getConfirmationState(channel: ConfirmChannel): ConfirmationState {
+  const existing = confirmationStates.get(channel)
+  if (existing) return existing
+
+  const state: ConfirmationState = { pending: new Set() }
+  confirmationStates.set(channel, state)
+  channel.on('return', message => {
+    const messageId = message.properties.messageId
+    for (const pending of state.pending) {
+      if (pending.messageId === messageId) pending.markReturned()
+    }
+  })
+  channel.on('close', () => {
+    for (const pending of [...state.pending]) {
+      pending.finish(new BrokerPublishError('Publisher channel closed before confirmation', 'CHANNEL_CLOSED'))
+    }
+  })
+  return state
+}
+
 export function publishConfirmed(
   channel: ConfirmChannel,
   exchange: string,
@@ -22,6 +54,7 @@ export function publishConfirmed(
   timeoutMs: number
 ): Promise<void> {
   const messageId = options.messageId ?? randomUUID()
+  const state = getConfirmationState(channel)
   return new Promise<void>((resolve, reject) => {
     let settled = false
     let returned = false
@@ -29,20 +62,19 @@ export function publishConfirmed(
       if (settled) return
       settled = true
       clearTimeout(timer)
-      channel.removeListener('return', onReturn)
-      channel.removeListener('close', onClose)
+      state.pending.delete(pending)
       if (error) reject(error)
       else if (returned) reject(new BrokerPublishError('Broker returned an unroutable event', 'UNROUTABLE_EVENT'))
       else resolve()
     }
-    const onReturn = (message: { properties: { messageId?: string } }) => {
-      if (message.properties.messageId === messageId) returned = true
+    const pending: PendingConfirmation = {
+      messageId,
+      finish,
+      markReturned: () => { returned = true }
     }
-    const onClose = () => finish(new BrokerPublishError('Publisher channel closed before confirmation', 'CHANNEL_CLOSED'))
     const timer = setTimeout(() => finish(new BrokerPublishError('Timed out waiting for broker confirmation', 'PUBLISH_TIMEOUT')), timeoutMs)
 
-    channel.on('return', onReturn)
-    channel.once('close', onClose)
+    state.pending.add(pending)
     try {
       channel.publish(exchange, routingKey, content, { ...options, messageId, mandatory: true }, error => finish(error))
     } catch (error) {

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { test } from 'node:test'
-import type { Channel, ConfirmChannel, ConsumeMessage } from 'amqplib'
+import { mock, test } from 'node:test'
+import amqp, { type Channel, type ChannelModel, type ConfirmChannel, type ConsumeMessage, type Options } from 'amqplib'
 import { publishConfirmed } from '../src/broker'
-import { assertConsumerTopology, NonRetryableError, processConsumerMessage } from '../src/consumer'
+import { assertConsumerTopology, createConsumer, NonRetryableError, processConsumerMessage } from '../src/consumer'
 import { createInMemoryInbox } from '../src/inbox'
-import type { EventHandler } from '../src/inbox'
+import type { EventHandler, InboxAdapter } from '../src/inbox'
+import { createPublisher } from '../src/publisher'
 import { addAmounts, compareAmounts } from '../src/money'
 import {
   eventPayloadHash,
@@ -69,6 +70,59 @@ class FakeConfirmChannel extends EventEmitter {
 
   confirmNext(): void {
     this.pendingConfirms.shift()?.()
+  }
+}
+
+class FakePublisherChannel extends EventEmitter {
+  assertExchangeStarted!: () => void
+  assertExchangeGate?: Promise<void>
+  failAssertExchange = false
+  publishCalls = 0
+  closeCalls = 0
+
+  async assertExchange(): Promise<void> {
+    this.assertExchangeStarted?.()
+    if (this.assertExchangeGate) await this.assertExchangeGate
+    if (this.failAssertExchange) throw new Error('assertExchange failed')
+  }
+
+  publish(
+    _exchange: string,
+    _routingKey: string,
+    _content: Buffer,
+    _options: Options.Publish,
+    callback?: (error: Error | null) => void
+  ): boolean {
+    this.publishCalls += 1
+    queueMicrotask(() => callback?.(null))
+    return true
+  }
+
+  async close(): Promise<void> {
+    this.closeCalls += 1
+    this.emit('close')
+  }
+}
+
+class FakePublisherConnection extends EventEmitter {
+  closeCalls = 0
+  lateClose?: () => void
+
+  constructor(readonly channel: FakePublisherChannel) {
+    super()
+  }
+
+  async createConfirmChannel(): Promise<FakePublisherChannel> {
+    return this.channel
+  }
+
+  async close(): Promise<void> {
+    this.closeCalls += 1
+    this.emit('close')
+  }
+
+  fireLateClose(): void {
+    this.lateClose?.()
   }
 }
 
@@ -193,6 +247,21 @@ test('confirmed publish resolves only after confirm and rejects nack, timeout, r
   await assert.rejects(pending, error => (error as { code?: string }).code === 'CHANNEL_CLOSED')
 })
 
+test('concurrent confirmed publishes share one return and close listener per channel', async () => {
+  const channel = new FakeConfirmChannel()
+  channel.manualConfirm = true
+  const pending = Array.from({ length: 25 }, (_, index) =>
+    publishConfirmed(confirmChannel(channel), '', 'queue', Buffer.from('{}'), {
+      messageId: `event-${index}`
+    }, 1000))
+  assert.equal(channel.listenerCount('return'), 1)
+  assert.equal(channel.listenerCount('close'), 1)
+  for (let index = 0; index < pending.length; index += 1) channel.confirmNext()
+  await Promise.all(pending)
+  assert.equal(channel.listenerCount('return'), 1)
+  assert.equal(channel.listenerCount('close'), 1)
+})
+
 test('consumer topology declares durable queues and exact bindings', async () => {
   const calls: unknown[][] = []
   const fake = {
@@ -200,15 +269,39 @@ test('consumer topology declares durable queues and exact bindings', async () =>
     assertQueue: async (...args: unknown[]) => { calls.push(['queue', ...args]) },
     bindQueue: async (...args: unknown[]) => { calls.push(['bind', ...args]) }
   } as unknown as Channel
-  await assertConsumerTopology(fake, { queue: 'unit.finvault.events', bindings: ['user.#', 'payment.#'] })
+  await assertConsumerTopology(fake, {
+    queue: 'unit.finvault.events',
+    bindings: ['user.#', 'payment.#'],
+    retryDelaysMs: [1000, 5000, 1000]
+  })
   assert.deepEqual(calls.filter(([kind]) => kind === 'bind'), [
     ['bind', 'unit.finvault.events', 'finvault.events', 'user.#'],
     ['bind', 'unit.finvault.events', 'finvault.events', 'payment.#']
   ])
   assert.deepEqual(calls.filter(([kind]) => kind === 'queue').map(call => call[1]), [
     'unit.finvault.events',
-    'unit.finvault.events.retry',
+    'unit.finvault.events.retry.1000',
+    'unit.finvault.events.retry.5000',
     'unit.finvault.events.dlq'
+  ])
+  assert.deepEqual(calls.filter(([kind, name]) => kind === 'queue' && name !== 'unit.finvault.events.dlq')
+    .slice(1).map(call => call[2]), [
+    {
+      durable: true,
+      arguments: {
+        'x-message-ttl': 1000,
+        'x-dead-letter-exchange': '',
+        'x-dead-letter-routing-key': 'unit.finvault.events'
+      }
+    },
+    {
+      durable: true,
+      arguments: {
+        'x-message-ttl': 5000,
+        'x-dead-letter-exchange': '',
+        'x-dead-letter-routing-key': 'unit.finvault.events'
+      }
+    }
   ])
 })
 
@@ -258,8 +351,8 @@ test('consumer confirms TTL retry before ack, dead-letters permanent failures, a
   assert.equal(failed.acked, 0, 'original delivery must remain unacked before retry confirm')
   failed.confirmNext()
   await retrying
-  assert.equal(failed.published[0].key, 'unit.finvault.events.retry')
-  assert.equal(failed.published[0].options.expiration, '77')
+  assert.equal(failed.published[0].key, 'unit.finvault.events.retry.77')
+  assert.equal(failed.published[0].options.expiration, undefined)
   assert.equal((failed.published[0].options.headers as Record<string, unknown>)['x-retry-count'], 1)
   assert.equal('Authorization' in (failed.published[0].options.headers as Record<string, unknown>), false)
   assert.equal(failed.acked, 1)
@@ -275,6 +368,7 @@ test('consumer confirms TTL retry before ack, dead-letters permanent failures, a
   const permanentOptions = consumerOptions(createInMemoryInbox(), {
     'payment.expired': async () => { throw new NonRetryableError('invalid domain state', 'INVALID_STATE') }
   })
+
   await processConsumerMessage(confirmChannel(permanent),
     delivery('payment.expired', { paymentId: 'p3', senderId: 'u1' }), permanentOptions)
   assert.equal((permanent.published[0].options.headers as Record<string, unknown>)['x-dlq-reason'], 'INVALID_STATE')
@@ -292,4 +386,130 @@ test('consumer confirms TTL retry before ack, dead-letters permanent failures, a
   assert.equal(republishFailure.acked, 0)
   assert.deepEqual(republishFailure.nacked, [true])
   assert.ok(logs.includes('RETRY_PUBLISH_FAILED'))
+})
+
+test('ignored events are acknowledged without handler or inbox; missing handlers still dead-letter', async () => {
+  let inboxCalls = 0
+  const infos: Array<{ message: string; context: unknown }> = []
+  const channel = new FakeConfirmChannel()
+  const inbox: InboxAdapter = {
+    async runOnce() {
+      inboxCalls += 1
+      return { status: 'duplicate' as const }
+    }
+  }
+  const options = consumerOptions(inbox, {})
+  options.ignoredEventTypes = ['user.registered']
+  options.logger = { info: (message, context) => infos.push({ message, context }) }
+
+  await processConsumerMessage(confirmChannel(channel),
+    delivery('user.registered', { authUserId: 'auth-1', email: 'a@example.com' }), options)
+  assert.equal(channel.acked, 1)
+  assert.equal(channel.published.length, 0)
+  assert.equal(inboxCalls, 0)
+  assert.deepEqual(infos, [{
+    message: 'Ignoring configured FinVault event',
+    context: { eventId: uuid, eventType: 'user.registered' }
+  }])
+
+  await processConsumerMessage(confirmChannel(channel),
+    delivery('payment.expired', { paymentId: 'p1', senderId: 'u1' }), options)
+  assert.equal(channel.acked, 2)
+  assert.equal(channel.published.at(-1)?.key, 'unit.finvault.events.dlq')
+  assert.equal((channel.published.at(-1)?.options.headers as Record<string, unknown>)['x-dlq-reason'], 'NO_HANDLER')
+
+  await processConsumerMessage(confirmChannel(channel),
+    delivery('unregistered.event', {}), options)
+  assert.equal((channel.published.at(-1)?.options.headers as Record<string, unknown>)['x-dlq-reason'], 'UNKNOWN_EVENT_TYPE')
+})
+
+test('consumer rejects invalid ignored-event configuration', () => {
+  assert.throws(() => createConsumer({
+    ...consumerOptions(createInMemoryInbox(), { 'user.registered': async () => undefined }),
+    ignoredEventTypes: ['user.registered']
+  }), TypeError)
+  for (const ignoredEventTypes of [[''], [3], [null]] as unknown[][]) {
+    const options = consumerOptions(createInMemoryInbox(), {})
+    Reflect.set(options, 'ignoredEventTypes', ignoredEventTypes)
+    assert.throws(() => createConsumer(options), TypeError)
+  }
+})
+
+test('publisher shares the initial connection promise until exchange assertion finishes', async () => {
+  let releaseAssert!: () => void
+  const assertGate = new Promise<void>(resolve => { releaseAssert = resolve })
+  let assertStarted!: () => void
+  const started = new Promise<void>(resolve => { assertStarted = resolve })
+  const channel = new FakePublisherChannel()
+  channel.assertExchangeGate = assertGate
+  channel.assertExchangeStarted = assertStarted
+  const connection = new FakePublisherConnection(channel)
+  const connect = mock.method(amqp, 'connect', async () => connection as unknown as ChannelModel)
+  const publisher = createPublisher({ url: 'amqp://publisher-test', confirmTimeoutMs: 1000 })
+  const first = publisher.publish(envelope('payment.expired', { paymentId: 'p1', senderId: 'u1' }))
+
+  await started
+  const second = publisher.publish({
+    ...envelope('payment.expired', { paymentId: 'p2', senderId: 'u2' }),
+    eventId: '2c1e97f9-5668-4319-af59-142c1f353101'
+  })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  const publishedBeforeExchangeReady = channel.publishCalls
+  releaseAssert()
+  const results = await Promise.allSettled([first, second])
+  await publisher.close()
+  connect.mock.restore()
+
+  assert.equal(publishedBeforeExchangeReady, 0, 'publishes must wait for assertExchange')
+  assert.deepEqual(results.map(result => result.status), ['fulfilled', 'fulfilled'])
+})
+
+test('late close from a replaced publisher connection does not discard the new connection', async () => {
+  const channelA = new FakePublisherChannel()
+  const channelB = new FakePublisherChannel()
+  const connectionA = new FakePublisherConnection(channelA)
+  const connectionB = new FakePublisherConnection(channelB)
+  let connections = 0
+  const connect = mock.method(amqp, 'connect', async () => {
+    connections += 1
+    return (connections === 1 ? connectionA : connectionB) as unknown as ChannelModel
+  })
+  const publisher = createPublisher({ url: 'amqp://publisher-test', confirmTimeoutMs: 1000 })
+  await publisher.publish(envelope('payment.expired', { paymentId: 'p1', senderId: 'u1' }))
+  connectionA.lateClose = connectionA.listeners('close')[0] as (() => void) | undefined
+  connectionA.emit('close')
+  await publisher.publish(envelope('payment.expired', { paymentId: 'p2', senderId: 'u1' }))
+  connectionA.fireLateClose()
+  await publisher.publish({
+    ...envelope('payment.expired', { paymentId: 'p3', senderId: 'u1' }),
+    eventId: '8a20cb32-0d76-4a86-9f84-5bb2cb3a7510'
+  })
+
+  assert.equal(connections, 2, 'the next publish must reuse B rather than open connection C')
+  assert.equal(channelB.publishCalls, 2)
+  await publisher.close()
+  connect.mock.restore()
+})
+
+test('publisher closes a connection whose exchange assertion fails, then reconnects successfully', async () => {
+  const failedChannel = new FakePublisherChannel()
+  failedChannel.failAssertExchange = true
+  const failedConnection = new FakePublisherConnection(failedChannel)
+  const successfulChannel = new FakePublisherChannel()
+  const successfulConnection = new FakePublisherConnection(successfulChannel)
+  let connections = 0
+  const connect = mock.method(amqp, 'connect', async () => {
+    connections += 1
+    return (connections === 1 ? failedConnection : successfulConnection) as unknown as ChannelModel
+  })
+  const publisher = createPublisher({ url: 'amqp://publisher-test', confirmTimeoutMs: 1000 })
+
+  await publisher.publish(envelope('payment.expired', { paymentId: 'p1', senderId: 'u1' }))
+
+  assert.equal(failedChannel.closeCalls, 1)
+  assert.equal(failedConnection.closeCalls, 1)
+  assert.equal(successfulChannel.publishCalls, 1)
+  assert.equal(connections, 2)
+  await publisher.close()
+  connect.mock.restore()
 })
