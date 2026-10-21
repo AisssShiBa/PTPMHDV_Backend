@@ -1,0 +1,15 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: finvault-events-rabbitmq-test
+    environment:
+      RABBITMQ_DEFAULT_USER: finvault_test
+      RABBITMQ_DEFAULT_PASS: finvault_test
+    ports:
+      - "${RABBITMQ_TEST_PORT:-5673}:5672"
+      - "${RABBITMQ_MANAGEMENT_TEST_PORT:-15673}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

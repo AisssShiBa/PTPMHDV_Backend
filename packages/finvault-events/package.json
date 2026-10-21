@@ -1,0 +1,29 @@
+{
+  "name": "finvault-events",
+  "version": "1.0.0",
+  "description": "Shared event contracts and RabbitMQ publisher/consumer for FinVault",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "test": "npm run build && tsx --test tests/*.test.ts",
+    "test:integration": "npm run build && tsx --test tests/integration.test.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "peerDependencies": {
+    "amqplib": "^2.0.1"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.8",
+    "@types/node": "^26.6.5",
+    "amqplib": "^2.0.1",
+    "tsx": "^4.23.12",
+    "typescript": "^5.7.3"
+  }
+}
