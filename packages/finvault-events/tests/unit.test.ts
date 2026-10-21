@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { test } from 'node:test'
-import type { Channel, ConfirmChannel, ConsumeMessage } from 'amqplib'
+import { mock, test } from 'node:test'
+import amqp, { type Channel, type ChannelModel, type ConfirmChannel, type ConsumeMessage, type Options } from 'amqplib'
 import { publishConfirmed } from '../src/broker'
 import { assertConsumerTopology, createConsumer, NonRetryableError, processConsumerMessage } from '../src/consumer'
 import { createInMemoryInbox } from '../src/inbox'
 import type { EventHandler, InboxAdapter } from '../src/inbox'
+import { createPublisher } from '../src/publisher'
 import { addAmounts, compareAmounts } from '../src/money'
 import {
   eventPayloadHash,
@@ -69,6 +70,59 @@ class FakeConfirmChannel extends EventEmitter {
 
   confirmNext(): void {
     this.pendingConfirms.shift()?.()
+  }
+}
+
+class FakePublisherChannel extends EventEmitter {
+  assertExchangeStarted!: () => void
+  assertExchangeGate?: Promise<void>
+  failAssertExchange = false
+  publishCalls = 0
+  closeCalls = 0
+
+  async assertExchange(): Promise<void> {
+    this.assertExchangeStarted?.()
+    if (this.assertExchangeGate) await this.assertExchangeGate
+    if (this.failAssertExchange) throw new Error('assertExchange failed')
+  }
+
+  publish(
+    _exchange: string,
+    _routingKey: string,
+    _content: Buffer,
+    _options: Options.Publish,
+    callback?: (error: Error | null) => void
+  ): boolean {
+    this.publishCalls += 1
+    queueMicrotask(() => callback?.(null))
+    return true
+  }
+
+  async close(): Promise<void> {
+    this.closeCalls += 1
+    this.emit('close')
+  }
+}
+
+class FakePublisherConnection extends EventEmitter {
+  closeCalls = 0
+  lateClose?: () => void
+
+  constructor(readonly channel: FakePublisherChannel) {
+    super()
+  }
+
+  async createConfirmChannel(): Promise<FakePublisherChannel> {
+    return this.channel
+  }
+
+  async close(): Promise<void> {
+    this.closeCalls += 1
+    this.emit('close')
+  }
+
+  fireLateClose(): void {
+    this.lateClose?.()
   }
 }
 
@@ -379,4 +433,83 @@ test('consumer rejects invalid ignored-event configuration', () => {
     Reflect.set(options, 'ignoredEventTypes', ignoredEventTypes)
     assert.throws(() => createConsumer(options), TypeError)
   }
+})
+
+test('publisher shares the initial connection promise until exchange assertion finishes', async () => {
+  let releaseAssert!: () => void
+  const assertGate = new Promise<void>(resolve => { releaseAssert = resolve })
+  let assertStarted!: () => void
+  const started = new Promise<void>(resolve => { assertStarted = resolve })
+  const channel = new FakePublisherChannel()
+  channel.assertExchangeGate = assertGate
+  channel.assertExchangeStarted = assertStarted
+  const connection = new FakePublisherConnection(channel)
+  const connect = mock.method(amqp, 'connect', async () => connection as unknown as ChannelModel)
+  const publisher = createPublisher({ url: 'amqp://publisher-test', confirmTimeoutMs: 1000 })
+  const first = publisher.publish(envelope('payment.expired', { paymentId: 'p1', senderId: 'u1' }))
+
+  await started
+  const second = publisher.publish({
+    ...envelope('payment.expired', { paymentId: 'p2', senderId: 'u2' }),
+    eventId: '2c1e97f9-5668-4319-af59-142c1f353101'
+  })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  const publishedBeforeExchangeReady = channel.publishCalls
+  releaseAssert()
+  const results = await Promise.allSettled([first, second])
+  await publisher.close()
+  connect.mock.restore()
+
+  assert.equal(publishedBeforeExchangeReady, 0, 'publishes must wait for assertExchange')
+  assert.deepEqual(results.map(result => result.status), ['fulfilled', 'fulfilled'])
+})
+
+test('late close from a replaced publisher connection does not discard the new connection', async () => {
+  const channelA = new FakePublisherChannel()
+  const channelB = new FakePublisherChannel()
+  const connectionA = new FakePublisherConnection(channelA)
+  const connectionB = new FakePublisherConnection(channelB)
+  let connections = 0
+  const connect = mock.method(amqp, 'connect', async () => {
+    connections += 1
+    return (connections === 1 ? connectionA : connectionB) as unknown as ChannelModel
+  })
+  const publisher = createPublisher({ url: 'amqp://publisher-test', confirmTimeoutMs: 1000 })
+  await publisher.publish(envelope('payment.expired', { paymentId: 'p1', senderId: 'u1' }))
+  connectionA.lateClose = connectionA.listeners('close')[0] as (() => void) | undefined
+  connectionA.emit('close')
+  await publisher.publish(envelope('payment.expired', { paymentId: 'p2', senderId: 'u1' }))
+  connectionA.fireLateClose()
+  await publisher.publish({
+    ...envelope('payment.expired', { paymentId: 'p3', senderId: 'u1' }),
+    eventId: '8a20cb32-0d76-4a86-9f84-5bb2cb3a7510'
+  })
+
+  assert.equal(connections, 2, 'the next publish must reuse B rather than open connection C')
+  assert.equal(channelB.publishCalls, 2)
+  await publisher.close()
+  connect.mock.restore()
+})
+
+test('publisher closes a connection whose exchange assertion fails, then reconnects successfully', async () => {
+  const failedChannel = new FakePublisherChannel()
+  failedChannel.failAssertExchange = true
+  const failedConnection = new FakePublisherConnection(failedChannel)
+  const successfulChannel = new FakePublisherChannel()
+  const successfulConnection = new FakePublisherConnection(successfulChannel)
+  let connections = 0
+  const connect = mock.method(amqp, 'connect', async () => {
+    connections += 1
+    return (connections === 1 ? failedConnection : successfulConnection) as unknown as ChannelModel
+  })
+  const publisher = createPublisher({ url: 'amqp://publisher-test', confirmTimeoutMs: 1000 })
+
+  await publisher.publish(envelope('payment.expired', { paymentId: 'p1', senderId: 'u1' }))
+
+  assert.equal(failedChannel.closeCalls, 1)
+  assert.equal(failedConnection.closeCalls, 1)
+  assert.equal(successfulChannel.publishCalls, 1)
+  assert.equal(connections, 2)
+  await publisher.close()
+  connect.mock.restore()
 })

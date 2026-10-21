@@ -29,7 +29,11 @@ export function createPublisher(options: PublisherOptions): EventPublisher {
   const pending = new Set<(error: Error) => void>()
 
   const discardConnection = (error: Error, sourceConnection: ChannelModel, sourceChannel?: ConfirmChannel) => {
-    if (connection !== sourceConnection || (sourceChannel && channel !== sourceChannel)) return
+    if (sourceChannel) {
+      if (connection !== sourceConnection || channel !== sourceChannel) return
+    } else if (connection !== sourceConnection) {
+      return
+    }
     for (const reject of pending) reject(error)
     pending.clear()
     channel = undefined
@@ -51,7 +55,6 @@ export function createPublisher(options: PublisherOptions): EventPublisher {
           if (closed) throw new Error('Publisher is closed')
           const establishedConnection = await amqp.connect(options.url)
           nextConnection = establishedConnection
-          connection = establishedConnection
           establishedConnection.on('error', () => undefined)
           establishedConnection.once('close', () => discardConnection(
             new BrokerPublishError('Broker connection closed', 'CONNECTION_CLOSED'),
@@ -59,7 +62,6 @@ export function createPublisher(options: PublisherOptions): EventPublisher {
           ))
           const establishedChannel = await establishedConnection.createConfirmChannel()
           nextChannel = establishedChannel
-          channel = establishedChannel
           establishedChannel.on('error', () => undefined)
           establishedChannel.once('close', () => discardConnection(
             new BrokerPublishError('Publisher channel closed', 'CHANNEL_CLOSED'),
@@ -68,6 +70,8 @@ export function createPublisher(options: PublisherOptions): EventPublisher {
           ))
           await establishedChannel.assertExchange(exchange, 'topic', { durable: true })
           if (closed) throw new Error('Publisher is closed')
+          connection = establishedConnection
+          channel = establishedChannel
           return establishedChannel
         } catch (error) {
           lastError = error
