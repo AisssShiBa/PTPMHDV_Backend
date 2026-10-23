@@ -1,4 +1,4 @@
-import { LedgerDirection, OwnerType, TransferType } from '@prisma/client';
+import { LedgerDirection, OwnerType, SystemWalletCode, TransferType } from '@prisma/client';
 
 export interface CreateWalletDto {
   userId: string;
@@ -10,12 +10,14 @@ export interface CreditDto {
   amount: string;
   referenceId: string;
   transferType?: TransferType;
+  systemCode?: SystemWalletCode;
 }
 
 export interface DebitDto {
   amount: string;
   referenceId: string;
   transferType?: TransferType;
+  systemCode?: SystemWalletCode;
 }
 
 export interface TransferDto {
@@ -23,6 +25,7 @@ export interface TransferDto {
   toUserId: string;
   amount: string;
   referenceId: string;
+  transferType?: TransferType;
 }
 
 export interface CreateHoldDto {

@@ -1,4 +1,4 @@
-import { OwnerType, PrismaClient, WalletStatus } from "@prisma/client";
+import { OwnerType, Prisma, PrismaClient, SystemWalletCode, WalletStatus } from "@prisma/client";
 import { DomainException } from "../utils/domain.exception";
 import { CreateWalletDto, HistoryQueryDto, ListWalletsDto } from "../dtos/wallet.dto";
 
@@ -7,27 +7,7 @@ const prisma = new PrismaClient();
 
 export class WalletService {
   constructor() {
-    this.ensureSystemWallet();
-  }
-
-  private async ensureSystemWallet() {
-    try {
-      const existing = await prisma.wallet.findFirst({
-        where: { ownerType: OwnerType.SYSTEM }
-      });
-      if (!existing) {
-        await prisma.wallet.create({
-          data: {
-            userId: null,
-            ownerType: OwnerType.SYSTEM,
-            currency: "VND",
-            status: WalletStatus.ACTIVE,
-          }
-        });
-      }
-    } catch (e) {
-      console.error('Failed to create SYSTEM wallet', e);
-    }
+    // System wallets are seeded via migration, no runtime creation
   }
 
   async createWallet(dto: CreateWalletDto) {
@@ -37,8 +17,8 @@ export class WalletService {
     }
 
     return await prisma.$transaction(async (tx) => {
-      const existing = await tx.wallet.findFirst({
-        where: { userId: dto.userId, ownerType }
+      const existing = await tx.wallet.findUnique({
+        where: { userId_ownerType: { userId: dto.userId, ownerType } }
       });
       if (existing) {
         return { wallet: existing, created: false };
@@ -56,9 +36,16 @@ export class WalletService {
     });
   }
 
-  async getBalance(userId: string, ownerType: OwnerType = OwnerType.USER) {
+  async getBalance(userId: string, ownerType: OwnerType = OwnerType.USER, systemCode?: SystemWalletCode) {
+    let where: Prisma.WalletWhereInput;
+    if (systemCode) {
+      where = { systemCode };
+    } else {
+      where = { userId, ownerType };
+    }
+
     const wallet = await prisma.wallet.findFirst({
-      where: { userId, ownerType }
+      where
     });
     if (!wallet) throw new DomainException(HttpStatus.NOT_FOUND, "WALLET_NOT_FOUND", "Wallet was not found");
     return wallet;

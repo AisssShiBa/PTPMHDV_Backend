@@ -38,20 +38,29 @@ enum HoldStatus {
   EXPIRED
 }
 
+enum SystemWalletCode {
+  MAIN
+  FEE
+  TOPUP_POOL
+}
+
 model Wallet {
-  id            Int           @id @default(autoincrement())
-  userId        String?       @unique @db.VarChar(50)
+  id            Int               @id @default(autoincrement())
+  userId        String?           @db.VarChar(50)
   ownerType     OwnerType
-  balance       Decimal       @default(0) @db.Decimal(20, 2)
-  heldBalance   Decimal       @default(0) @db.Decimal(20, 2)
-  currency      String        @default("VND") @db.VarChar(3)
-  status        WalletStatus  @default(ACTIVE)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  systemCode    SystemWalletCode? @unique
+  balance       Decimal           @default(0) @db.Decimal(20, 2)
+  heldBalance   Decimal           @default(0) @db.Decimal(20, 2)
+  currency      String            @default("VND") @db.VarChar(3)
+  status        WalletStatus      @default(ACTIVE)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
   ledgerEntries      LedgerEntry[]
   holdsAsSource      WalletHold[] @relation("HoldSource")
   holdsAsDestination WalletHold[] @relation("HoldDestination")
 
+  @@unique([userId, ownerType])
+  @@index([ownerType])
   @@index([ownerType, status])
 }
 

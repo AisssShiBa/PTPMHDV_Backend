@@ -12,6 +12,7 @@ export function walletView(wallet: Wallet) {
     id: wallet.id,
     userId: wallet.userId,
     ownerType: wallet.ownerType,
+    systemCode: wallet.systemCode,
     balance: decimalToString(wallet.balance),
     heldBalance: decimalToString(wallet.heldBalance),
     availableBalance: decimalToString(wallet.balance.sub(wallet.heldBalance)),

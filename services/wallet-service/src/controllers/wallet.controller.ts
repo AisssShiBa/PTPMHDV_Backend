@@ -17,7 +17,8 @@ export const create = async (req: Request, res: Response) => {
 export const getBalance = async (req: Request, res: Response) => {
   const userId = req.params.userId as string;
   const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
-  const wallet = await walletService.getBalance(userId, ownerType);
+  const systemCode = req.query.systemCode as any;
+  const wallet = await walletService.getBalance(userId, ownerType, systemCode);
   res.json({
     success: true, data: {
       balance: decimalToString(wallet.balance),
