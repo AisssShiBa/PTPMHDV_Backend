@@ -17,6 +17,7 @@ model User {
   role      Role     @default(USER)   
   createdAt DateTime @default(now())
   sessions  Session[]
+  pin       UserPin?
 }
 
 model Session {
@@ -26,6 +27,19 @@ model Session {
   createdAt    DateTime @default(now())
   userId       String
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model UserPin {
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pinHash        String
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@index([userId])
 }
