@@ -1,0 +1,274 @@
+FINVAULT – KẾ HOẠCH CHI TIẾT TUẦN 1
+Củng cố lõi ví · Chuẩn hóa bảo mật · Dựng khung giao diện
+Hạng mục
+Nội dung
+Thời gian
+5 ngày làm việc (Ngày 1–5); mỗi người 5 ngày công
+Đạt
+gateway · auth-service (gồm auth-txn) · admin-service · docker/env/secrets
+Khoa
+wallet-service · payment-service
+Nguyên
+notification-service · nền tảng frontend dùng chung
+Hữu
+user-service · merchant-service
+Chưa có chủ
+funding (VNPAY, rút tiền) và utilities: đề xuất Hữu nhận funding, Nguyên nhận utilities từ Tuần 3 (xem mục 6)
+Thay đổi so với tài liệu v2
+Admin-service nay thuộc Đạt (v2 ghi Nguyên). Để Đạt không quá tải, phần khung monorepo frontend chuyển từ Đạt sang Nguyên, và Nguyên chỉ giữ notification ở backend. Mọi việc dưới đây đã tính lại theo phân công này.
+1. Mục tiêu và điều kiện hoàn thành Tuần 1
+Ví không còn race condition: 20 request song song không làm số dư âm.
+Chỉ Gateway nhận request từ ngoài; gọi thẳng service không có Gateway Token hợp lệ thì bị 401.
+Mọi service dùng chung một cách xác thực (thư viện finvault-internal-auth), không còn tự verify JWT riêng hay cờ x-gateway-verified.
+Khung frontend gọi được API có token qua Gateway, và chạy được với mock khi backend chưa xong.
+2. Ngày 1 – cuộc họp chốt (45 phút, cả nhóm)
+Làm trước khi viết code, vì các quyết định này ảnh hưởng đến cả bốn người. Người ghi biên bản: Đạt; kết quả đưa vào README gốc của repo.
+Bảng 2. Các quyết định cần chốt ngày 1
+#
+Cần chốt
+Người quyết
+Sản phẩm
+M1
+Thuật toán ký Gateway Token: ES256 hay RS256; tên header x-gateway-token; claims bắt buộc (iss, aud, sub, role, kycTier, jti)
+Đạt
+Mục “Gateway Token” trong README
+M2
+Hàm/middleware mà các service sẽ gọi từ thư viện (requireGateway(), req.auth.userId, req.auth.role)
+Đạt
+Chữ ký hàm, ví dụ dùng
+M3
+Định dạng lỗi chung {code, message, traceId} và danh sách mã lỗi ban đầu
+Khoa
+Bảng mã lỗi
+M4
+Quy ước sự kiện: tên miền.hành_động, payload có eventId, occurredAt, version
+Nguyên
+Bảng sự kiện
+M5
+Trạng thái Outbox thống nhất PENDING | PUBLISHED | FAILED
+Khoa
+Quy ước
+M6
+Danh sách endpoint FE cần cho Tuần 1–2 và hình dạng JSON của chúng
+Nguyên + từng chủ service
+File OpenAPI hoặc bảng contract
+M7
+Quy ước nhánh git, review chéo, thư mục .env.example
+Đạt
+CONTRIBUTING.md
+3. Nhiệm vụ chi tiết theo thành viên
+ĐẠT — Gateway · Auth · Admin · Docker/secrets
+Mã
+Việc (và vị trí trong code)
+Xong khi (kiểm được)
+Ngày công
+Đ1
+Ký Gateway Token. Trong gateway/src/middlewares/authenticate.ts: bỏ cờ tĩnh x-gateway-verified; sau khi verify access token, ký JWT 60 giây (khóa riêng của Gateway) và gắn vào header x-gateway-token.
+Request đi qua Gateway tới service có header mới; token giải mã ra đúng sub/role/kycTier; hết hạn sau 60 giây.
+1.0
+Đ2
+Thư viện `finvault-internal-auth`. Gói dùng chung (workspace package) chỉ chứa public key của Gateway: middleware verify, kiểm iss/aud/exp, gắn req.auth. Giao bản dev stub cuối ngày 1 (khóa test cố định) để ba người còn lại không phải chờ.
+Ba service demo (user, wallet, notification) import được; token sai/hết hạn/thiếu → 401 INVALID_GATEWAY_TOKEN. Bản chính thức cuối ngày 2.
+1.0
+Đ3
+Docker network + secrets + DB role. docker-compose.yml: tách mạng public và internal; bỏ ports: của mọi service con (chỉ Gateway 3000); chuyển secret sang Docker secrets đọc bằng _FILE; tạo .env.example; tạo role DB riêng cho mỗi service.
+docker compose up chạy sạch; curl localhost:3001 (auth trực tiếp) bị từ chối; không còn bí mật trong file compose hay repo; role wallet không có UPDATE/DELETE trên LedgerEntry.
+1.5
+Đ4
+Auth: refresh qua body cho mobile. authService.ts signIn/refresh: nếu có x-client-platform: mobile thì trả/nhận refreshToken trong JSON body; Web vẫn dùng cookie httpOnly.
+Hai test: mobile nhận refresh trong body, web nhận cookie; refresh hoạt động cả hai.
+0.5
+Đ5
+Admin-service dùng thư viện chung. Thay middleware xác thực cũ bằng finvault-internal-auth; kiểm tra vai trò ADMIN trên mọi route admin.
+Gọi route admin bằng token USER → 403; không có token → 401.
+0.5
+Đ6
+Gateway: proxy WebSocket và whitelist IPN. Route /socket.io với ws: true sang notification-service; mở GET /api/funding/vnpay/ipn không cần JWT (route có thể trỏ 404 tạm).
+Socket.IO kết nối được qua cổng 3000; IPN không bị chặn 401.
+0.5
+Tổng: 5.0 ngày. Không còn dư; nếu Đ3 trễ thì cắt Đ6 sang đầu Tuần 2.
+KHOA — Wallet · Payment
+Mã
+Việc (và vị trí trong code)
+Xong khi (kiểm được)
+Ngày công
+K1
+Khóa hàng khi Hold. wallet-hold.service.ts: thay Prisma findUnique bằng $queryRaw SELECT … FOR UPDATE, đặt trong cùng transaction với phần tăng heldBalance.
+Hai Hold đồng thời trên cùng ví: cái sau thấy heldBalance mới, không vượt số dư.
+1.5
+K2
+Khóa hàng khi chuyển tiền + chống deadlock. ledger.service.ts (moveMoneyTxInternal): khóa hai ví theo thứ tự walletId tăng dần.
+Chuyển chéo A→B và B→A đồng thời 50 lần không deadlock.
+1.0
+K3
+CHECK ở tầng DB. Migration: CHECK (ownerType = 'SYSTEM' OR balance >= 0) và CHECK (heldBalance <= balance); thêm cột destinationOwner cho WalletHold.
+Cố UPDATE số dư âm bằng SQL tay thì bị từ chối; migration chạy được trên DB có dữ liệu cũ.
+0.5
+K4
+Idempotency gắn user. payment-service/prisma/schema.prisma: đổi @unique thành @@unique([userId, idempotencyKey]); sửa chỗ tra cứu key trong payment.service.ts theo cặp.
+Hai user dùng cùng key không va nhau; cùng user gọi lại nhận replayed: true.
+0.5
+K5
+Bộ test song song (tiêu chí A1). Integration test bắn 20 request đồng thời × 60.000đ trên ví 100.000đ; thêm test deadlock của K2.
+Đúng 1 thành công, 19 bị INSUFFICIENT_FUNDS, số dư cuối 40.000đ, không dòng nào âm. Chạy được bằng một lệnh.
+1.0
+K6
+Dùng thư viện chung. Wallet và payment thay xác thực cũ bằng finvault-internal-auth.
+Gọi thẳng không token → 401.
+0.5
+Tổng: 5.0 ngày. K1–K3 là đường găng của cả dự án; Hữu và Nguyên không phụ thuộc, nhưng Tuần 2 (PIN, P2P, hạn mức) phụ thuộc K1–K5.
+NGUYÊN — Notification · Nền tảng frontend
+Mã
+Việc (và vị trí trong code)
+Xong khi (kiểm được)
+Ngày công
+N1
+Đồng bộ enum. notification-service/prisma/schema.prisma: thêm PAYMENT_EXPIRED, WALLET_CREDITED, WALLET_DEBITED, KYC_TIER_CHANGED; rà mọi sự kiện đang được phát và đối chiếu.
+Mỗi sự kiện trong danh mục có enum tương ứng; migration chạy được.
+0.5
+N2
+NotificationInbox chống trùng. Bảng lưu eventId UNIQUE; consumer: có rồi thì ACK bỏ qua, chưa có thì ghi Inbox và tạo thông báo trong cùng transaction.
+Gửi cùng một sự kiện 2 lần chỉ tạo 1 thông báo.
+1.0
+N3
+Route `/me`. Đổi /api/notifications/:userId thành /api/notifications/me, lấy userId từ req.auth; xóa route cũ.
+User A không xem được thông báo của B bằng bất kỳ đường nào.
+0.5
+N4
+Socket.IO xác thực đúng. Nhận token ở handshake.auth.token (không dùng query string); verify bằng thư viện chung; vào phòng riêng user:<id>; client tự kết nối lại khi token làm mới.
+Web kết nối qua Gateway; thiếu/sai token bị ngắt; bắn thử một sự kiện và thấy nhận được.
+1.0
+N5
+Dùng thư viện chung cho notification-service.
+Không token → 401.
+0.5
+N6
+Khung frontend (chuyển từ Đạt). Monorepo apps/web, apps/mobile, packages/api-client: client tự gắn Bearer, tự refresh token, có chế độ mock (MSW/Prism) đọc contract M6; trang đăng nhập mẫu gọi qua Gateway.
+npm run dev chạy cả Web và Mobile; trang đăng nhập đăng nhập được khi có backend và khi chỉ có mock.
+1.5
+Tổng: 5.0 ngày. N6 chạy song song với N1–N5; nếu Đ1–Đ2 chưa xong thì dùng mock.
+HỮU — User · Merchant
+Mã
+Việc (và vị trí trong code)
+Xong khi (kiểm được)
+Ngày công
+H1
+User-service dùng thư viện chung. Bỏ middleware tự verify bằng secret cũ (requireGateway.ts); dùng finvault-internal-auth.
+Không còn biến secret JWT trong user-service; không token → 401.
+0.5
+H2
+Consumer `user.registered`. Nghe sự kiện, tạo hồ sơ User rỗng; lưu eventId vào Inbox để lũy đẳng. (Phía Auth ghi Outbox sự kiện này ở Tuần 2.)
+Gửi tay sự kiện 2 lần lên RabbitMQ: chỉ 1 hồ sơ; message lỗi vào DLQ.
+1.0
+H3
+Cột `kycTier`. Migration thêm kycTier (0/1/2, mặc định 0) vào User; viết sẵn hàm phát user.kyc_updated qua Outbox (chưa cần màn Admin).
+Đổi tier bằng hàm trong test sinh đúng 1 dòng Outbox cùng transaction.
+1.0
+H4
+Worker dọn ảnh KYC mồ côi. Quét ảnh MinIO không còn hồ sơ tham chiếu, xóa sau thời gian chờ; có chế độ dry-run.
+Dry-run liệt kê đúng ảnh mồ côi; chạy thật không xóa ảnh đang dùng.
+1.0
+H5
+Merchant-service. Dùng thư viện chung; ghi Outbox sự kiện merchant.profile_updated khi sửa thông tin cửa hàng, cùng transaction.
+Cập nhật cửa hàng sinh đúng 1 dòng Outbox; lỗi giữa chừng thì không có dòng nào.
+1.0
+H6
+Contract mock cho user/merchant. Viết phần OpenAPI của /users/me, /users/me/kyc, /merchants để Nguyên đưa vào mock.
+FE gọi được các endpoint này bằng mock.
+0.5
+Tổng: 5.0 ngày. Việc của Hữu ít phụ thuộc người khác nhất; nếu xong sớm, nhận thêm review PR của Khoa (K1–K3).
+4. Lịch theo ngày
+Bảng 7. Ai làm gì mỗi ngày
+Ngày
+Đạt
+Khoa
+Nguyên
+Hữu
+1
+Họp M1–M7; Đ1; giao stub Đ2
+Họp; K1
+Họp; N1; bắt đầu N6
+Họp; H1 (dùng stub); H6
+2
+Đ2 bản chính; Đ3
+K1 xong; K2
+N2; N6
+H2
+3
+Đ3 xong; Đ4
+K2 xong; K3
+N2 xong; N3; N6
+H2 xong; H3
+4
+Đ5; Đ6
+K4; K5
+N4; N6 xong
+H3 xong; H4
+5
+Hỗ trợ tích hợp, sửa lỗi
+K5 xong; K6
+N5; sửa lỗi
+H5; demo cuối tuần
+5. Điểm bàn giao và kiểm tra giữa tuần
+Bảng 8. Bàn giao
+Hạn
+Bàn giao
+Từ → tới
+Nếu trễ
+Cuối ngày 1
+Stub finvault-internal-auth + README dùng
+Đạt → cả nhóm
+Dùng khóa test cố định, tự viết middleware tạm giống chữ ký M2
+Cuối ngày 2
+Thư viện bản chính + Gateway ký token
+Đạt → cả nhóm
+Đổi stub sang bản chính chỉ cần đổi import
+Giữa ngày 3
+Contract M6 và mock server
+Nguyên ← Hữu, Khoa, Đạt
+FE dùng dữ liệu mẫu cố định
+Cuối ngày 3
+Khóa hàng (K1–K2) merge vào nhánh chính
+Khoa → nhóm
+Tuần 2 chuyển P2P sẽ bị đẩy
+Ngày 4 chiều
+Chạy docker compose up toàn hệ thống lần đầu
+Đạt (chủ trì)
+Ghi lỗi, sửa ngày 5
+Nghi thức hằng ngày
+Họp đứng 10 phút đầu ngày: hôm qua xong gì, hôm nay làm gì, đang bị ai chặn.
+Mỗi PR cần một người khác trục review (Khoa↔Hữu, Đạt↔Nguyên) trong 24 giờ.
+Cuối ngày 5: demo 30 phút, chạy kịch bản dưới đây trên máy một người, không chuẩn bị thêm.
+6. Kịch bản nghiệm thu cuối tuần (DoD)
+Bảng 9. Tám kiểm tra cuối Tuần 1
+#
+Kiểm tra
+Đạt khi
+1
+Chạy docker compose up trên máy sạch
+Tất cả service healthy, chỉ cổng 3000 mở ra ngoài
+2
+Gọi thẳng service nội bộ, và gọi với header x-gateway-verified: true
+Bị từ chối 401
+3
+Đăng nhập Web và Mobile qua Gateway
+Có token, gọi /api/users/me được
+4
+Test song song 20 request trên 1 ví (K5)
+Số dư cuối chính xác, không âm
+5
+Gửi cùng một sự kiện 2 lần tới user và notification
+Mỗi bên chỉ xử lý 1 lần
+6
+Mở socket qua Gateway rồi gây sự kiện số dư
+Client nhận thông báo; thiếu token bị ngắt
+7
+User A gọi /api/notifications/me
+Chỉ thấy của A
+8
+Tìm bí mật trong repo (git grep các chuỗi khóa cũ)
+Không còn kết quả
+Việc chưa có chủ (cần chốt trong tuần này)
+Funding (nạp VNPAY, rút tiền) và utilities (nạp ĐT, hóa đơn) chưa thuộc người nào theo phân công bạn nêu. Đề xuất: Hữu nhận funding vì gần user/merchant và đã quen consumer/outbox; Nguyên nhận utilities vì backend của Nguyên nhẹ nhất. Cả hai chỉ bắt đầu từ Tuần 3, nên tuần này chỉ cần thống nhất tên.
+Rủi ro cần để ý
+Đạt đang đầy 5/5 ngày và là người ba người kia chờ (thư viện chung). Nếu Đ2 trễ quá ngày 2, cả nhóm bị chặn. Giải pháp trong kế hoạch: giao bản stub ngày 1, và đẩy Đ6 sang Tuần 2 nếu cần.

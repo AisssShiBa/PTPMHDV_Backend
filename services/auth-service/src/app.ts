@@ -2,6 +2,7 @@ import express from 'express'
 import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import authRoute from './routes/authRoute'
+import pinRoute from './routes/pinRoute'
 import { attachRequestId } from './middlewares/requestId'
 import { errorHandler } from './middlewares/errorHandler'
 import { env } from './config/env'
@@ -45,9 +46,12 @@ app.get('/api/auth/health', (_req, res) => {
   res.status(200).json({ status: 'ok', service: 'auth-service' })
 })
 
-// Signup/signin/refresh/signout are public auth endpoints. Their handlers validate
-// credentials/cookies and apply route rate limits; a legacy marker is not authentication.
+// 4. Tuyến đường xác thực tài khoản thông thường (Public Auth)
 app.use('/api/auth', authRoute)
+
+// 5. Tuyến đường xác thực giao dịch cấp 2 (Auth-Txn: Mã PIN & transactionToken)
+app.use('/api/auth-txn/pin', pinRoute)
+app.use('/api/auth/pin', pinRoute) // Hỗ trợ alias
 
 // 6. Xử lý Route không tồn tại (404)
 app.use((_req, res) => {
