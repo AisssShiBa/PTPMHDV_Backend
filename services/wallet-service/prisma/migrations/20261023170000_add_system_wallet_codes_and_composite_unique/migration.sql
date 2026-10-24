@@ -4,8 +4,9 @@ CREATE TYPE "SystemWalletCode" AS ENUM ('MAIN', 'FEE', 'TOPUP_POOL');
 -- 2. Alter Table Wallet: add systemCode
 ALTER TABLE "Wallet" ADD COLUMN "systemCode" "SystemWalletCode";
 
--- 3. Drop existing single unique on userId
+-- 3. Drop existing single unique on userId and legacy single system wallet index
 DROP INDEX IF EXISTS "Wallet_userId_key";
+DROP INDEX IF EXISTS "Wallet_single_system_wallet";
 
 -- 4. Create unique index on systemCode
 CREATE UNIQUE INDEX "Wallet_systemCode_key" ON "Wallet"("systemCode");
