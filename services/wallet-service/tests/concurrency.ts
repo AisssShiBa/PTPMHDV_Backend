@@ -39,7 +39,7 @@ async function runConcurrencyTest() {
     const p = ledgerService.transfer({
       fromUserId: userIdA,
       toUserId: userIdB,
-      amount: 60000,
+      amount: '60000',
       referenceId: randomUUID(),
       transferType: TransferType.P2P_TRANSFER
     }).then(() => 'SUCCESS').catch((err) => `FAILED: ${err.message}`);
@@ -82,7 +82,7 @@ async function runDeadlockTest() {
   const promise1 = ledgerService.transfer({
     fromUserId: userIdC,
     toUserId: userIdD,
-    amount: 100000,
+    amount: '100000',
     referenceId: randomUUID(),
     transferType: TransferType.P2P_TRANSFER
   }).then(() => 'C->D OK').catch(e => `C->D LỖI: ${e.message}`);
@@ -90,7 +90,7 @@ async function runDeadlockTest() {
   const promise2 = ledgerService.transfer({
     fromUserId: userIdD,
     toUserId: userIdC,
-    amount: 200000,
+    amount: '200000',
     referenceId: randomUUID(),
     transferType: TransferType.P2P_TRANSFER
   }).then(() => 'D->C OK').catch(e => `D->C LỖI: ${e.message}`);

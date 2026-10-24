@@ -30,7 +30,7 @@ export class ReconciliationService {
 
     // 5. Calculate Summary & Save Report
     const totalWallets = await prisma.wallet.count();
-    
+
     const report = await prisma.reconciliationReport.create({
       data: {
         totalWallets,
@@ -82,10 +82,10 @@ export class ReconciliationService {
     return result.map(row => ({
       type: AnomalyType.BALANCE_DRIFT_QUICK,
       walletId: row.walletId,
-      detail: { 
-        expected: row.expectedBalance, 
-        actual: row.actualBalance, 
-        diff: row.actualBalance - row.expectedBalance 
+      detail: {
+        expected: row.expectedBalance,
+        actual: row.actualBalance,
+        diff: row.actualBalance - row.expectedBalance
       },
     }));
   }
@@ -107,9 +107,9 @@ export class ReconciliationService {
     return result.map(row => ({
       type: AnomalyType.BALANCE_DRIFT_FULL,
       walletId: row.walletId,
-      detail: { 
-        expected: row.expectedBalance, 
-        actual: row.actualBalance 
+      detail: {
+        expected: row.expectedBalance,
+        actual: row.actualBalance
       },
     }));
   }
@@ -130,14 +130,14 @@ export class ReconciliationService {
     }));
   }
 
-  private async checkSystemConservation() {
-    // Sum of all balances (including SYSTEM) should ideally be 0 if the system is closed
+  public async checkSystemConservation() {
+    // Tổng số dư của tất cả các ví (bao gồm cả ví HỆ THỐNG) theo lý tưởng phải bằng 0 nếu hệ thống là một hệ khép kín.
     const result: any[] = await prisma.$queryRaw`
       SELECT SUM(balance) as "totalBalance"
       FROM "Wallet";
     `;
     const actual = result[0]?.totalBalance || 0;
-    const expected = 0; // Or whatever initial constant was injected into the system
+    const expected = 0; // Hoặc bất kỳ hằng số ban đầu nào đã được bơm/nạp vào hệ thống.
 
     return {
       expected,

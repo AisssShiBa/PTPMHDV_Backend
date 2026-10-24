@@ -70,6 +70,7 @@ export const creditDebitSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).
     transferType: z.enum(['TOPUP', 'PAYMENT', 'REFUND', 'P2P_TRANSFER', 'ADJUSTMENT'], {
       message: "transferType không hợp lệ"
     }).optional(),
+    systemCode: z.enum(['MAIN', 'FEE', 'TOPUP_POOL']).optional(),
   }),
 }));
 

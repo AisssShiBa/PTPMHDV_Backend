@@ -1,4 +1,4 @@
-import { LedgerDirection, OwnerType, Prisma, PrismaClient, TransferType, Wallet } from "@prisma/client";
+import { LedgerDirection, OwnerType, Prisma, PrismaClient, SystemWalletCode, TransferType, Wallet } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { DomainException } from "../utils/domain.exception";
 import { TransferDto, CreditDto, DebitDto } from "../dtos/wallet.dto";
@@ -8,16 +8,36 @@ const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, INTERNAL_SERVER_ERROR: 50
 const prisma = new PrismaClient();
 
 export class LedgerService {
-  private async getWalletIds(tx: Prisma.TransactionClient, specs: {userId?: string, ownerType: OwnerType}[]): Promise<number[]> {
+  getSystemWalletCode(transferType: TransferType): SystemWalletCode {
+    switch (transferType) {
+      case TransferType.TOPUP:
+        return SystemWalletCode.TOPUP_POOL;
+      case TransferType.PAYMENT:
+      case TransferType.REFUND:
+      case TransferType.ADJUSTMENT:
+      default:
+        return SystemWalletCode.MAIN;
+    }
+  }
+
+  private async getWalletIds(
+    tx: Prisma.TransactionClient, 
+    specs: { userId?: string; ownerType: OwnerType; systemCode?: SystemWalletCode }[]
+  ): Promise<number[]> {
     const ids: number[] = [];
     for (const spec of specs) {
-      if (spec.userId) {
+      if (spec.systemCode) {
+        const w = await tx.wallet.findUnique({ where: { systemCode: spec.systemCode }, select: { id: true } });
+        if (!w) throw new DomainException(HttpStatus.INTERNAL_SERVER_ERROR, "SYSTEM_WALLET_NOT_FOUND", `System wallet ${spec.systemCode} missing`);
+        ids.push(w.id);
+      } else if (spec.userId) {
         const w = await tx.wallet.findFirst({ where: { userId: spec.userId, ownerType: spec.ownerType }, select: { id: true } });
         if (!w) throw new DomainException(HttpStatus.NOT_FOUND, "WALLET_NOT_FOUND", "Wallet was not found");
         ids.push(w.id);
       } else if (spec.ownerType === OwnerType.SYSTEM) {
-        const w = await tx.wallet.findFirst({ where: { ownerType: OwnerType.SYSTEM }, select: { id: true } });
-        if (!w) throw new DomainException(HttpStatus.INTERNAL_SERVER_ERROR, "SYSTEM_WALLET_NOT_FOUND", "System wallet missing");
+        // Fallback default system wallet: MAIN
+        const w = await tx.wallet.findUnique({ where: { systemCode: SystemWalletCode.MAIN }, select: { id: true } });
+        if (!w) throw new DomainException(HttpStatus.INTERNAL_SERVER_ERROR, "SYSTEM_WALLET_NOT_FOUND", "System wallet MAIN missing");
         ids.push(w.id);
       }
     }
@@ -62,12 +82,13 @@ export class LedgerService {
 
   async credit(userId: string, dto: CreditDto, ownerType: OwnerType = OwnerType.USER) {
     const transferType = dto.transferType ?? TransferType.TOPUP;
+    const systemCode = dto.systemCode ?? this.getSystemWalletCode(transferType);
     const amount = money(dto.amount);
 
     return await prisma.$transaction(async (tx) => {
       const ids = await this.getWalletIds(tx, [
         { userId, ownerType },
-        { ownerType: OwnerType.SYSTEM }
+        { ownerType: OwnerType.SYSTEM, systemCode }
       ]);
       const wallets = await this.lockAndFetchWalletsTx(tx, ids);
       const destination = wallets[ids[0]];
@@ -85,12 +106,13 @@ export class LedgerService {
 
   async debit(userId: string, dto: DebitDto, ownerType: OwnerType = OwnerType.USER) {
     const transferType = dto.transferType ?? TransferType.PAYMENT;
+    const systemCode = dto.systemCode ?? this.getSystemWalletCode(transferType);
     const amount = money(dto.amount);
 
     return await prisma.$transaction(async (tx) => {
       const ids = await this.getWalletIds(tx, [
         { userId, ownerType },
-        { ownerType: OwnerType.SYSTEM }
+        { ownerType: OwnerType.SYSTEM, systemCode }
       ]);
       const wallets = await this.lockAndFetchWalletsTx(tx, ids);
       const source = wallets[ids[0]];
@@ -106,8 +128,8 @@ export class LedgerService {
     });
   }
 
-  async getSystemWalletTx(tx: Prisma.TransactionClient): Promise<Wallet> {
-    const ids = await this.getWalletIds(tx, [{ ownerType: OwnerType.SYSTEM }]);
+  async getSystemWalletTx(tx: Prisma.TransactionClient, systemCode: SystemWalletCode = SystemWalletCode.MAIN): Promise<Wallet> {
+    const ids = await this.getWalletIds(tx, [{ ownerType: OwnerType.SYSTEM, systemCode }]);
     const wallets = await this.lockAndFetchWalletsTx(tx, ids);
     return wallets[ids[0]];
   }
