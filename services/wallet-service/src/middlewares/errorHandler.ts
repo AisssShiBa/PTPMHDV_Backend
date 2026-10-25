@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { DomainException } from '../utils/domain.exception';
 
+// Middleware xử lý lỗi
 export const errorHandler = (
   err: any,
   req: Request,
@@ -13,6 +14,7 @@ export const errorHandler = (
       error: {
         code: err.code,
         message: err.message,
+        ...(err.details ? err.details : {}),
       },
     });
   }

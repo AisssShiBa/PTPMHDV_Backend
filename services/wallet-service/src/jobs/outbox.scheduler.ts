@@ -5,8 +5,8 @@ import { publish } from '../utils/rabbitmq.publisher';
 /**
  * Type validation (Bước 4):
  * Type suy ra từ topic + transferType (wallet outbox):
- *   wallet.balance_added   → WALLET_CREDITED  ✅
- *   wallet.balance_deducted → WALLET_DEBITED  ✅
+ *   wallet.balance_added   → WALLET_CREDITED
+ *   wallet.balance_deducted → WALLET_DEBITED
  *
  * Routing key: 'wallet.notification' (binding '#' của consumer khớp tất cả)
  */

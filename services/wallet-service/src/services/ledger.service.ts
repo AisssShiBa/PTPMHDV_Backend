@@ -4,10 +4,14 @@ import { DomainException } from "../utils/domain.exception";
 import { TransferDto, CreditDto, DebitDto } from "../dtos/wallet.dto";
 import { assertWalletActive, conflict, decimalToString, insufficientBalance, money } from "../utils/wallet.helpers";
 
+import { LimitService } from "./limit.service";
+
 const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, INTERNAL_SERVER_ERROR: 500 };
 const prisma = new PrismaClient();
 
 export class LedgerService {
+  constructor(private readonly limitService: LimitService = new LimitService()) {}
+
   getSystemWalletCode(transferType: TransferType): SystemWalletCode {
     switch (transferType) {
       case TransferType.TOPUP:
@@ -70,6 +74,14 @@ export class LedgerService {
       const from = wallets[ids[0]];
       const to = wallets[ids[1]];
 
+      const replay = await tx.ledgerEntry.findUnique({
+        where: { walletId_referenceId: { walletId: from.id, referenceId: dto.referenceId } }
+      });
+
+      if (!replay && from.ownerType === OwnerType.USER && from.userId) {
+        await this.limitService.checkAndReserve(tx, from.userId, amount, from.kycTier ?? 0);
+      }
+
       return await this.moveMoneyTxInternal(tx, {
         fromWallet: from,
         toWallet: to,
@@ -77,7 +89,7 @@ export class LedgerService {
         referenceId: dto.referenceId,
         transferType: TransferType.P2P_TRANSFER,
       });
-    });
+    }, { maxWait: 15000, timeout: 25000 });
   }
 
   async credit(userId: string, dto: CreditDto, ownerType: OwnerType = OwnerType.USER) {
