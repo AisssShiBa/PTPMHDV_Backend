@@ -3,6 +3,7 @@ import app from './app';
 import { startHoldScheduler } from './jobs/wallet-hold.scheduler';
 import { startOutboxScheduler } from './jobs/outbox.scheduler';
 import { closeRabbitMQ } from './utils/rabbitmq.publisher';
+import { startKycConsumer } from './events/kyc.consumer';
 
 const port = process.env.PORT || 3004;
 
@@ -10,6 +11,7 @@ const server = app.listen(port, () => {
   console.log(`Wallet Service is running on port ${port}`);
   startHoldScheduler();
   startOutboxScheduler();
+  startKycConsumer().catch(console.error);
 });
 
 async function shutdown(signal: string) {

@@ -1,4 +1,4 @@
-import { PrismaClient, OwnerType, SystemWalletCode, TransferType } from '@prisma/client';
+import { PrismaClient, Prisma, OwnerType, SystemWalletCode, TransferType } from '@prisma/client';
 import { WalletService } from '../src/services/wallet.service';
 import { LedgerService } from '../src/services/ledger.service';
 import { ReconciliationService } from '../src/services/reconciliation.service';
@@ -116,7 +116,7 @@ async function runTestS9() {
     return await ledgerService.moveMoneyTxInternal(tx, {
       fromWallet: updatedUserWallet!,
       toWallet: merchantWallet.wallet,
-      amount: new (prisma as any)._Prisma.Decimal('200000.00'),
+      amount: new Prisma.Decimal('200000.00'),
       referenceId: 'pay_ref_' + randomUUID(),
       transferType: TransferType.PAYMENT,
     });

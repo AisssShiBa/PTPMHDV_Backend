@@ -53,6 +53,7 @@ model Wallet {
   heldBalance   Decimal           @default(0) @db.Decimal(20, 2)
   currency      String            @default("VND") @db.VarChar(3)
   status        WalletStatus      @default(ACTIVE)
+  kycTier       Int               @default(0)
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
   ledgerEntries      LedgerEntry[]
@@ -101,6 +102,7 @@ model WalletHold {
   referenceId         String     @db.VarChar(255)
   status              HoldStatus @default(PENDING)
   transactionId       String?    @db.Uuid
+  usageDay            String?    @db.VarChar(10)
   expiresAt           DateTime
   createdAt           DateTime   @default(now())
   sourceWallet        Wallet     @relation("HoldSource", fields: [sourceWalletId], references: [id], onDelete: Restrict)
@@ -109,6 +111,28 @@ model WalletHold {
   @@unique([sourceWalletId, referenceId])
   @@index([status, expiresAt])
   @@index([destinationWalletId])
+}
+
+model LimitPolicy {
+  kycTier   Int      @id
+  perTxn    Decimal  @db.Decimal(20, 2)
+  perDay    Decimal  @db.Decimal(20, 2)
+  perMonth  Decimal  @db.Decimal(20, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UserDailyUsage {
+  id        BigInt   @id @default(autoincrement())
+  userId    String   @db.VarChar(50)
+  day       String   @db.VarChar(10)
+  monthKey  String   @db.VarChar(7)
+  spentDay  Decimal  @default(0) @db.Decimal(20, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, day])
+  @@index([userId, monthKey])
 }
 
 enum AnomalyType {

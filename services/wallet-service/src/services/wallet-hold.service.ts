@@ -2,12 +2,17 @@ import { HoldStatus, OwnerType, PrismaClient, TransferType } from "@prisma/clien
 import { DomainException } from "../utils/domain.exception";
 import { assertWalletActive, conflict, insufficientBalance, money } from "../utils/wallet.helpers";
 import { LedgerService } from "./ledger.service";
+import { LimitService } from "./limit.service";
+import { getVnDay } from "../utils/timezone.helper";
 
 const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, CONFLICT: 409 };
 const prisma = new PrismaClient();
 
 export class WalletHoldService {
-  constructor(private readonly ledgerService: LedgerService) { }
+  constructor(
+    private readonly ledgerService: LedgerService,
+    private readonly limitService: LimitService = new LimitService()
+  ) { }
 
   async createHold(
     userId: string,
@@ -25,6 +30,7 @@ export class WalletHoldService {
     }
 
     return await prisma.$transaction(async (tx) => {
+      // 1. Lock Wallets: Lock Wallet first to avoid deadlock
       const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
       const destWallet = await this.ledgerService.findWalletTx(tx, destUserId, destOwnerType);
 
@@ -40,11 +46,26 @@ export class WalletHoldService {
       }
 
       assertWalletActive(wallet);
+
+      // 2. Kiểm tra hạn mức TRƯỚC KHI kiểm tra số dư (áp dụng cho USER wallet)
+      let usageDay: string | null = null;
+      if (wallet.ownerType === OwnerType.USER && wallet.userId) {
+        const reserve = await this.limitService.checkAndReserve(
+          tx,
+          wallet.userId,
+          amount,
+          wallet.kycTier ?? 0
+        );
+        usageDay = reserve.usageDay;
+      }
+
+      // 3. Kiểm tra số dư khả dụng (sau khi checkAndReserve)
       if (wallet.balance.sub(wallet.heldBalance).lt(amount)) {
         throw insufficientBalance();
       }
 
-      const updatedWallet = await tx.wallet.update({
+      // 4. Cập nhật heldBalance và tạo WalletHold
+      await tx.wallet.update({
         where: { id: wallet.id },
         data: { heldBalance: { increment: amount } }
       });
@@ -56,12 +77,13 @@ export class WalletHoldService {
           amount,
           referenceId,
           expiresAt,
+          usageDay,
           status: HoldStatus.PENDING,
         }
       });
 
       return { hold, replayed: false };
-    });
+    }, { maxWait: 15000, timeout: 25000 });
   }
 
   async captureHold(
@@ -85,15 +107,26 @@ export class WalletHoldService {
         throw conflict("HOLD_NOT_CAPTURABLE", "Hold has already been released");
       }
 
+      // Xử lý Hold hết hạn inline
       if (hold.expiresAt.getTime() <= Date.now()) {
-        await tx.wallet.update({
-          where: { id: wallet.id },
-          data: { heldBalance: { decrement: hold.amount } }
-        });
-        await tx.walletHold.update({
-          where: { id: hold.id },
+        const updated = await tx.walletHold.updateMany({
+          where: { id: hold.id, status: HoldStatus.PENDING },
           data: { status: HoldStatus.EXPIRED }
         });
+
+        if (updated.count === 1) {
+          await tx.wallet.update({
+            where: { id: wallet.id },
+            data: { heldBalance: { decrement: hold.amount } }
+          });
+
+          // Hoàn hạn mức đúng row usageDay
+          const usageDay = hold.usageDay || getVnDay(hold.createdAt);
+          if (wallet.userId && wallet.ownerType === OwnerType.USER) {
+            await this.limitService.refundUsage(tx, wallet.userId, hold.amount, usageDay);
+          }
+        }
+
         throw conflict("HOLD_EXPIRED", "Hold has expired and was released");
       }
 
@@ -151,17 +184,27 @@ export class WalletHoldService {
 
       const status = hold.expiresAt.getTime() <= Date.now() ? HoldStatus.EXPIRED : HoldStatus.RELEASED;
 
-      await tx.wallet.update({
-        where: { id: wallet.id },
-        data: { heldBalance: { decrement: hold.amount } }
-      });
-
-      const updatedHold = await tx.walletHold.update({
-        where: { id: hold.id },
+      // Idempotent state transition: updateMany chỉ thành công khi status đang là PENDING
+      const updated = await tx.walletHold.updateMany({
+        where: { id: hold.id, status: HoldStatus.PENDING },
         data: { status }
       });
 
-      return { hold: updatedHold, replayed: false };
+      if (updated.count === 1) {
+        await tx.wallet.update({
+          where: { id: wallet.id },
+          data: { heldBalance: { decrement: hold.amount } }
+        });
+
+        // Hoàn lại hạn mức đúng row usageDay
+        const usageDay = hold.usageDay || getVnDay(hold.createdAt);
+        if (wallet.userId && wallet.ownerType === OwnerType.USER) {
+          await this.limitService.refundUsage(tx, wallet.userId, hold.amount, usageDay);
+        }
+      }
+
+      const updatedHold = await tx.walletHold.findUnique({ where: { id: hold.id } });
+      return { hold: updatedHold!, replayed: updated.count === 0 };
     });
   }
 
@@ -171,6 +214,7 @@ export class WalletHoldService {
         status: HoldStatus.PENDING,
         expiresAt: { lt: new Date() }
       },
+      include: { sourceWallet: true },
       take: limit
     });
 
@@ -187,12 +231,18 @@ export class WalletHoldService {
             data: { status: HoldStatus.EXPIRED }
           });
 
-          if (updated.count > 0) {
+          if (updated.count === 1) {
             // Safe to decrement because we secured the wallet lock and hold was confirmed PENDING
             await tx.wallet.update({
               where: { id: hold.sourceWalletId },
               data: { heldBalance: { decrement: hold.amount } }
             });
+
+            // Hoàn hạn mức đúng row usageDay
+            const usageDay = hold.usageDay || getVnDay(hold.createdAt);
+            if (hold.sourceWallet.userId && hold.sourceWallet.ownerType === OwnerType.USER) {
+              await this.limitService.refundUsage(tx, hold.sourceWallet.userId, hold.amount, usageDay);
+            }
             released++;
           }
         });
