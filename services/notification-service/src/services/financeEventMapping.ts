@@ -1,5 +1,6 @@
 import type { FinvaultEvent } from 'finvault-events'
 import type { NotificationTypeValue } from './notificationService'
+import { shortenDisplayName } from './userLookup'
 
 export type FinanceNotificationDraft = {
   userId: string
@@ -33,7 +34,15 @@ const requiredTier = (data: Record<string, unknown>, key: string): number => {
 const formatAmount = (amount: string): string =>
   `${new Intl.NumberFormat('vi-VN').format(BigInt(amount))}đ`
 
-export function mapFinanceEventToNotifications(event: FinvaultEvent): FinanceNotificationDraft[] {
+export function paymentCounterpartyIds(event: FinvaultEvent): [string, string] {
+  const data = eventData(event.data)
+  return [requiredString(data, 'senderId'), requiredString(data, 'receiverId')]
+}
+
+export function mapFinanceEventToNotifications(
+  event: FinvaultEvent,
+  userNames: ReadonlyMap<string, string> = new Map()
+): FinanceNotificationDraft[] {
   const data = eventData(event.data)
 
   switch (event.eventType) {
@@ -47,14 +56,33 @@ export function mapFinanceEventToNotifications(event: FinvaultEvent): FinanceNot
       return [{ userId, type: 'KYC_TIER_CHANGED', message }]
     }
     case 'payment.succeeded': {
-      const senderId = requiredString(data, 'senderId')
-      const receiverId = requiredString(data, 'receiverId')
-      const message = `Giao dịch thanh toán ${formatAmount(requiredString(data, 'amount'))} đã thành công.`
-      return [...new Set([senderId, receiverId])].map(userId => ({
-        userId,
-        type: 'PAYMENT_SUCCESS',
-        message
-      }))
+      const [senderId, receiverId] = paymentCounterpartyIds(event)
+      const amount = formatAmount(requiredString(data, 'amount'))
+      if (senderId === receiverId) {
+        return [{
+          userId: senderId,
+          type: 'PAYMENT_SUCCESS',
+          message: `Giao dịch thanh toán ${amount} đã thành công.`
+        }]
+      }
+      const displayName = (userId: string) => {
+        const name = shortenDisplayName(userNames.get(userId))
+        return name === 'một người dùng' ? `${name}.` : name
+      }
+      const receiverName = displayName(receiverId)
+      const senderName = displayName(senderId)
+      return [
+        {
+          userId: senderId,
+          type: 'PAYMENT_SUCCESS',
+          message: `Bạn đã chuyển ${amount} cho ${receiverName}`
+        },
+        {
+          userId: receiverId,
+          type: 'PAYMENT_SUCCESS',
+          message: `Bạn nhận ${amount} từ ${senderName}`
+        }
+      ]
     }
     case 'payment.failed':
       return [{

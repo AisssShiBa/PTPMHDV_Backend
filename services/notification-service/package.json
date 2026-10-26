@@ -11,6 +11,8 @@
         "postinstall": "prisma generate",
         "test": "tsx --test tests/*.test.ts",
         "test:integration": "tsx --test tests/financeEvents.integration.test.ts",
+        "measure:latency": "tsx scripts/measure-latency.ts",
+        "test:s16": "tsx scripts/test-s16-reconnect.ts",
         "typecheck": "tsc --noEmit",
         "socket:smoke": "tsx scripts/socket-smoke.ts"
     },

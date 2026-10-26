@@ -23,12 +23,38 @@ test('payment.succeeded creates one Vietnamese notification per distinct recipie
       {
         userId: 'sender',
         type: 'PAYMENT_SUCCESS',
-        message: 'Giao dịch thanh toán 50.000đ đã thành công.'
+        message: 'Bạn đã chuyển 50.000đ cho một người dùng.'
       },
       {
         userId: 'receiver',
         type: 'PAYMENT_SUCCESS',
-        message: 'Giao dịch thanh toán 50.000đ đã thành công.'
+        message: 'Bạn nhận 50.000đ từ một người dùng.'
+      }
+    ]
+  )
+})
+
+test('payment.succeeded personalizes sender and receiver messages with compacted names', () => {
+  assert.deepEqual(
+    mapFinanceEventToNotifications(event('payment.succeeded', {
+      paymentId: 'payment-1',
+      senderId: 'sender',
+      receiverId: 'receiver',
+      amount: '50000'
+    }), new Map([
+      ['sender', 'Nguyễn Văn An'],
+      ['receiver', 'Trần Thị Bình']
+    ])),
+    [
+      {
+        userId: 'sender',
+        type: 'PAYMENT_SUCCESS',
+        message: 'Bạn đã chuyển 50.000đ cho Trần B.'
+      },
+      {
+        userId: 'receiver',
+        type: 'PAYMENT_SUCCESS',
+        message: 'Bạn nhận 50.000đ từ Nguyễn A.'
       }
     ]
   )
