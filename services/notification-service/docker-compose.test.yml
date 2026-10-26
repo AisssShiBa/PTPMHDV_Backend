@@ -1,0 +1,30 @@
+services:
+  notification-postgres-test:
+    image: postgres:16-alpine
+    container_name: notification-postgres-test
+    environment:
+      POSTGRES_DB: notification_service_test
+      POSTGRES_USER: notification_test
+      POSTGRES_PASSWORD: notification_test
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notification_test -d notification_service_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  notification-rabbitmq-test:
+    image: rabbitmq:3-management-alpine
+    container_name: notification-rabbitmq-test
+    environment:
+      RABBITMQ_DEFAULT_USER: finvault_test
+      RABBITMQ_DEFAULT_PASS: finvault_test
+    ports:
+      - "5674:5672"
+      - "15674:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
