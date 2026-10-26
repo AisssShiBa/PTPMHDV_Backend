@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { internalKey } from '../config/secrets';
 
 export class NotificationClient {
   private baseUrl: string;
@@ -17,7 +18,7 @@ export class NotificationClient {
       },
       {
         headers: {
-          'X-Internal-Key': process.env.INTERNAL_KEY || 'f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68'
+          'X-Internal-Key': internalKey!
         }
       }
     );

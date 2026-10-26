@@ -10,6 +10,7 @@ export type UserKycRecord = {
   phone: string | null
   address: string | null
   kycStatus: 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED'
+  kycTier: number
   idNumber: string | null
   idImageUrl: string | null
   createdAt: string

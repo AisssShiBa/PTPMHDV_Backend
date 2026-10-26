@@ -10,7 +10,8 @@ import { S3Client, CreateBucketCommand, HeadBucketCommand, HeadObjectCommand, Li
 import app from '../../src/app'
 import { prisma } from '../../src/config/prisma'
 import { env } from '../../src/config/env'
-import { submitDocument, cleanupStorage } from '../../src/services/kyc.service'
+import { submitDocuments, cleanupStorage } from '../../src/services/kyc.service'
+import { setTimeout as delay } from 'node:timers/promises'
 import { scanKycOrphans, lockKycObject, removeUnreferenced } from '../../src/services/storage-cleanup'
 import { storage } from '../../src/services/storage'
 const s3 = new S3Client({ endpoint: env.s3.endpoint, region: env.s3.region, forcePathStyle: true,
@@ -36,18 +37,21 @@ test('real multipart KYC upload remains private, reads via authorized URL, and t
   const user = await prisma.user.create({ data: { authUserId: randomUUID(), email: 's3@example.com' } })
   const png = await sharp({ create: { width: 5, height: 5, channels: 3, background: '#fff' } }).png().toBuffer()
   const result = await request(app).post('/api/users/' + user.authUserId + '/kyc').set(auth(user.authUserId))
-    .field('idNumber', '123456').attach('document', png, { filename: '../untrusted.png', contentType: 'image/png' }).expect(200)
+    .field('idNumber', '123456').attach('front', png, { filename: '../untrusted.png', contentType: 'image/png' }).attach('back', png, { filename: '../untrusted.png', contentType: 'image/png' }).expect(202)
   assert.equal(result.body.data.kycStatus, 'PENDING')
   assert.equal(result.body.data.kycObjectKey, undefined)
+  assert.equal(result.body.data.kycBackObjectKey, undefined)
   const updated = await prisma.user.findUniqueOrThrow({ where: { id: user.id } })
   assert.ok(updated.kycObjectKey?.startsWith('kyc/' + user.id + '/'))
+  assert.ok(updated.kycBackObjectKey?.startsWith('kyc/' + user.id + '/'))
+  assert.notEqual(updated.kycObjectKey, updated.kycBackObjectKey)
   assert.equal(updated.kycMimeType, 'image/jpeg')
   await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: updated.kycObjectKey! }))
   const anonymous = await fetch(env.s3.endpoint + '/' + bucket + '/' + updated.kycObjectKey)
   assert.equal(anonymous.status, 403)
   await request(app).get('/api/users/' + user.id + '/kyc/document').set(auth(randomUUID())).expect(403)
   const access = await request(app).get('/api/users/' + user.id + '/kyc/document').set(auth(user.authUserId)).expect(200)
-  assert.equal(access.body.data.expiresIn, 60)
+  assert.equal(access.body.data.expiresIn, 300)
   assert.equal((await fetch(access.body.data.url)).status, 200)
   const admin = auth(randomUUID(), 'ADMIN')
   await request(app).patch('/api/users/' + user.id + '/kyc-status').set(auth(user.authUserId)).send({ kycStatus: 'APPROVED' }).expect(403)
@@ -55,18 +59,19 @@ test('real multipart KYC upload remains private, reads via authorized URL, and t
   await request(app).patch('/api/users/' + user.id + '/kyc-status').set(admin).send({ kycStatus: 'APPROVED' }).expect(200)
   await request(app).patch('/api/users/' + user.id + '/kyc-status').set(admin).send({ kycStatus: 'NONE' }).expect(409)
   await request(app).post('/api/users/' + user.id + '/kyc').set(auth(user.authUserId)).field('idNumber', '123456')
-    .attach('document', png, { filename: 'a.png', contentType: 'image/png' }).expect(409)
+    .attach('front', png, { filename: 'a.png', contentType: 'image/png' }).attach('back', png, { filename: 'a.png', contentType: 'image/png' }).expect(409)
   await request(app).patch('/api/users/' + user.id + '/kyc-status').set(admin).send({ kycStatus: 'REJECTED' }).expect(200)
   await request(app).post('/api/users/by-auth/' + user.authUserId + '/kyc').set(auth(user.authUserId)).field('idNumber', '123456')
-    .attach('document', png, { filename: 'a.png', contentType: 'image/png' }).expect(200)
+    .attach('front', png, { filename: 'a.png', contentType: 'image/png' }).attach('back', png, { filename: 'a.png', contentType: 'image/png' }).expect(202)
   await cleanupStorage()
   await assert.rejects(s3.send(new HeadObjectCommand({ Bucket: bucket, Key: updated.kycObjectKey! })))
+  await assert.rejects(s3.send(new HeadObjectCommand({ Bucket: bucket, Key: updated.kycBackObjectKey! })))
 })
 test('DB concurrency conflict after upload is eventually cleaned without replacing the current document', async () => {
   const user = await prisma.user.create({ data: { authUserId: randomUUID(), email: 'race-s3@example.com' } })
   const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
   await prisma.user.update({ where: { id: user.id }, data: { version: { increment: 1 } } })
-  await assert.rejects(submitDocument(user, '123', { buffer: png, mimetype: 'image/png' }), (e: any) => e.code === 'CONCURRENT_UPDATE')
+  await assert.rejects(submitDocuments(user, '123', { buffer: png, mimetype: 'image/png' }, { buffer: png, mimetype: 'image/png' }), (e: any) => e.code === 'CONCURRENT_UPDATE')
   const job = await prisma.storageCleanup.findFirstOrThrow()
   await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: job.objectKey }))
   await prisma.storageCleanup.update({ where: { objectKey: job.objectKey }, data: { nextAttemptAt: new Date(0) } })
@@ -87,9 +92,98 @@ test('current-user multipart route submits the signed users document and exposes
   const user = await prisma.user.create({ data: { authUserId: randomUUID(), email: 'me-upload@example.com' } })
   const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
   await request(app).post('/api/users/me/kyc').set(auth(user.authUserId)).field('idNumber', '123')
-    .attach('document', png, { filename: 'id.png', contentType: 'image/png' }).expect(200)
+    .attach('front', png, { filename: 'id.png', contentType: 'image/png' }).attach('back', png, { filename: 'id.png', contentType: 'image/png' }).expect(202)
   const result = await request(app).get('/api/users/me/kyc').set(auth(user.authUserId)).expect(200)
   assert.deepEqual(result.body.data, { kycStatus: 'PENDING', kycTier: 0, hasKycDocument: true })
+})
+
+test('H8 requires both faces on every submission route and refuses approval of legacy one-face profiles', async () => {
+  const user = await prisma.user.create({ data: { authUserId: randomUUID(), email: randomUUID() + '@example.test' } })
+  const png = await sharp({ create: { width: 3, height: 3, channels: 3, background: '#eee' } }).png().toBuffer()
+  for (const path of ['/api/users/kyc/documents', '/api/users/me/kyc', '/api/users/' + user.id + '/kyc',
+    '/api/users/by-auth/' + user.authUserId + '/kyc']) {
+    for (const side of ['front', 'back', 'document']) {
+      const result = await request(app).post(path).set(auth(user.authUserId)).field('idNumber', '000000001234')
+        .attach(side, png, { filename: 'synthetic.png', contentType: 'image/png' }).expect(400)
+      assert.equal(result.body.error.code, 'KYC_DOCUMENTS_REQUIRED')
+    }
+  }
+  assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).kycStatus, 'NONE')
+  await prisma.user.update({ where: { id: user.id }, data: {
+    kycStatus: 'PENDING', kycObjectKey: 'kyc/legacy.jpg', idNumber: '000000001234'
+  } })
+  const rejected = await request(app).patch(`/api/users/${user.id}/kyc-status`).set(auth(randomUUID(), 'ADMIN'))
+    .send({ kycStatus: 'APPROVED' }).expect(409)
+  assert.equal(rejected.body.error.code, 'KYC_DOCUMENTS_REQUIRED')
+})
+
+test('H8 validates both images before writing, rejects extra fields and oversized back image, and returns 202', async () => {
+  const user = await prisma.user.create({ data: { authUserId: randomUUID(), email: randomUUID() + '@example.test' } })
+  const png = await sharp({ create: { width: 3, height: 3, channels: 3, background: '#eee' } }).png().toBuffer()
+  const upload = () => request(app).post('/api/users/kyc/documents').set(auth(user.authUserId))
+    .field('idNumber', '000000001234').attach('front', png, { filename: 'front.png', contentType: 'image/png' })
+  const beforeJobs = await prisma.storageCleanup.count()
+  await upload().attach('back', Buffer.from('not an image'), 'fake.png').expect(400)
+  await upload().attach('back', Buffer.alloc(5 * 1024 * 1024 + 1), 'big.png').expect(413)
+  await upload().field('kycTier', '2').attach('back', png, 'back.png').expect(400)
+  assert.equal(await prisma.storageCleanup.count(), beforeJobs)
+  const response = await upload().attach('back', png, 'back.png').expect(202)
+  assert.equal(response.body.data.kycStatus, 'PENDING')
+  assert.equal(response.body.data.kycTier, 0)
+  const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } })
+  for (const key of [row.kycObjectKey!, row.kycBackObjectKey!])
+    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+})
+
+test('H8 failure on back upload preserves both old references and leaves both cleanup intents durable', async () => {
+  const user = await prisma.user.create({ data: { authUserId: randomUUID(), email: randomUUID() + '@example.test' } })
+  const png = await sharp({ create: { width: 3, height: 3, channels: 3, background: '#eee' } }).png().toBuffer()
+  const file = { buffer: png, mimetype: 'image/png' }
+  const original = await submitDocuments(user, '000000001234', file, file)
+  const put = storage.put.bind(storage)
+  const attempted: string[] = []
+  stub(storage, 'put', async (key: string, body: Buffer) => {
+    attempted.push(key)
+    if (attempted.length === 2) throw new Error('Back image storage failure')
+    await put(key, body)
+  })
+  await assert.rejects(submitDocuments(original, '000000005678', file, file), (e: any) => e.code === 'KYC_SUBMISSION_FAILED')
+  const current = await prisma.user.findUniqueOrThrow({ where: { id: user.id } })
+  assert.equal(current.kycObjectKey, original.kycObjectKey)
+  assert.equal(current.kycBackObjectKey, original.kycBackObjectKey)
+  assert.equal(current.version, original.version)
+  assert.equal(current.idNumber, original.idNumber)
+  assert.equal(await prisma.storageCleanup.count({ where: { objectKey: { in: attempted } } }), 2)
+  await prisma.storageCleanup.updateMany({ where: { objectKey: { in: attempted } }, data: { nextAttemptAt: new Date(0) } })
+  await cleanupStorage()
+  await assert.rejects(s3.send(new HeadObjectCommand({ Bucket: bucket, Key: attempted[0] })))
+  for (const key of [original.kycObjectKey!, original.kycBackObjectKey!])
+    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+})
+
+test('S12 USER cannot obtain another users two URLs and both signed URLs expire on MinIO with TTL 2 seconds', async () => {
+  const user = await prisma.user.create({ data: { authUserId: randomUUID(), email: randomUUID() + '@example.test' } })
+  const png = await sharp({ create: { width: 3, height: 3, channels: 3, background: '#eee' } }).png().toBuffer()
+  await submitDocuments(user, '000000001234', { buffer: png, mimetype: 'image/png' }, { buffer: png, mimetype: 'image/png' })
+  const path = `/api/users/${user.id}/kyc/documents`
+  await request(app).get(path).set(auth(randomUUID())).expect(403)
+  const admin = auth(randomUUID(), 'ADMIN')
+  await request(app).get(path).set(admin).expect(403)
+  await request(app).get(`/api/users/${user.id}/kyc/document`).set(admin).expect(403)
+  await request(app).get(`/api/users/by-auth/${user.authUserId}/kyc/document`).set(admin).expect(403)
+  stub(env, 'kycUrlTtlSeconds', 2 as any)
+  const response = await request(app).get(path).set('x-internal-key', process.env.INTERNAL_KEY!).expect(200)
+  assert.equal(response.headers['cache-control'], 'no-store')
+  assert.ok(Date.parse(response.body.data.expiresAt) <= Date.now() + 2000)
+  for (const url of [response.body.data.frontUrl, response.body.data.backUrl]) {
+    assert.equal(new URL(url).searchParams.get('X-Amz-Expires'), '2')
+    assert.equal((await fetch(url)).status, 200)
+    const unsigned = new URL(url); unsigned.search = ''
+    assert.equal((await fetch(unsigned)).status, 403)
+  }
+  await delay(3100)
+  for (const url of [response.body.data.frontUrl, response.body.data.backUrl])
+    assert.equal((await fetch(url)).status, 403)
 })
 
 test('real scanner finds untracked objects, protects jobs/references and leaves dry-run unchanged', async () => {
@@ -99,8 +193,16 @@ test('real scanner finds untracked objects, protects jobs/references and leaves 
   await prisma.user.create({ data: { authUserId: randomUUID(), email: randomUUID() + '@example.com', kycObjectKey: keys[0] } })
   await prisma.storageCleanup.create({ data: { objectKey: keys[1], nextAttemptAt: new Date(0) } })
   await prisma.storageCleanup.create({ data: { objectKey: keys[3], nextAttemptAt: new Date(Date.now() + 60000) } })
-  // S3 LastModified has second precision; a 1ms test-only grace avoids long sleeps.
-  await new Promise(resolve => setTimeout(resolve, 20))
+  // Use the timestamps returned by LIST (HEAD can round to whole seconds).
+  // Docker and host clocks may differ slightly; a fixed 20ms sleep is flaky.
+  const timestamps: number[] = []
+  for await (const object of storage.listKyc()) {
+    if (keys.includes(object.key)) timestamps.push(object.lastModified!.getTime())
+  }
+  assert.equal(timestamps.length, keys.length)
+  const waitMs = Math.max(0, Math.max(...timestamps) + 2 - Date.now()) + 50
+  assert.ok(waitMs < 10000, 'Storage/host clocks differ by more than the test allowance')
+  await delay(waitMs)
   const beforeJobs = await prisma.storageCleanup.findMany({ orderBy: { objectKey: 'asc' } })
   const candidates: any[] = []
   const dry = await scanKycOrphans({ graceMs: 1, log: entry => candidates.push(entry) })
@@ -148,7 +250,7 @@ test('an expired upload removed by cleanup cannot later commit a dangling refere
     await prisma.storageCleanup.update({ where: { objectKey: key }, data: { nextAttemptAt: new Date(0) } })
     assert.equal(await removeUnreferenced(key, true), 'deleted')
   })
-  await assert.rejects(submitDocument(user, '123', { buffer: png, mimetype: 'image/png' }))
+  await assert.rejects(submitDocuments(user, '123', { buffer: png, mimetype: 'image/png' }, { buffer: png, mimetype: 'image/png' }))
   const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } })
   assert.equal(unchanged.kycObjectKey, null)
   assert.equal(unchanged.kycStatus, 'NONE')
@@ -187,7 +289,7 @@ test('a successful storage delete followed by DB rollback cannot leave a late-up
     assert.ok(await prisma.storageCleanup.findUnique({ where: { objectKey: key } }))
     failCleanup = false
   })
-  await assert.rejects(submitDocument(user, '123', { buffer: png, mimetype: 'image/png' }))
+  await assert.rejects(submitDocuments(user, '123', { buffer: png, mimetype: 'image/png' }, { buffer: png, mimetype: 'image/png' }))
   const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } })
   assert.equal(unchanged.kycObjectKey, null)
   assert.equal(unchanged.kycStatus, 'NONE')

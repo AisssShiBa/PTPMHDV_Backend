@@ -1,4 +1,5 @@
 import { DomainException } from '../utils/domain.exception';
+import { internalKey } from '../config/secrets';
 
 export class WalletClient {
   private baseUrl: string;
@@ -12,7 +13,7 @@ export class WalletClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
+        'x-internal-key': internalKey!
       },
       body: JSON.stringify({ amount, referenceId, expiresAt })
     });
@@ -28,7 +29,7 @@ export class WalletClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
+        'x-internal-key': internalKey!
       },
       body: JSON.stringify({ referenceId })
     });
@@ -45,7 +46,7 @@ export class WalletClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
+          'x-internal-key': internalKey!
         },
         body: JSON.stringify({ referenceId: holdId })
       });
@@ -66,7 +67,7 @@ export class WalletClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
+          'x-internal-key': internalKey!
         },
         body: JSON.stringify({ amount, referenceId })
       });
@@ -86,7 +87,7 @@ export class WalletClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
+        'x-internal-key': internalKey!
       },
       body: JSON.stringify({ amount, referenceId })
     });
@@ -101,7 +102,7 @@ export class WalletClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-internal-key': process.env.INTERNAL_KEY || 'default_internal_secret_key_123456'
+        'x-internal-key': internalKey!
       },
       body: JSON.stringify({ amount, referenceId, transferType: 'TOPUP' })
     });

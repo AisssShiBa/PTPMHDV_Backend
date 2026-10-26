@@ -86,8 +86,9 @@ for (const path of ['/api/users', '/api/merchants', '/api/admin/kyc']) {
 const png = await sharp({ create: { width: 16, height: 16, channels: 3, background: '#eee' } }).png().toBuffer()
 const form = new FormData()
 form.set('idNumber', 'SYNTHETIC-SMOKE-ONLY')
-form.set('document', new Blob([png], { type: 'image/png' }), 'synthetic.png')
-await call('/api/users/me/kyc', { method: 'POST', token, body: form })
+form.set('front', new Blob([png], { type: 'image/png' }), 'synthetic-front.png')
+form.set('back', new Blob([png], { type: 'image/png' }), 'synthetic-back.png')
+await call('/api/users/kyc/documents', { method: 'POST', token, body: form, expected: 202 })
 const document = (await call('/api/users/by-auth/' + owner.id + '/kyc/document', { token })).value.data
 assert.equal((await fetch(document.url)).status, 200)
 const unsigned = new URL(document.url); unsigned.search = ''

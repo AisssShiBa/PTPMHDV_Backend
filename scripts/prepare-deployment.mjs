@@ -28,6 +28,9 @@ if (!existsSync(env)) {
   ].join('\n') + '\n', { mode: 0o600, flag: 'wx' })
 }
 const config = parseEnv(readFileSync(env, 'utf8'))
+writeFileSync(resolve(directory, 'keys/internal-key.txt'), config.INTERNAL_KEY + '\n', { mode: 0o600 })
+writeFileSync(resolve(directory, 'init-db.sql'), readFileSync(resolve(root, 'init-db.sql'), 'utf8')
+  .replaceAll('{{DB_ROLE_PASSWORD}}', randomBytes(32).toString('hex')), { mode: 0o600 })
 if (!config.RABBITMQ_URL) appendFileSync(env, '\nRABBITMQ_URL=amqp://' +
   encodeURIComponent(config.RABBITMQ_USER) + ':' + encodeURIComponent(config.RABBITMQ_PASS) + '@rabbitmq:5672\n')
 console.log('Isolated runtime-test configuration ready in .cache/deployment; existing credentials preserved. Main Quick Start uses node scripts/init-secrets.js.')

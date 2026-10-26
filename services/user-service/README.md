@@ -45,8 +45,10 @@ Các đường dẫn dưới đây nối sau `/api/users`.
 | GET | `/:id` | Chính chủ/ADMIN/internal | Nhận profile ID hoặc Auth ID |
 | GET | `/by-auth/:authUserId` | Chính chủ/ADMIN/internal | Chỉ nhận Auth ID |
 | PUT | `/:id` hoặc `/by-auth/:authUserId` | Chính chủ/ADMIN/internal | Ít nhất một trong `fullName`, `phone`, `address` |
-| POST | `/:id/kyc` hoặc `/by-auth/:authUserId/kyc` | Chính chủ/ADMIN/internal | Multipart: `idNumber`, file `document` |
-| GET | `/:id/kyc/document` hoặc `/by-auth/:authUserId/kyc/document` | Chính chủ/ADMIN/internal | URL đọc ảnh, hiệu lực 60 giây |
+| GET | `/lookup?q=` | USER | Khớp chính xác email/SĐT; `{authUserId, maskedName}`; 404 chung; 429 lần 11/phút |
+| POST | `/kyc/documents` hoặc `/me/kyc` | Chính chủ | Multipart `idNumber`, `front`, `back`; 202 PENDING |
+| POST | `/:id/kyc` hoặc `/by-auth/:authUserId/kyc` | Chính chủ/ADMIN/internal | Cũng bắt buộc hai mặt; `document` là alias của `front`, vẫn cần `back`; 202 |
+| GET | `/:id/kyc/document` hoặc `/by-auth/:authUserId/kyc/document` | Chính chủ USER/internal | URL đọc ảnh mặt trước; ADMIN dùng `/api/admin/kyc/:userId/documents` để ghi audit |
 | PATCH | `/:id/kyc-status` | ADMIN/internal | `kycStatus` |
 | GET | `/health` | Công khai | Liveness; không truy vấn database mỗi lần |
 
@@ -76,18 +78,18 @@ Với AWS S3, có thể bỏ `S3_ENDPOINT` và đặt `S3_FORCE_PATH_STYLE=false
 Ví dụ gọi qua cổng vào đã cấu hình, trong đó `$token` và `$authUserId` là giá trị của người dùng:
 
 ```powershell
-curl.exe -X POST "http://localhost:3000/api/users/$authUserId/kyc" -H "Authorization: Bearer $token" -F "idNumber=012345678901" -F "document=@identity.png"
+curl.exe -X POST "http://localhost:3000/api/users/kyc/documents" -H "Authorization: Bearer $token" -F "idNumber=012345678901" -F "front=@front.png" -F "back=@back.png"
 ```
 
-- Chỉ nhận PNG/JPEG tối đa 5 MiB, giới hạn 25 triệu pixel; giải mã thật và ghi lại thành JPEG, bỏ metadata gốc. Không dùng filename từ client làm object key.
-- Kiểm tra quyền trước khi buffer file. URL đọc có hiệu lực 60 giây; response dùng `Cache-Control: no-store`.
+- Mỗi mặt chỉ nhận PNG/JPEG tối đa 5 MiB, giới hạn 25 triệu pixel; giải mã thật và ghi lại thành JPEG, bỏ metadata gốc. Không dùng filename từ client làm object key. Thiếu mặt trả 400 `KYC_DOCUMENTS_REQUIRED`; `kycFileSize` là tổng kích thước hai ảnh JPEG sau chuẩn hóa.
+- Kiểm tra quyền trước khi buffer file. URL đọc có hiệu lực 300 giây (KYC_URL_TTL_SECONDS); response dùng `Cache-Control: no-store`.
 - Nộp mới/từ chối/nộp lại khi đang chờ: chuyển thành `PENDING`. `APPROVED` phải bị từ chối trước khi nộp lại.
 - Duyệt: `PENDING → APPROVED/REJECTED`; thu hồi: `APPROVED → REJECTED`. Gửi lại cùng trạng thái là no-op. Chưa có tài liệu upload hợp lệ thì không thể duyệt.
 - Optimistic version chặn cập nhật KYC trên snapshot cũ (409 `CONCURRENT_UPDATE`).
 - Intent dọn tệp được lưu trước upload. Tệp mới bị bỏ dở được dọn sau 24 giờ; tệp thay thế cũ được đưa vào hàng đợi ngay. Job chạy mỗi 60 giây khi API đang chạy, thử lại sau một giờ nếu storage lỗi và luôn kiểm tra tham chiếu trước khi xóa.
 - Nếu API dừng, cleanup tiếp tục khi khởi động lại; dữ liệu công việc nằm trong PostgreSQL.
 
-**Thay đổi API:** POST KYC không còn nhận URL tùy ý trong JSON. Client phải gửi multipart; các hồ sơ legacy dùng URL cần upload lại để có tài liệu riêng tư và được duyệt theo quy tắc mới.
+**Thay đổi API tuần 2:** mọi route POST KYC cần đủ hai mặt và trả 202. Client upload một mặt cần cập nhật sang `front`, `back`, `idNumber`. Hồ sơ PENDING cũ thiếu mặt sau cần nộp lại trước khi được duyệt; hồ sơ APPROVED cũ không tự bị hạ tier. Không nhận URL tùy ý trong JSON.
 
 ## Consumer đăng ký
 
@@ -149,3 +151,11 @@ Dockerfile dùng migration deploy thay cho tự đồng bộ schema bằng db pu
 ## Lưu ý triển khai
 
 Cần cấu hình broker/storage thật trước khi bật các chức năng tương ứng; file mẫu giữ các endpoint/credentials này ở dạng chú thích. Migration mới đã được thử trong database test, chưa áp dụng vào database ứng dụng. `npm audit` hiện báo 3 mục high trong chuỗi dependency Prisma CLI → @prisma/config → deepmerge-ts; chưa tự hạ/nâng major Prisma để xử lý vì ngoài thay đổi nghiệp vụ này.
+
+## Cập nhật tuần 2 — phase 2
+
+Xem [bàn giao KYC/Outbox/secrets](../../docs/phase2-huu.md). Publisher chạy riêng bằng `npm run publisher`; duyệt KYC đặt tier 1 và từ chối đặt tier 0 cùng transaction Outbox.
+
+## Cập nhật tuần 2 — phase 3
+
+Xem [bàn giao H8/H11](../../docs/phase3-huu.md). Migration `20261025_user_recipient_lookup` thêm bảng giới hạn lookup dùng chung giữa các instance; deploy trước khi bật API lookup. Email khớp không phân biệt hoa/thường; SĐT khớp nguyên chuỗi; không tra cứu một phần. Người nhận đã xóa, chính mình, không tồn tại hoặc SĐT trùng đều có cùng lỗi 404. Giới hạn tính cả request thất bại trong 60 giây trượt; lần 11 trả 429 và `Retry-After: 60`.

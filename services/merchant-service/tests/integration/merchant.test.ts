@@ -128,11 +128,21 @@ test('expired worker leases recover; parallel claims cannot overtake prior aggre
 test('publish failure backs off, stops at FAILED, and replay unblocks later events', async () => {
   const merchant = await register({ ownerId: randomUUID(), businessName: 'Shop' })
   await changeStatus(merchant.id, 'APPROVED')
+  // createdAt can come from a different host clock; it is not the retry baseline.
+  await prisma.merchantOutboxEvent.updateMany({
+    where: { aggregateVersion: 1 }, data: { createdAt: new Date('2100-01-01T00:00:00Z') }
+  })
+  const [beforeRetry] = await prisma.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`
   await publishOne(async () => { throw new Error('Broker down') })
+  const [afterRetry] = await prisma.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`
   let event = await prisma.merchantOutboxEvent.findFirstOrThrow({ where: { aggregateVersion: 1 } })
   assert.equal(event.status, 'PENDING')
   assert.equal(event.attempts, 1)
-  assert.ok(event.nextAttemptAt.getTime() > event.createdAt.getTime())
+  const retryAt = event.nextAttemptAt.getTime()
+  const retryMs = Math.min(60000, env.eventRetryMs)
+  // PostgreSQL timestamp precision can round by one millisecond when read as Date.
+  assert.ok(retryAt >= beforeRetry.now.getTime() + retryMs - 1, 'Retry must honor the database-clock backoff')
+  assert.ok(retryAt <= afterRetry.now.getTime() + retryMs + 1, 'Retry must not follow a skewed creation timestamp')
   await prisma.merchantOutboxEvent.update({ where: { id: event.id }, data: { nextAttemptAt: new Date(0) } })
   await publishOne(async () => { throw new Error('Still down') })
   event = await prisma.merchantOutboxEvent.findUniqueOrThrow({ where: { id: event.id } })

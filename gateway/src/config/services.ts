@@ -1,5 +1,16 @@
 // D:\PTPMHDV\Backend\gateway\src\config\env.ts
 import 'dotenv/config'
+import { readFileSync } from 'node:fs'
+
+for (const name of ['INTERNAL_KEY', 'ACCESS_TOKEN_SECRET']) {
+    const file = process.env[`${name}_FILE`]
+    if (file === undefined) continue
+    let value: string
+    try { value = readFileSync(file, 'utf8').trim() }
+    catch { throw new Error(`Cannot read required secret: ${name}_FILE`) }
+    if (!value) throw new Error(`Empty required secret: ${name}_FILE`)
+    process.env[name] = value
+}
 
 function required(key: string): string {
     const value = process.env[key]

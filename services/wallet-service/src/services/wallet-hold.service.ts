@@ -91,7 +91,7 @@ export class WalletHoldService {
     referenceId: string,
     ownerType: OwnerType = OwnerType.USER,
   ) {
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
       const hold = await tx.walletHold.findUnique({
         where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
@@ -100,7 +100,7 @@ export class WalletHoldService {
       if (!hold) throw new DomainException(HttpStatus.NOT_FOUND, "HOLD_NOT_FOUND", "Hold was not found");
 
       if (hold.status === HoldStatus.CAPTURED) {
-        return { expired: false, balance: wallet.balance, transactionId: hold.transactionId, replayed: true };
+        return { expired: false as const, balance: wallet.balance, transactionId: hold.transactionId, replayed: true };
       }
 
       if (hold.status === HoldStatus.RELEASED || hold.status === HoldStatus.EXPIRED) {
@@ -127,7 +127,9 @@ export class WalletHoldService {
           }
         }
 
-        throw conflict("HOLD_EXPIRED", "Hold has expired and was released");
+        // Commit the release and usage refund first. Throwing inside the
+        // transaction would roll them back and leave this hold PENDING.
+        return { expired: true as const };
       }
 
       let destWallet;
@@ -157,12 +159,14 @@ export class WalletHoldService {
       });
 
       return {
-        expired: false,
+        expired: false as const,
         balance: movement.sourceWallet.balance,
         transactionId: movement.transactionId,
         replayed: movement.replayed,
       };
     });
+    if (result.expired) throw conflict("HOLD_EXPIRED", "Hold has expired and was released");
+    return result;
   }
 
   async releaseHold(

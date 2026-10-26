@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import { createPublicKey } from 'node:crypto'
 import jwt, { SignOptions } from 'jsonwebtoken'
 import type { Request, Response, NextFunction } from 'express'
+export { loadSecretEnvironment } from './secrets'
 
 export interface GatewayAuthContext {
   userId: string

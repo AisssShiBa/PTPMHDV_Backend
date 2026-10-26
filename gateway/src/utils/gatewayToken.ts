@@ -22,12 +22,6 @@ export interface GatewayPayload {
    2. KHÓA MẬT MÃ CỐ ĐỊNH (DEV STUB CHO NGÀY 1)
    Cặp khóa ES256 (NIST P-256) dùng để test nhanh nội bộ mà không cần cài đặt.
    ========================================================================== */
-export const DEV_STUB_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgtGfFMFMTiOTdDVxb
-ByJfXc0gszqTpA2mwaMOqlbElNmhRANCAASeItQruBntlJjJYGebdKI9R51AfC1p
-4WlWv0NYM5oDTY5yxIarUr6mbOyl6uzvvHjWcVhKp79tCA4v1c40qRHB
------END PRIVATE KEY-----`
-
 export const DEV_STUB_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEniLUK7gZ7ZSYyWBnm3SiPUedQHwt
 aeFpVr9DWDOaA02OcsSGq1K+pmzspers77x41nFYSqe/bQgOL9XONKkRwQ==
@@ -47,8 +41,7 @@ export const getGatewayPrivateKey = (): string => {
         return process.env.GATEWAY_PRIVATE_KEY.trim()
     }
 
-    if (process.env.NODE_ENV === 'production') throw new Error('GATEWAY_PRIVATE_KEY is required in production')
-    return DEV_STUB_PRIVATE_KEY
+    throw new Error('GATEWAY_PRIVATE_KEY is required')
 }
 
 export const getGatewayPublicKey = (): string => {
@@ -61,8 +54,7 @@ export const getGatewayPublicKey = (): string => {
         return process.env.GATEWAY_PUBLIC_KEY.trim()
     }
 
-    if (process.env.NODE_ENV === 'production') throw new Error('GATEWAY_PUBLIC_KEY is required in production')
-    return DEV_STUB_PUBLIC_KEY
+    throw new Error('GATEWAY_PUBLIC_KEY is required')
 }
 
 /* ==========================================================================

@@ -5,7 +5,22 @@ import { requireAdmin, requireOwner } from '../utils/access'
 import { HttpError } from '../utils/errors'
 import { findProfileByAuthUserId, resolveProfileByIdOrAuthUserId, setKycStatus, userResponse } from '../services/user.service'
 import { kycBody, ListUsersQuery } from '../validations/user.validation'
-import { submitDocument, documentUrl } from '../services/kyc.service'
+import { submitDocuments, documentUrl, documentUrls } from '../services/kyc.service'
+import { updateKycTier } from '../services/kyc-tier.service'
+import { consumeLookupAttempt, lookupRecipient } from '../services/recipient-lookup'
+import { z } from 'zod'
+
+export async function lookupUser(req: RequestWithContext, res: Response) {
+  if (!req.auth || req.auth.role !== 'USER') throw new HttpError(403, 'FORBIDDEN', 'User access required')
+  res.setHeader('Cache-Control', 'no-store')
+  try { await consumeLookupAttempt(req.auth.userId) }
+  catch (error) {
+    if (error instanceof HttpError && error.status === 429) res.setHeader('Retry-After', '60')
+    throw error
+  }
+  const query = z.string().trim().min(1).max(254).parse(req.query.q)
+  return res.json({ success: true, data: await lookupRecipient(query, req.auth.userId) })
+}
 
 export async function createUser(req: RequestWithContext, res: Response) {
   if (!req.isInternalCall) throw new HttpError(401, 'UNAUTHORIZED', 'Internal service credentials required')
@@ -43,11 +58,17 @@ export async function authorizeKyc(req: RequestWithContext, res: Response, next:
 }
 export async function submitKyc(req: RequestWithContext, res: Response) {
   const { idNumber } = kycBody.parse(req.body)
-  if (!req.file) throw new HttpError(400, 'KYC_DOCUMENT_REQUIRED', 'Upload a JPEG or PNG using the document field')
-  const profile = await submitDocument(res.locals.profile, idNumber, req.file)
-  return res.json({ success: true, message: 'Success', data: userResponse(profile) })
+  const files = req.files as Record<string, Express.Multer.File[]> | undefined
+  if (files?.front && files?.document) throw new HttpError(400, 'INVALID_UPLOAD', 'Use only one front image field')
+  const front = files?.front?.[0] ?? files?.document?.[0]
+  const back = files?.back?.[0]
+  if (!front || !back) throw new HttpError(400, 'KYC_DOCUMENTS_REQUIRED', 'Upload both front and back images')
+  const profile = await submitDocuments(res.locals.profile, idNumber, front, back)
+  return res.status(202).json({ success: true, message: 'Success', data: userResponse(profile) })
 }
-export async function getKycDocument(_req: RequestWithContext, res: Response) {
+export async function getKycDocument(req: RequestWithContext, res: Response) {
+  if (req.auth?.role === 'ADMIN')
+    throw new HttpError(403, 'FORBIDDEN', 'Use the audited Admin documents endpoint')
   res.setHeader('Cache-Control', 'no-store')
   return res.json({ success: true, message: 'Success', data: await documentUrl(res.locals.profile) })
 }
@@ -55,6 +76,18 @@ export async function updateKycStatus(req: RequestWithContext, res: Response) {
   requireAdmin(req)
   const profile = await resolveProfileByIdOrAuthUserId(String(req.params.id))
   return res.json({ success: true, message: 'Success', data: userResponse(await setKycStatus(profile, req.body.kycStatus)) })
+}
+export async function changeKycTier(req: RequestWithContext, res: Response) {
+  requireAdmin(req)
+  const profile = await resolveProfileByIdOrAuthUserId(String(req.params.id))
+  return res.json({ success: true, data: userResponse(await updateKycTier(profile.id, req.body.tier, true)) })
+}
+export async function getKycDocuments(req: RequestWithContext, res: Response) {
+  // Admin must go through admin-service, which persists the viewing audit first.
+  if (!req.isInternalCall) throw new HttpError(403, 'FORBIDDEN', 'Use the audited Admin documents endpoint')
+  const profile = await resolveProfileByIdOrAuthUserId(String(req.params.id))
+  res.setHeader('Cache-Control', 'no-store')
+  return res.json({ success: true, data: await documentUrls(profile) })
 }
 export async function getUsers(req: RequestWithContext, res: Response) {
   requireAdmin(req)

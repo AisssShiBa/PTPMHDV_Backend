@@ -7,6 +7,7 @@ interface RateLimitRecord {
 }
 
 const store: Map<string, RateLimitRecord> = new Map()
+let nextLimiterId = 0
 
 // Dọn dẹp bản ghi hết hạn mỗi 60 giây để tối ưu RAM
 setInterval(() => {
@@ -16,7 +17,7 @@ setInterval(() => {
       store.delete(key)
     }
   }
-}, 60_000)
+}, 60_000).unref()
 
 /**
  * Middleware giới hạn tần suất gọi API (Rate Limiting) theo IP
@@ -27,15 +28,20 @@ export const rateLimiter = (
   windowMs: number = 15 * 60 * 1000,
   max: number = 30
 ) => {
+  const limiterId = nextLimiterId++
   return (req: Request, _res: Response, next: NextFunction) => {
     const forwarded = req.headers['x-forwarded-for']
     const ip = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.ip) || 'unknown-client'
+    // PIN routes run after signed authentication. Signup/signin counters must
+    // not consume a different route's budget, and users must not share PIN limits.
+    const identity = (req as Request & { auth?: { userId: string } }).auth?.userId || ip
+    const key = limiterId + ':' + identity
     const now = Date.now()
 
-    const record = store.get(ip)
+    const record = store.get(key)
 
     if (!record || record.resetTime <= now) {
-      store.set(ip, {
+      store.set(key, {
         count: 1,
         resetTime: now + windowMs
       })

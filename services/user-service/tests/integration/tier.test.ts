@@ -32,7 +32,7 @@ test('tier changes record explicit Auth identity and a single event; repeated ti
   assert.equal(payload.eventId, events[0].id)
   assert.equal(payload.eventType, 'user.kyc_updated')
   assert.equal(payload.eventVersion, 1)
-  assert.deepEqual(payload.data, { authUserId: user.authUserId, kycTier: 1 })
+  assert.deepEqual(payload.data, { authUserId: user.authUserId, kycTier: 1, previousTier: 0 })
 })
 
 test('outbox failure rolls back tier and version in the real database', async () => {
@@ -56,13 +56,13 @@ test('concurrent requests for the same tier produce one transition and one event
   assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).version, 1)
 })
 
-test('tier validation and tombstones do not produce events; approval remains independent', async () => {
+test('tier validation and tombstones do not produce events; approval raises the tier atomically', async () => {
   const user = await create()
   for (const tier of [-1, 3, 1.5, NaN, '1']) await assert.rejects(updateKycTier(user.id, tier as number))
-  const pending = await prisma.user.update({ where: { id: user.id }, data: { kycStatus: 'PENDING', kycObjectKey: 'kyc/test.jpg', idNumber: '123' } })
+  const pending = await prisma.user.update({ where: { id: user.id }, data: { kycStatus: 'PENDING', kycObjectKey: 'kyc/test.jpg', kycBackObjectKey: 'kyc/back.jpg', idNumber: '123' } })
   const approved = await setKycStatus(pending, 'APPROVED')
-  assert.equal(approved.kycTier, 0)
-  assert.equal(await prisma.userOutboxEvent.count(), 0)
+  assert.equal(approved.kycTier, 1)
+  assert.equal(await prisma.userOutboxEvent.count(), 1)
   await prisma.user.update({ where: { id: user.id }, data: { deletedAt: new Date() } })
   await assert.rejects(updateKycTier(user.id, 1), (e: any) => e.status === 404)
   await assert.rejects(updateKycTier(randomUUID(), 1), (e: any) => e.status === 404)
@@ -87,5 +87,32 @@ test('migration preserves existing approved profiles and defaults old and new ro
     const events = await tx.$queryRaw<{ count: bigint }[]>`SELECT COUNT(*) FROM user_outbox_events`
     assert.equal(Number(events[0].count), 0)
     throw rollback // Transaction rollback also removes the temporary schema/tables.
+  }), error => error === rollback)
+})
+
+test('publisher migration upgrades legacy pending payloads without resetting or duplicating published rows', async () => {
+  const schema = 'publisher_migration_' + randomUUID().replaceAll('-', '')
+  const rollback = new Error('Rollback publisher migration fixture')
+  const initial = readFileSync('prisma/migrations/202610070001_kyc_tier_outbox/migration.sql', 'utf8')
+  const upgrade = readFileSync('prisma/migrations/20261024_user_kyc_publisher/migration.sql', 'utf8')
+  await assert.rejects(prisma.$transaction(async tx => {
+    await tx.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`)
+    await tx.$executeRawUnsafe(`SET LOCAL search_path TO "${schema}"`)
+    await tx.$executeRawUnsafe('CREATE TABLE users (id TEXT PRIMARY KEY)')
+    for (const sql of initial.split(';').filter(s => s.trim())) await tx.$executeRawUnsafe(sql)
+    for (const [id, version, tier, status] of [['old-sent', 1, 1, 'PUBLISHED'], ['old-pending', 2, 2, 'PENDING']] as const) {
+      const payload = JSON.stringify({ eventVersion: 1, data: { authUserId: 'account', kycTier: tier } })
+      await tx.$executeRaw`INSERT INTO user_outbox_events
+        (id, aggregate_id, aggregate_version, event_type, payload, status)
+        VALUES (${id}, 'profile', ${version}, 'user.kyc_updated', ${payload}::jsonb, ${status})`
+    }
+    for (const sql of upgrade.split(';').filter(s => s.trim())) await tx.$executeRawUnsafe(sql)
+    const rows = await tx.$queryRaw<any[]>`SELECT * FROM user_outbox_events ORDER BY aggregate_version`
+    assert.equal(rows.length, 2)
+    assert.equal(rows[0].id, 'old-sent'); assert.equal(rows[0].status, 'PUBLISHED')
+    assert.equal(rows[0].payload.data.previousTier, undefined)
+    assert.equal(rows[1].id, 'old-pending'); assert.equal(rows[1].status, 'PENDING')
+    assert.equal(rows[1].payload.data.previousTier, 1)
+    throw rollback
   }), error => error === rollback)
 })
