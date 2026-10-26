@@ -2,6 +2,7 @@ import 'dotenv/config'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import amqp from 'amqplib'
 import { createPublisher } from 'finvault-events'
@@ -67,7 +68,7 @@ async function main(): Promise<void> {
     execFileSync('docker', [
       'compose',
       '-f',
-      `${__dirname}\\..\\docker-compose.test.yml`,
+      join(__dirname, '..', 'docker-compose.test.yml'),
       'restart',
       'notification-rabbitmq-test'
     ], { stdio: 'inherit' })

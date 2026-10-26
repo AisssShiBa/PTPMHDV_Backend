@@ -48,6 +48,21 @@ Payment and wallet producer code remains owned by Khoa and was not changed.
    the same release, or coordinate business idempotency on
    `(paymentId, recipientId, category)`.
 
+## FinVault consumer startup recovery
+
+The HTTP service starts without waiting for RabbitMQ. If the initial
+`finvault.events` consumer connection fails, the service retries in the
+background with exponential delays starting at 2 seconds and capped at
+30 seconds. Shutdown via SIGTERM or SIGINT cancels the retry wait and stops the
+consumer. After a successful initial connection, the shared consumer handles
+subsequent broker reconnects.
+
+The startup-recovery integration test stops and starts only
+`notification-rabbitmq-test`, then verifies that an event is persisted after
+the consumer retries. Run it as part of `npm run test:integration` with the
+isolated PostgreSQL test DB on port 5434 and RabbitMQ test broker on port 5674;
+never point it at a shared or production broker.
+
 ## Socket ticket checks
 
 - S14 backend one-time ticket behavior is covered by
@@ -101,16 +116,16 @@ port 5674. `USER_LOOKUP_URL` was unset, so the run exercised generic wording.
 R1 (`npm run measure:latency`) actual samples:
 
 ```text
-R1 1/10: 39.1 ms
-R1 2/10: 7.6 ms
-R1 3/10: 7.5 ms
-R1 4/10: 11.4 ms
-R1 5/10: 10.0 ms
-R1 6/10: 5.4 ms
-R1 7/10: 5.9 ms
-R1 8/10: 9.2 ms
-R1 9/10: 5.9 ms
-R1 10/10: 5.4 ms
+R1 1/10: 0.0 ms
+R1 2/10: 2.8 ms
+R1 3/10: 2.8 ms
+R1 4/10: 4.2 ms
+R1 5/10: 1.8 ms
+R1 6/10: 2.7 ms
+R1 7/10: 0.0 ms
+R1 8/10: 3.0 ms
+R1 9/10: 1.6 ms
+R1 10/10: 2.4 ms
 R1 result: 10/10 samples <= 3000 ms
 R1 conclusion: PASS (at least 9/10 <= 3000 ms)
 ```
@@ -124,6 +139,10 @@ RabbitMQ test container restarted while the finance consumer was running
 Finance consumer reconnected and restored its queue consumer
 S16 PASS: notification arrived once after RabbitMQ recovery; duplicate publish remained idempotent
 ```
+
+The startup-recovery integration test also passed against the test stack after
+RabbitMQ was stopped before consumer startup and started again after three
+initial connection failures; the published event was persisted.
 
 The R1 values measure only publisher-confirm to socket receipt; they do not
 include producer Outbox wait or user-service name lookup (disabled in this run).
