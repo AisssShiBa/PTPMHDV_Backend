@@ -82,7 +82,7 @@ test('Auth can provision a profile using internal credentials', async () => {
 })
 test('signed ADMIN and internal Admin calls can review KYC', async () => {
   const profile = { id: resourceId, authUserId: resourceId, deletedAt: null, version: 0,
-    kycStatus: 'PENDING', idNumber: '123', kycObjectKey: 'kyc/private.jpg' }
+    kycStatus: 'PENDING', kycTier: 0, idNumber: '123', kycObjectKey: 'kyc/private.jpg', kycBackObjectKey: 'kyc/back.jpg' }
   stub(prisma.user, 'findMany', async () => [profile])
   let updates = 0
   stub(prisma, '$transaction', async (work) => work({ user: {
@@ -92,8 +92,8 @@ test('signed ADMIN and internal Admin calls can review KYC', async () => {
       updates++
       return { count: 1 }
     },
-    findUniqueOrThrow: async () => ({ ...profile, kycStatus: 'APPROVED', version: 1 })
-  } }))
+    findUniqueOrThrow: async () => ({ ...profile, kycStatus: 'APPROVED', kycTier: 1, version: 1 })
+  }, userOutboxEvent: { create: async () => ({}) } }))
   for (const headers of [
     { ...auth('ADMIN'), 'x-internal-key': process.env.INTERNAL_KEY! },
     { 'x-internal-key': process.env.INTERNAL_KEY! }

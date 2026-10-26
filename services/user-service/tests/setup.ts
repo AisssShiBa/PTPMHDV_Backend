@@ -6,6 +6,7 @@ process.env.EVENT_EXCHANGE = 'finvault.tests.user'
 process.env.EVENT_RETRY_MS = '100'
 process.env.EVENT_MAX_RETRIES = '2'
 process.env.OUTBOX_POLL_MS = '100'
+process.env.KYC_URL_TTL_SECONDS = '300'
 process.env.S3_ENDPOINT = 'http://127.0.0.1:19000'
 process.env.S3_BUCKET = 'finvault-kyc-test'
 process.env.S3_ACCESS_KEY_ID = 'finvault_test'
@@ -14,3 +15,4 @@ process.env.S3_REGION = 'us-east-1'
 process.env.S3_FORCE_PATH_STYLE = 'true'
 delete process.env.GATEWAY_PUBLIC_KEY
 delete process.env.GATEWAY_PUBLIC_KEY_FILE
+Object.assign(process.env, require('../../../tests/acceptance/week2/test-env.cjs')('user'))

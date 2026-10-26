@@ -283,9 +283,10 @@ export class PaymentService {
     });
   }
 
-  async cancel(id: string) {
+  async cancel(id: string, requesterId: string) {
     const payment = await prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+    if (payment.userId !== requesterId) throw new DomainException(403, 'FORBIDDEN', 'Payment belongs to another user');
     if (payment.status !== PaymentStatus.PENDING) {
       throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot cancel.`);
     }
@@ -310,11 +311,13 @@ export class PaymentService {
     });
   }
 
-  async getById(id: string) {
-    return await prisma.payment.findUnique({
+  async getById(id: string, requesterId: string) {
+    const payment = await prisma.payment.findUnique({
       where: { id },
       include: { histories: true }
     });
+    if (payment && payment.userId !== requesterId) throw new DomainException(403, 'FORBIDDEN', 'Payment belongs to another user');
+    return payment;
   }
 
   async list(userId?: string, type?: string, status?: string) {

@@ -2,6 +2,7 @@ import { Prisma, User as UserProfile } from '@prisma/client'
 import { prisma } from '../config/prisma'
 import { HttpError } from '../utils/errors'
 import { transaction } from '../utils/transaction'
+import { recordTierChange } from './kyc-tier.service'
 
 export function findProfileByAuthUserId(authUserId: string): Promise<UserProfile> {
   return findProfile({ authUserId })
@@ -25,7 +26,7 @@ async function findProfile(where: Prisma.UserWhereInput): Promise<UserProfile> {
 }
 
 export function userResponse(profile: UserProfile) {
-  const { kycObjectKey, idImageUrl, ...data } = profile
+  const { kycObjectKey, kycBackObjectKey, idImageUrl, ...data } = profile
   return { ...data, hasKycDocument: Boolean(kycObjectKey) }
 }
 export async function provisionProfile(tx: Prisma.TransactionClient, authUserId: string, email: string) {
@@ -44,15 +45,18 @@ export async function setKycStatus(profile: UserProfile, status: UserProfile['ky
     NONE: [], PENDING: ['APPROVED', 'REJECTED'], APPROVED: ['REJECTED'], REJECTED: []
   }
   if (!transitions[profile.kycStatus].includes(status)) throw new HttpError(409, 'INVALID_TRANSITION', 'Invalid KYC status transition')
-  if (status === 'APPROVED' && (!profile.kycObjectKey || !profile.idNumber))
-    throw new HttpError(409, 'KYC_DOCUMENT_REQUIRED', 'A verified upload is required before approval')
+  if (status === 'APPROVED' && (!profile.kycObjectKey || !profile.kycBackObjectKey || !profile.idNumber))
+    throw new HttpError(409, 'KYC_DOCUMENTS_REQUIRED', 'Both uploaded KYC images are required before approval')
   const profileId = profile.id
   return transaction(async tx => {
     const result = await tx.user.updateMany({
       where: { id: profileId, version: profile.version, deletedAt: null },
-      data: { kycStatus: status, version: { increment: 1 } }
+      data: { kycStatus: status, kycTier: status === 'APPROVED' ? 1 : status === 'REJECTED' ? 0 : profile.kycTier,
+        version: { increment: 1 } }
     })
     if (result.count !== 1) throw new HttpError(409, 'CONCURRENT_UPDATE', 'Profile changed; reload and retry')
-    return tx.user.findUniqueOrThrow({ where: { id: profileId } })
+    const updated = await tx.user.findUniqueOrThrow({ where: { id: profileId } })
+    await recordTierChange(tx, updated, profile.kycTier)
+    return updated
   })
 }

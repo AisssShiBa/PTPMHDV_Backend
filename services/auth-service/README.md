@@ -82,6 +82,19 @@ export const verifyTransactionToken = (token: string, publicKey: string): Transa
 
 Tất cả các API dưới đây đều yêu cầu Header: `Authorization: Bearer <accessToken>`
 
+Client gọi qua API Gateway; Gateway xác thực access token rồi ký `x-gateway-token`
+để Auth kiểm tra bằng `finvault-internal-auth`. Auth lấy danh tính từ token đã xác
+thực, không tin header `x-user-id` do client gửi. Cả `/api/auth-txn/pin` và alias
+`/api/auth/pin` dùng cùng cơ chế này. Lời gọi trực tiếp giữa các service phải có
+`x-internal-key` hợp lệ và `x-user-id` dạng UUID. Signup/signin/refresh/signout vẫn
+là các endpoint công khai.
+
+Auth bắt buộc cấu hình `INTERNAL_KEY` (hoặc alias cũ `INTERNAL_API_KEY`), không có
+khóa mặc định. Docker Compose mount khóa Gateway tại
+`GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key`.
+Build image từ thư mục gốc repository để có package dùng chung:
+`docker build -f services/auth-service/Dockerfile .`.
+
 ### 3.1. Cài đặt mã PIN lần đầu (Setup PIN)
 * **Endpoint:** `POST /api/auth-txn/pin/setup`
 * **Request Body:**

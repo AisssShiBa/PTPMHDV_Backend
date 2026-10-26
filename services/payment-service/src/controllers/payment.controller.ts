@@ -28,12 +28,12 @@ export const refund = async (req: Request, res: Response) => {
 };
 
 export const cancel = async (req: Request, res: Response) => {
-    const result = await paymentService.cancel(req.params.id as string);
+    const result = await paymentService.cancel(req.params.id as string, req.auth!.userId);
     res.json({ success: true, data: result });
 };
 
 export const getById = async (req: Request, res: Response) => {
-    const result = await paymentService.getById(req.params.id as string);
+    const result = await paymentService.getById(req.params.id as string, req.auth!.userId);
     if (!result) {
         return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Payment not found' } });
     }
@@ -41,7 +41,7 @@ export const getById = async (req: Request, res: Response) => {
 };
 
 export const list = async (req: Request, res: Response) => {
-    const { userId, type, status } = req.query as any;
-    const result = await paymentService.list(userId, type, status);
+    const { type, status } = req.query as any;
+    const result = await paymentService.list(req.auth!.userId, type, status);
     res.json({ success: true, data: result });
 };

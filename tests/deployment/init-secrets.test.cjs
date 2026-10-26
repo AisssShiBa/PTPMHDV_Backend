@@ -16,6 +16,7 @@ function fixture(t) {
     fs.rmSync(root, { recursive: true, force: true })
   })
   fs.copyFileSync(path.resolve(__dirname, '../../.env.example'), path.join(root, '.env.example'))
+  fs.copyFileSync(path.resolve(__dirname, '../../init-db.sql'), path.join(root, 'init-db.sql'))
   return root
 }
 test('fresh environment has matching production keys and consistent credentials; reruns preserve them', t => {
@@ -28,14 +29,23 @@ test('fresh environment has matching production keys and consistent credentials;
   const publicKey = fs.readFileSync(path.join(root, 'secrets/gateway_public.pem'), 'utf8')
   assert.equal(crypto.createPublicKey(key).export({ type: 'spki', format: 'pem' }), publicKey)
   assert.equal(crypto.createPrivateKey(key).asymmetricKeyDetails.namedCurve, 'prime256v1')
-  for (const [name, file] of [['POSTGRES_PASSWORD', 'postgres_password.txt'], ['RABBITMQ_PASS', 'rabbitmq_pass.txt']]) {
+  const txnKey = fs.readFileSync(path.join(root, 'secrets/auth_txn_private.pem'))
+  const txnPublic = fs.readFileSync(path.join(root, 'secrets/auth_txn_public.pem'), 'utf8')
+  assert.equal(crypto.createPublicKey(txnKey).export({ type: 'spki', format: 'pem' }), txnPublic)
+  assert.notEqual(txnPublic, publicKey, 'Auth-Txn must not reuse Gateway signing keys')
+  for (const [name, file] of [['POSTGRES_PASSWORD', 'postgres_password.txt'], ['RABBITMQ_PASS', 'rabbitmq_pass.txt'],
+    ['ACCESS_TOKEN_SECRET', 'access_token_secret.txt'], ['INTERNAL_KEY', 'internal_key.txt']]) {
     assert.equal(config[name], fs.readFileSync(path.join(root, 'secrets', file), 'utf8').trim())
     assert.equal(config[name].length, 64)
   }
   assert.equal(config.S3_SECRET_ACCESS_KEY.length, 64)
+  const sql = fs.readFileSync(path.join(root, 'secrets/init-db.sql'), 'utf8')
+  assert.ok(sql.includes(config.POSTGRES_PASSWORD))
+  assert.equal(sql.includes('{{DB_ROLE_PASSWORD}}'), false)
   initialize(root)
   assert.equal(fs.readFileSync(envPath, 'utf8'), first)
   assert.deepEqual(fs.readFileSync(path.join(root, 'secrets/gateway_private.pem')), key)
+  assert.deepEqual(fs.readFileSync(path.join(root, 'secrets/auth_txn_private.pem')), txnKey)
 })
 test('existing credentials are kept and database URLs encode special characters', t => {
   const root = fixture(t)

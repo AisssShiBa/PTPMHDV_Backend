@@ -1,6 +1,7 @@
-import { getGatewayPublicKey } from 'finvault-internal-auth'
+import { getGatewayPublicKey, loadSecretEnvironment } from 'finvault-internal-auth'
 import 'dotenv/config'
 import { z } from 'zod'
+loadSecretEnvironment(['INTERNAL_KEY'])
 
 const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3003),

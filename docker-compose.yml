@@ -22,7 +22,7 @@ services:
       - internal_net
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+      - ./secrets/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d postgres"]
       interval: 5s
@@ -58,8 +58,8 @@ services:
     environment: &user-env
       NODE_ENV: production
       PORT: 3002
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:-${POSTGRES_PASSWORD:-postgres}}@postgres:5432/user_service
-      INTERNAL_KEY: ${INTERNAL_KEY:?run node scripts/init-secrets.js}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/user_service
+      INTERNAL_KEY_FILE: /run/secrets/internal_key
       GATEWAY_PUBLIC_KEY_FILE: /run/secrets/gateway_public_key
       RABBITMQ_URL: ${RABBITMQ_URL:?run node scripts/init-secrets.js}
       EVENT_EXCHANGE: finvault.events
@@ -70,6 +70,7 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?run node scripts/init-secrets.js}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?run node scripts/init-secrets.js}
       S3_FORCE_PATH_STYLE: 'true'
+      KYC_URL_TTL_SECONDS: ${KYC_URL_TTL_SECONDS:-300}
       KYC_CLEANUP_GRACE_MS: ${KYC_CLEANUP_GRACE_MS:-86400000}
       STORAGE_CLEANUP_ENABLED: ${STORAGE_CLEANUP_ENABLED:-true}
     command: ["npx", "prisma", "migrate", "deploy"]
@@ -89,12 +90,27 @@ services:
     networks:
       - internal_net
     environment: *user-env
-    secrets: [gateway_public_key]
+    secrets: [gateway_public_key, internal_key]
     depends_on:
       user-migrate:
         condition: service_completed_successfully
       storage-init:
         condition: service_completed_successfully
+
+  user-publisher:
+    image: finvault-user-service:local
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment: *user-env
+    networks: [internal_net]
+    secrets: [gateway_public_key, internal_key]
+    command: ["node", "dist/events/publisher-worker.js"]
+    depends_on:
+      user-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
 
   user-consumer:
     image: finvault-user-service:local
@@ -103,7 +119,7 @@ services:
     stop_grace_period: 30s
     environment: *user-env
     networks: [internal_net]
-    secrets: [gateway_public_key]
+    secrets: [gateway_public_key, internal_key]
     command: ["node", "dist/events/worker.js"]
     depends_on:
       user-migrate:
@@ -119,8 +135,8 @@ services:
     environment: &merchant-env
       NODE_ENV: production
       PORT: 3003
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:-${POSTGRES_PASSWORD:-postgres}}@postgres:5432/merchant_service
-      INTERNAL_KEY: ${INTERNAL_KEY:?run node scripts/init-secrets.js}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/merchant_service
+      INTERNAL_KEY_FILE: /run/secrets/internal_key
       GATEWAY_PUBLIC_KEY_FILE: /run/secrets/gateway_public_key
       RABBITMQ_URL: ${RABBITMQ_URL:?run node scripts/init-secrets.js}
       EVENT_EXCHANGE: finvault.events
@@ -139,7 +155,7 @@ services:
     environment: *merchant-env
     networks: [internal_net]
     healthcheck: *http-health
-    secrets: [gateway_public_key]
+    secrets: [gateway_public_key, internal_key]
     depends_on:
       merchant-migrate:
         condition: service_completed_successfully
@@ -162,7 +178,7 @@ services:
     stop_grace_period: 30s
     environment: *merchant-env
     networks: [internal_net]
-    secrets: [gateway_public_key]
+    secrets: [gateway_public_key, internal_key]
     command: ["node", "dist/events/worker.js"]
     depends_on:
       merchant-migrate:
@@ -210,7 +226,7 @@ services:
     build:
       context: .
       dockerfile: services/notification-service/Dockerfile
-    secrets: [gateway_public_key]
+    secrets: [gateway_public_key, internal_key, access_token_secret]
     expose:
       - "3006"
     networks:
@@ -218,10 +234,10 @@ services:
     environment:
       - PORT=3006
       - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:-${POSTGRES_PASSWORD:-postgres}}@postgres:5432/notification_service
-      - INTERNAL_KEY=${INTERNAL_KEY}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/notification_service
+      - INTERNAL_KEY_FILE=/run/secrets/internal_key
       - CLIENT_URL=${CLIENT_URL:-http://localhost:5173}
-      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
+      - ACCESS_TOKEN_SECRET_FILE=/run/secrets/access_token_secret
       - RABBITMQ_URL=${RABBITMQ_URL:-amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672}
     depends_on:
       postgres:
@@ -236,7 +252,7 @@ services:
       dockerfile: ./services/wallet-service/Dockerfile
     expose:
       - "3004"
-    secrets: [gateway_public_key]
+    secrets: [gateway_public_key, internal_key]
     networks:
       - internal_net
     environment:
@@ -244,8 +260,8 @@ services:
       - NODE_ENV=production
       - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
       - USER_SERVICE_URL=http://user-service:3002
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:-${POSTGRES_PASSWORD:-postgres}}@postgres:5432/wallet_service
-      - INTERNAL_KEY=${INTERNAL_KEY}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/wallet_service
+      - INTERNAL_KEY_FILE=/run/secrets/internal_key
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
       - RABBITMQ_URL=${RABBITMQ_URL:-amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672}
     depends_on:
@@ -267,8 +283,8 @@ services:
       - PORT=3005
       - NODE_ENV=production
       - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:-${POSTGRES_PASSWORD:-postgres}}@postgres:5432/payment_service
-      - INTERNAL_KEY=${INTERNAL_KEY}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/payment_service
+      - INTERNAL_KEY_FILE=/run/secrets/internal_key
       - WALLET_SERVICE_URL=http://wallet-service:3004
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
       - RABBITMQ_URL=${RABBITMQ_URL:-amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672}
@@ -280,6 +296,7 @@ services:
     secrets:
       - vnp_hash_secret
       - gateway_public_key
+      - internal_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -289,19 +306,23 @@ services:
   auth-service:
     healthcheck: *http-health
     build:
-      context: ./services/auth-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    secrets: [gateway_public_key, internal_key, access_token_secret, auth_txn_private_key, auth_txn_public_key]
     expose:
       - "3001"
     networks:
       - internal_net
     environment:
       - PORT=3001
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:-${POSTGRES_PASSWORD:-postgres}}@postgres:5432/auth_service
-      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
+      - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/auth_service
+      - ACCESS_TOKEN_SECRET_FILE=/run/secrets/access_token_secret
+      - AUTH_TXN_PRIVATE_KEY_FILE=/run/secrets/auth_txn_private_key
+      - AUTH_TXN_PUBLIC_KEY_FILE=/run/secrets/auth_txn_public_key
       - USER_SERVICE_URL=http://user-service:3002
       - WALLET_SERVICE_URL=http://wallet-service:3004
-      - INTERNAL_KEY=${INTERNAL_KEY}
+      - INTERNAL_KEY_FILE=/run/secrets/internal_key
       - CLIENT_URL=${CLIENT_URL:-http://localhost:5173}
     depends_on:
       postgres:
@@ -312,7 +333,7 @@ services:
     build:
       context: .
       dockerfile: ./services/admin-service/Dockerfile
-    secrets: [gateway_public_key]
+    secrets: [gateway_public_key, internal_key]
     expose:
       - "3007"
     networks:
@@ -321,8 +342,8 @@ services:
       - PORT=3007
       - NODE_ENV=production
       - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:-${POSTGRES_PASSWORD:-postgres}}@postgres:5432/admin_service
-      - INTERNAL_KEY=${INTERNAL_KEY}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/admin_service
+      - INTERNAL_KEY_FILE=/run/secrets/internal_key
       - USER_SERVICE_URL=http://user-service:3002
       - MERCHANT_SERVICE_URL=http://merchant-service:3003
       - WALLET_SERVICE_URL=http://wallet-service:3004
@@ -336,7 +357,7 @@ services:
     build:
       context: ./gateway
       dockerfile: Dockerfile
-    secrets: [gateway_private_key, gateway_public_key]
+    secrets: [gateway_private_key, gateway_public_key, internal_key, access_token_secret]
     ports:
       - "${GATEWAY_PORT:-3000}:3000"
     networks:
@@ -346,8 +367,8 @@ services:
       - PORT=3000
       - NODE_ENV=production
       - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
-      - ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
-      - INTERNAL_KEY=${INTERNAL_KEY}
+      - ACCESS_TOKEN_SECRET_FILE=/run/secrets/access_token_secret
+      - INTERNAL_KEY_FILE=/run/secrets/internal_key
       - CLIENT_URL=${CLIENT_URL:-http://localhost:5173}
       - GATEWAY_PRIVATE_KEY_FILE=/run/secrets/gateway_private_key
       - USER_SERVICE_URL=http://user-service:3002
@@ -385,6 +406,14 @@ networks:
     driver: bridge
 
 secrets:
+  auth_txn_private_key:
+    file: ./secrets/auth_txn_private.pem
+  auth_txn_public_key:
+    file: ./secrets/auth_txn_public.pem
+  internal_key:
+    file: ./secrets/internal_key.txt
+  access_token_secret:
+    file: ./secrets/access_token_secret.txt
   postgres_password:
     file: ./secrets/postgres_password.txt
   rabbitmq_pass:

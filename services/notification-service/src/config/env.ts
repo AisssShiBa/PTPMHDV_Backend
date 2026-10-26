@@ -1,4 +1,6 @@
 import 'dotenv/config'
+import { loadSecretEnvironment } from 'finvault-internal-auth'
+loadSecretEnvironment(['INTERNAL_KEY', 'ACCESS_TOKEN_SECRET'])
 
 const defaultSocketMaxAgeMs = 14 * 60 * 1000
 const configuredSocketMaxAgeMs = Number.parseInt(process.env.SOCKET_MAX_AGE_MS ?? '', 10)

@@ -1,11 +1,22 @@
 import 'dotenv/config'
+import { getGatewayPublicKey, loadSecretEnvironment } from 'finvault-internal-auth'
+
+loadSecretEnvironment(['INTERNAL_KEY', 'ACCESS_TOKEN_SECRET'])
 
 function required(key: string): string {
   const value = process.env[key]
-  if (!value) {
+  if (!value || !value.trim()) {
     throw new Error(`Thiếu biến môi trường bắt buộc: ${key}`)
   }
-  return value
+  return value.trim()
+}
+
+// Bắt buộc xác thực khóa công khai của Gateway ngay khi khởi động
+getGatewayPublicKey()
+
+const internalKey = (process.env.INTERNAL_KEY || process.env.INTERNAL_API_KEY || '').trim()
+if (!internalKey) {
+  throw new Error('Thiếu biến môi trường bắt buộc: INTERNAL_KEY')
 }
 
 export const env = {
@@ -13,10 +24,10 @@ export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   isProduction: process.env.NODE_ENV === 'production',
   databaseUrl: required('DATABASE_URL'),
-  accessTokenSecret: process.env.ACCESS_TOKEN_SECRET || 'd7aec1b51b32d434b4c2e29f6b7e12ad0ea34f68ad9203c91f244d95f87adeb7dc6bc157976ffeedc6b1b5a109fc01d7c419d69bcf59d873e65e4409f88f9f64',
+  accessTokenSecret: required('ACCESS_TOKEN_SECRET'),
   userServiceUrl: process.env.USER_SERVICE_URL || 'http://localhost:3002',
   walletServiceUrl: process.env.WALLET_SERVICE_URL || 'http://localhost:3004',
-  internalApiKey: process.env.INTERNAL_KEY || process.env.INTERNAL_API_KEY || '6mliy6JhxAbD6Rtu5EtNt81zi2nHcx42',
-  clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
-  disableGatewayCheck: process.env.DISABLE_GATEWAY_CHECK === 'true'
+  internalApiKey: internalKey,
+  internalKey,
+  clientUrl: process.env.CLIENT_URL || 'http://localhost:5173'
 }

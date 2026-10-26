@@ -2,15 +2,14 @@ import { Request, Response } from 'express'
 import { PinService } from '../services/pinService'
 import { success } from '../utils/response'
 import { asyncHandler, AppError } from '../utils/errors'
+import type { RequestWithContext } from '../middlewares/authenticateServiceRequest'
 
 /**
- * Trích xuất userId một cách an toàn:
- * Ưu tiên:
- * 1. req.user.id (từ middleware authenticate / protectedRoute)
- * 2. Header 'x-user-id' (khi request được Gateway chuyển tiếp nội bộ)
+ * Only use identity established by authenticateServiceRequest.
+ * A signed Gateway identity always takes precedence over internal headers.
  */
-const getAuthenticatedUserId = (req: Request): string => {
-  const userId = (req as any).user?.id || (req.headers['x-user-id'] as string)
+const getAuthenticatedUserId = (req: RequestWithContext): string => {
+  const userId = req.auth?.userId || (req.isInternalCall ? req.internalUserId : undefined)
   if (!userId) {
     throw new AppError(401, 'UNAUTHORIZED', 'Chưa đăng nhập hoặc không thể xác thực danh tính người dùng')
   }

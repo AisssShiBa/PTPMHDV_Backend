@@ -38,37 +38,37 @@ DO $$
 BEGIN
   -- 1. Auth Service User
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'auth_user') THEN
-    CREATE ROLE auth_user WITH LOGIN PASSWORD 'finvault_secret_2026';
+    CREATE ROLE auth_user WITH LOGIN PASSWORD '{{DB_ROLE_PASSWORD}}';
   END IF;
 
   -- 2. User Service User
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'user_user') THEN
-    CREATE ROLE user_user WITH LOGIN PASSWORD 'finvault_secret_2026';
+    CREATE ROLE user_user WITH LOGIN PASSWORD '{{DB_ROLE_PASSWORD}}';
   END IF;
 
   -- 3. Merchant Service User
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'merchant_user') THEN
-    CREATE ROLE merchant_user WITH LOGIN PASSWORD 'finvault_secret_2026';
+    CREATE ROLE merchant_user WITH LOGIN PASSWORD '{{DB_ROLE_PASSWORD}}';
   END IF;
 
   -- 4. Wallet Service User
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'wallet_user') THEN
-    CREATE ROLE wallet_user WITH LOGIN PASSWORD 'finvault_secret_2026';
+    CREATE ROLE wallet_user WITH LOGIN PASSWORD '{{DB_ROLE_PASSWORD}}';
   END IF;
 
   -- 5. Payment Service User
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'payment_user') THEN
-    CREATE ROLE payment_user WITH LOGIN PASSWORD 'finvault_secret_2026';
+    CREATE ROLE payment_user WITH LOGIN PASSWORD '{{DB_ROLE_PASSWORD}}';
   END IF;
 
   -- 6. Notification Service User
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'notification_user') THEN
-    CREATE ROLE notification_user WITH LOGIN PASSWORD 'finvault_secret_2026';
+    CREATE ROLE notification_user WITH LOGIN PASSWORD '{{DB_ROLE_PASSWORD}}';
   END IF;
 
   -- 7. Admin Service User
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'admin_user') THEN
-    CREATE ROLE admin_user WITH LOGIN PASSWORD 'finvault_secret_2026';
+    CREATE ROLE admin_user WITH LOGIN PASSWORD '{{DB_ROLE_PASSWORD}}';
   END IF;
 END
 $$;

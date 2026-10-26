@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { AdminController } from '../controllers/adminController'
+import { reviewKyc, changeKycTier, getKycDocuments } from '../controllers/kycController'
 
 const router = Router()
 
@@ -9,8 +10,10 @@ router.get('/dashboard/stats', AdminController.getDashboardStats)
 
 // 2. Quản lý & Phê duyệt KYC người dùng
 router.get('/kyc', AdminController.getKycList)
-router.post('/kyc/:userId/review', AdminController.reviewKyc)
-router.patch('/kyc/:userId/status', AdminController.reviewKyc)
+router.post('/kyc/:userId/review', reviewKyc)
+router.patch('/kyc/:userId/status', reviewKyc)
+router.patch('/kyc/:userId/tier', changeKycTier)
+router.get('/kyc/:userId/documents', getKycDocuments)
 
 // 3. Quản lý & Phê duyệt Merchant đối tác
 router.get('/merchants', AdminController.getMerchantList)

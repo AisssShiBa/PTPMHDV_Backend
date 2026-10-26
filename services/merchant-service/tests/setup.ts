@@ -14,3 +14,4 @@ process.env.S3_REGION = 'us-east-1'
 process.env.S3_FORCE_PATH_STYLE = 'true'
 delete process.env.GATEWAY_PUBLIC_KEY
 delete process.env.GATEWAY_PUBLIC_KEY_FILE
+Object.assign(process.env, require('../../../tests/acceptance/week2/test-env.cjs')('merchant'))

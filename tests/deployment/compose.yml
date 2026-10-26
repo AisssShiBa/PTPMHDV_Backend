@@ -9,7 +9,7 @@ services:
     ports: ["127.0.0.1:25434:5432"]
     volumes:
       - runtime_db:/var/lib/postgresql/data
-      - ../../init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - ../../.cache/deployment/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
       interval: 2s
@@ -79,6 +79,8 @@ services:
     ports: ["127.0.0.1:13000:3000"]
     depends_on: [user-service, merchant-service]
 secrets:
+  internal_key:
+    file: ../../.cache/deployment/keys/internal-key.txt
   gateway_private_key:
     file: ../../.cache/deployment/keys/gateway-private.pem
   gateway_public_key:

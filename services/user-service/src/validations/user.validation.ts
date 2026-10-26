@@ -23,3 +23,6 @@ export const kycBody = z.object({ idNumber: z.string().trim().min(1).max(50) }).
 export const updateKycStatusSchema = z.object({ params: idParams, body: z.object({
   kycStatus: z.enum(['NONE', 'PENDING', 'APPROVED', 'REJECTED'])
 }).strict() })
+export const updateKycTierSchema = z.object({ params: idParams, body: z.object({
+  tier: z.union([z.literal(1), z.literal(2)]), reason: z.string().trim().min(1).max(500)
+}).strict() })

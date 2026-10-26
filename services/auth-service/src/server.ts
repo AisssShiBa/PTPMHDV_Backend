@@ -1,8 +1,10 @@
 import app from './app'
 import { env } from './config/env'
 import { prisma } from './config/prisma'
+import { validateTransactionKeys } from './utils/transactionToken'
 
 async function startServer() {
+  validateTransactionKeys()
   try {
     await prisma.$connect()
     console.log('[AUTH] Kết nối PostgreSQL thành công')

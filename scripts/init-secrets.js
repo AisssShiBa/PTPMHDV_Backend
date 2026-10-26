@@ -33,11 +33,11 @@ function initialize(root = path.resolve(__dirname, '..')) {
   }
   secret('POSTGRES_PASSWORD', 'postgres_password.txt', random())
   secret('RABBITMQ_PASS', 'rabbitmq_pass.txt', random())
-  secret('VNP_HASH_SECRET', 'vnp_hash_secret.txt', 'local-development-only')
+  secret('VNP_HASH_SECRET', 'vnp_hash_secret.txt', random())
   ensure('POSTGRES_USER', 'postgres')
   ensure('RABBITMQ_USER', 'finvault')
-  ensure('ACCESS_TOKEN_SECRET', random())
-  ensure('INTERNAL_KEY', random())
+  secret('ACCESS_TOKEN_SECRET', 'access_token_secret.txt', random())
+  secret('INTERNAL_KEY', 'internal_key.txt', random())
   ensure('MINIO_ROOT_USER', 'finvault-admin')
   ensure('MINIO_ROOT_PASSWORD', random())
   ensure('S3_ACCESS_KEY_ID', 'finvault-kyc')
@@ -77,7 +77,27 @@ function initialize(root = path.resolve(__dirname, '..')) {
     fs.writeFileSync(privatePath, pair.privateKey, { mode: 0o600 })
     fs.writeFileSync(publicPath, pair.publicKey)
   }
+  // Auth transaction signing uses its own key pair, never the Gateway key.
+  const txnPrivate = path.join(secretDir, 'auth_txn_private.pem')
+  const txnPublic = path.join(secretDir, 'auth_txn_public.pem')
+  if (fs.existsSync(txnPrivate) !== fs.existsSync(txnPublic))
+    throw new Error('Incomplete Auth-Txn key pair; restore matching keys')
+  if (!fs.existsSync(txnPrivate)) {
+    const pair = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1',
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } })
+    fs.writeFileSync(txnPrivate, pair.privateKey, { mode: 0o600, flag: 'wx' })
+    fs.writeFileSync(txnPublic, pair.publicKey, { flag: 'wx' })
+  }
+  const txnKey = crypto.createPrivateKey(fs.readFileSync(txnPrivate))
+  if (txnKey.asymmetricKeyType !== 'ec' || txnKey.asymmetricKeyDetails?.namedCurve !== 'prime256v1' ||
+      crypto.createPublicKey(txnKey).export({ type: 'spki', format: 'pem' }) !==
+      crypto.createPublicKey(fs.readFileSync(txnPublic)).export({ type: 'spki', format: 'pem' }))
+    throw new Error('Invalid or mismatched Auth-Txn key pair; existing keys were preserved')
   fs.writeFileSync(envPath, source.trimEnd() + '\n', { mode: 0o600 })
+  // SQL is generated under ignored secrets/, never committed with credentials.
+  const template = fs.readFileSync(path.join(root, 'init-db.sql'), 'utf8')
+  const sql = template.replaceAll('{{DB_ROLE_PASSWORD}}', config.POSTGRES_PASSWORD.replaceAll("'", "''"))
+  fs.writeFileSync(path.join(secretDir, 'init-db.sql'), sql, { mode: 0o600 })
   console.log('Local environment ready. Existing credentials preserved; Gateway keys validated.')
 }
 

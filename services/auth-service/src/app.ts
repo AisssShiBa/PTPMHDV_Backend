@@ -15,7 +15,22 @@ app.use(cookieParser())
 // 1. Gắn Correlation ID ngay đầu pipeline để theo vết log
 app.use(attachRequestId)
 
-// 2. Cấu hình CORS
+// 2. Loại bỏ hoàn toàn việc chấp nhận header x-gateway-verified (chống giả mạo bypass Gateway)
+app.use((req, res, next) => {
+  if (req.headers['x-gateway-verified'] !== undefined) {
+    return res.status(401).json({
+      success: false,
+      error: {
+        code: 'INVALID_GATEWAY_TOKEN',
+        message: 'Legacy x-gateway-verified header is rejected'
+      },
+      requestId: (req as any).requestId || res.getHeader('X-Request-Id')
+    })
+  }
+  next()
+})
+
+// 3. Cấu hình CORS
 const allowedOrigins = [
   env.clientUrl,
   'http://localhost:5173',
@@ -38,7 +53,7 @@ app.use(
   })
 )
 
-// 3. Endpoint kiểm tra sức khỏe hệ thống (Health Check)
+// 4. Endpoint kiểm tra sức khỏe hệ thống (Health Check)
 app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok', service: 'auth-service' })
 })

@@ -1,4 +1,5 @@
 import 'express-async-errors';
+import './config/env';
 import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';

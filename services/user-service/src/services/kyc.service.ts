@@ -20,31 +20,34 @@ export async function normalizeImage(file: { buffer: Buffer; mimetype: string })
   } catch { throw new HttpError(400, 'INVALID_IMAGE', 'Image is invalid, truncated or too large') }
 }
 
-export async function submitDocument(profile: UserProfile, idNumber: string, file: { buffer: Buffer; mimetype: string }) {
+type ImageUpload = { buffer: Buffer; mimetype: string }
+export async function submitDocuments(profile: UserProfile, idNumber: string, front: ImageUpload, back: ImageUpload) {
+  if (!front || !back) throw new HttpError(400, 'KYC_DOCUMENTS_REQUIRED', 'Upload both front and back images')
   if (profile.kycStatus === 'APPROVED') throw new HttpError(409, 'INVALID_TRANSITION', 'Approved KYC must be rejected before resubmission')
   const profileId = profile.id
-  const image = await normalizeImage(file)
-  const key = 'kyc/' + profileId + '/' + randomUUID() + '.jpg'
+  const images = [await normalizeImage(front), await normalizeImage(back)]
+  const keys = images.map(() => 'kyc/' + profileId + '/' + randomUUID() + '.jpg')
   // Persist cleanup intent BEFORE upload: a process crash cannot leave an untracked object.
-  await prisma.storageCleanup.create({ data: { objectKey: key, nextAttemptAt: new Date(Date.now() + env.cleanupGraceMs) } })
+  await prisma.storageCleanup.createMany({ data: keys.map(objectKey => ({ objectKey,
+    nextAttemptAt: new Date(Date.now() + env.cleanupGraceMs) })) })
   try {
-    await storage.put(key, image)
+    for (let i = 0; i < keys.length; i++) await storage.put(keys[i], images[i])
     return await transaction(async tx => {
-      await lockKycObject(tx, key)
+      for (const key of [...keys].sort()) await lockKycObject(tx, key)
       // Storage deletion cannot roll back with PostgreSQL. If deletion succeeded
       // but its DB commit failed, an old intent can survive for a missing object.
-      await storage.assertExists(key)
+      for (const key of keys) await storage.assertExists(key)
       const result = await tx.user.updateMany({
         where: { id: profileId, deletedAt: null, version: profile.version },
-        data: { idNumber, idImageUrl: null, kycObjectKey: key, kycMimeType: 'image/jpeg',
-          kycFileSize: image.length, kycStatus: 'PENDING', version: { increment: 1 } }
+        data: { idNumber, idImageUrl: null, kycObjectKey: keys[0], kycBackObjectKey: keys[1], kycMimeType: 'image/jpeg',
+          kycFileSize: images.reduce((total, image) => total + image.length, 0), kycStatus: 'PENDING', version: { increment: 1 } }
       })
       if (result.count !== 1) throw new HttpError(409, 'CONCURRENT_UPDATE', 'Profile changed; reload and retry')
-      await tx.storageCleanup.delete({ where: { objectKey: key } })
-      if (profile.kycObjectKey) await tx.storageCleanup.upsert({
-        where: { objectKey: profile.kycObjectKey },
-        create: { objectKey: profile.kycObjectKey }, update: { nextAttemptAt: new Date() }
-      })
+      await tx.storageCleanup.deleteMany({ where: { objectKey: { in: keys } } })
+      for (const key of [profile.kycObjectKey, profile.kycBackObjectKey]) {
+        if (key) await tx.storageCleanup.upsert({ where: { objectKey: key },
+          create: { objectKey: key }, update: { nextAttemptAt: new Date() } })
+      }
       return tx.user.findUniqueOrThrow({ where: { id: profileId } })
     })
   } catch (error) {
@@ -56,7 +59,14 @@ export async function submitDocument(profile: UserProfile, idNumber: string, fil
 }
 export async function documentUrl(profile: UserProfile) {
   if (!profile.kycObjectKey) throw new HttpError(404, 'NOT_FOUND', 'No uploaded KYC document')
-  return { url: await storage.url(profile.kycObjectKey), expiresIn: 60 }
+  return { url: await storage.url(profile.kycObjectKey), expiresIn: env.kycUrlTtlSeconds }
+}
+export async function documentUrls(profile: UserProfile) {
+  if (!profile.kycObjectKey || !profile.kycBackObjectKey)
+    throw new HttpError(404, 'KYC_DOCUMENTS_INCOMPLETE', 'Both KYC documents are required')
+  const expiresAt = new Date(Date.now() + env.kycUrlTtlSeconds * 1000).toISOString()
+  const [frontUrl, backUrl] = await Promise.all([storage.url(profile.kycObjectKey), storage.url(profile.kycBackObjectKey)])
+  return { frontUrl, backUrl, expiresAt }
 }
 export async function cleanupStorage() {
   const jobs = await prisma.storageCleanup.findMany({ where: { nextAttemptAt: { lte: new Date() } }, take: 20 })

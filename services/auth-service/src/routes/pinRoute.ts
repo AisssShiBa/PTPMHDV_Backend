@@ -5,7 +5,7 @@ import {
   changePin,
   getPinStatus
 } from '../controllers/pinController'
-import { protectedRoute } from '../middlewares/authenticate'
+import { authenticateServiceRequest } from '../middlewares/authenticateServiceRequest'
 import { validateRequest } from '../middlewares/validateRequest'
 import { rateLimiter } from '../middlewares/rateLimiter'
 import {
@@ -17,10 +17,9 @@ import {
 const router = express.Router()
 
 /**
- * TẤT CẢ các endpoint liên quan đến mã PIN đều yêu cầu người dùng phải đăng nhập
- * (phải mang Access Token Bearer hợp lệ)
+ * Gateway requests use signed identity; internal requests require INTERNAL_KEY.
  */
-router.use(protectedRoute)
+router.use(authenticateServiceRequest)
 
 /**
  * 1. Cài đặt mã PIN lần đầu

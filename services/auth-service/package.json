@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon --exec tsx src/server.ts",
     "start": "tsx src/server.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "tsx --test tests/*.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +20,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "finvault-internal-auth": "file:../../packages/finvault-internal-auth",
     "jsonwebtoken": "^9.0.3",
     "prisma": "^6.19.3",
     "zod": "^4.6.2"
@@ -31,10 +32,12 @@
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.2.0",
+    "@types/supertest": "^6.0.2",
     "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
     "globals": "^17.11.0",
     "nodemon": "^3.1.14",
+    "supertest": "^7.0.0",
     "tsx": "^4.23.12",
     "typescript-eslint": "^8.67.0"
   }
