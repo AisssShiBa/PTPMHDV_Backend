@@ -128,35 +128,66 @@ Gói thư viện: `packages/finvault-internal-auth` (Đã hoàn thiện bởi Đ
 
 1. **Backend `notification-service` (HTTP & Socket.IO Handshake):**
    ```typescript
-   import { requireGateway, verifyGatewayToken } from 'finvault-internal-auth'
+   import { verifyGatewayToken } from 'finvault-internal-auth'
 
-   // 1. Với HTTP API
-   app.use('/api/notifications', requireGateway)
+   const usedTickets = new Map<string, number>()
+   const maxAgeMs = options.maxAgeMs ?? env.socketMaxAgeMs
 
-   // 2. Với WebSocket / Socket.IO Handshake:
    io.use((socket, next) => {
-       const token = socket.handshake.auth.token
-       if (!token) return next(new Error('AUTHENTICATION_ERROR'))
+       const token = socket.handshake.auth?.token
+       if (typeof token !== 'string' || token.length === 0) {
+           return next(new Error('INVALID_GATEWAY_TOKEN'))
+       }
+
        try {
-           const decoded = verifyGatewayToken(token)
-           socket.data.userId = decoded.userId
-           next()
-       } catch (err) {
-           next(new Error('INVALID_TOKEN'))
+           const auth = verifyGatewayToken(token)
+           if (!auth.jti || usedTickets.has(auth.jti)) {
+               return next(new Error('INVALID_GATEWAY_TOKEN'))
+           }
+           usedTickets.set(auth.jti, Date.now() + 60_000)
+           socket.data.userId = auth.userId
+           return next()
+       } catch {
+           return next(new Error('INVALID_GATEWAY_TOKEN'))
        }
    })
+
+   io.on('connection', (socket) => {
+       socket.join(`user:${socket.data.userId}`)
+       const disconnectTimer = setTimeout(
+           () => socket.disconnect(true),
+           maxAgeMs
+       )
+       socket.once('disconnect', () => clearTimeout(disconnectTimer))
+   })
    ```
+   Đây là luồng handshake được dùng trong
+   `services/notification-service/src/socket.ts`: ticket phải có `jti`, chỉ dùng
+   được một lần và hết hạn sau tối đa 60 giây. Ticket được đánh dấu đã dùng trên
+   một instance; triển khai nhiều instance cần storage dùng chung để chống replay.
 2. **Frontend Developer (Client Web & Mobile):**
    * **Base URL:** Luôn luôn gọi qua `http://localhost:3000`.
-   * **Kết nối WebSocket qua Gateway:**
+   * **Kết nối WebSocket qua Gateway:** Gọi
+     `GET /api/notifications/socket-ticket` bằng HTTP client đang xác thực; lấy
+     `data.ticket` trong response. Dùng hàm `auth` để xin ticket mới mỗi lần
+     Socket.IO kết nối hoặc reconnect:
      ```javascript
      import { io } from 'socket.io-client'
 
      const socket = io('http://localhost:3000', {
        path: '/socket.io',
-       auth: { token: userAccessToken } // Access Token lấy sau khi đăng nhập
+       auth: (callback) => {
+         getSocketTicket()
+           .then((ticket) => callback({ token: ticket }))
+           .catch((error) => {
+             console.error('Failed to fetch notification socket ticket', error)
+             callback({ token: '' })
+           })
+       }
      })
      ```
+     Handshake dùng đúng `auth: { token: ticket }`. Không gửi access token trực
+     tiếp qua Socket.IO; ticket hết hạn sau 60 giây và chỉ dùng một lần.
    * **Webhook / IPN VNPAY:**  
      Route `GET /api/funding/vnpay/ipn` và `/api/payments/topups/vnpay/*` đã được whitelist tại Gateway. VNPAY Sandbox có thể gọi trực tiếp callback mà không bị chặn `401`.
 
