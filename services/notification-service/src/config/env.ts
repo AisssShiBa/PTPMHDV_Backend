@@ -27,5 +27,6 @@ export const env = {
       : defaultSocketMaxAgeMs,
   // CLIENT_URL — optional: thiếu thì fallback về origin dev cục bộ
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
-  databaseUrl: required('DATABASE_URL')
+  databaseUrl: required('DATABASE_URL'),
+  userLookupUrl: process.env.USER_LOOKUP_URL
 }
