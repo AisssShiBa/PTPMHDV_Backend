@@ -44,6 +44,25 @@ model UserPin {
   @@index([userId])
 }
 
+model AuthOutboxEvent {
+  id          String       @id @default(uuid())
+  aggregateId String       // ID của thực thể gốc (userId)
+  eventType   String       // Loại sự kiện (ví dụ: 'user.registered')
+  payload     Json         // Dữ liệu sự kiện { userId, email, username, firstName, lastName }
+  status      OutboxStatus @default(PENDING)
+  createdAt   DateTime     @default(now())
+  publishedAt DateTime?    // Thời điểm bắn lên RabbitMQ thành công
+  attempts    Int          @default(0) // Số lần thử phát lại nếu gặp sự cố
+
+  @@index([status, createdAt])
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
 enum Role {
   USER
   ADMIN
