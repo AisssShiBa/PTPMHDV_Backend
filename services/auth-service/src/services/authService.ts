@@ -3,7 +3,6 @@ import crypto from 'crypto'
 import jwt from 'jsonwebtoken'
 import { prisma } from '../config/prisma'
 import { env } from '../config/env'
-import { internalApi } from '../lib/internalApi'
 import { AppError } from '../utils/errors'
 import { SignUpInput, SignInInput } from '../validations/authValidation'
 
@@ -42,36 +41,36 @@ export const AuthService = {
     // Mã hóa mật khẩu
     const hashedPassword = await bcrypt.hash(password, 10)
 
-    // Tạo Auth User trong cơ sở dữ liệu của auth-service
-    const newUser = await prisma.user.create({
-      data: {
-        username,
-        firstName,
-        lastName,
-        email,
-        password: hashedPassword
-      }
-    })
+    // Áp dụng Transactional Outbox Pattern:
+    // Tạo User VÀ Ghi sự kiện Outbox trong cùng 1 Transaction nguyên tử duy nhất.
+    // Nếu 1 trong 2 gặp sự cố, toàn bộ sẽ được Rollback tự động.
+    const newUser = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          username,
+          firstName,
+          lastName,
+          email,
+          password: hashedPassword
+        }
+      })
 
-    // Đồng bộ sang user-service và wallet-service
-    const syncResults = await Promise.allSettled([
-      internalApi.post(
-        `${env.userServiceUrl}/api/users`,
-        { authUserId: newUser.id, email },
-        { headers: { 'X-Request-Id': requestId }, timeout: 2000 }
-      ),
-      internalApi.post(
-        `${env.walletServiceUrl}/api/wallets`,
-        { userId: newUser.id },
-        { headers: { 'X-Request-Id': requestId }, timeout: 2000 }
-      )
-    ])
+      await tx.authOutboxEvent.create({
+        data: {
+          aggregateId: user.id,
+          eventType: 'user.registered',
+          payload: {
+            authUserId: user.id,
+            email: user.email,
+            username: user.username,
+            firstName: user.firstName,
+            lastName: user.lastName
+          },
+          status: 'PENDING'
+        }
+      })
 
-    syncResults.forEach((r, idx) => {
-      if (r.status === 'rejected') {
-        const target = idx === 0 ? 'user-service' : 'wallet-service'
-        console.error(`[SYNC WARNING] Không thể đồng bộ tài khoản tới ${target}:`, r.reason?.message, '| RequestId:', requestId)
-      }
+      return user
     })
 
     return {
