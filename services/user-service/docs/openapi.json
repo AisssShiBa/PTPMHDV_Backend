@@ -266,8 +266,8 @@
       },
       "post": {
         "operationId": "submitCurrentUserKyc",
-        "summary": "Submit a KYC document",
-        "description": "JPEG or PNG up to 5 MiB. Normalized into a private JPEG. APPROVED profiles must first be rejected by an authorized reviewer. Tier does not change. Unknown fields are rejected.",
+        "summary": "Submit both KYC images",
+        "description": "Requires front, back and idNumber. Each JPEG/PNG is limited to 5 MiB and normalized to a private JPEG. Both references and PENDING status commit together. APPROVED profiles must be rejected before resubmission. All upload aliases enforce two faces and return 202; legacy document is accepted as an alias for front, with back still required.",
         "requestBody": {
           "required": true,
           "content": {
@@ -276,7 +276,8 @@
                 "type": "object",
                 "required": [
                   "idNumber",
-                  "document"
+                  "front",
+                  "back"
                 ],
                 "additionalProperties": false,
                 "properties": {
@@ -285,15 +286,23 @@
                     "minLength": 1,
                     "maxLength": 50
                   },
-                  "document": {
+                  "front": {
                     "type": "string",
                     "format": "binary",
-                    "description": "Exactly one JPEG/PNG image, maximum 5 MiB."
+                    "description": "One JPEG/PNG image, maximum 5 MiB."
+                  },
+                  "back": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "One JPEG/PNG image, maximum 5 MiB."
                   }
                 }
               },
               "encoding": {
-                "document": {
+                "front": {
+                  "contentType": "image/jpeg, image/png"
+                },
+                "back": {
                   "contentType": "image/jpeg, image/png"
                 }
               }
@@ -301,8 +310,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Success",
+          "202": {
+            "description": "Both documents saved; review is PENDING",
             "content": {
               "application/json": {
                 "schema": {
@@ -484,6 +493,7 @@
       "get": {
         "operationId": "getKycDocumentUrl",
         "summary": "Get an authorized, short-lived KYC document URL",
+        "description": "Owner USER only through Gateway. ADMIN must use /admin/kyc/{userId}/documents so each view is audited. Returns the front image URL with the configured TTL (default 300 seconds).",
         "parameters": [
           {
             "name": "authUserId",
@@ -497,7 +507,7 @@
         ],
         "responses": {
           "200": {
-            "description": "URL expires in 60 seconds; Cache-Control: no-store",
+            "description": "URL expires after KYC_URL_TTL_SECONDS (default 300); Cache-Control: no-store",
             "content": {
               "application/json": {
                 "schema": {
@@ -527,9 +537,9 @@
                         },
                         "expiresIn": {
                           "type": "integer",
-                          "enum": [
-                            60
-                          ]
+                          "minimum": 1,
+                          "maximum": 3600,
+                          "example": 300
                         }
                       }
                     },
@@ -543,7 +553,7 @@
                   "success": true,
                   "data": {
                     "url": "http://localhost:19000/finvault-kyc/kyc/example.jpg?signature=example",
-                    "expiresIn": 60
+                    "expiresIn": 300
                   },
                   "message": "Success"
                 }
@@ -654,6 +664,599 @@
                     "message": "Request could not be completed"
                   },
                   "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/kyc/documents": {
+      "post": {
+        "operationId": "submitKycDocuments",
+        "summary": "Submit both KYC images",
+        "description": "Requires front, back and idNumber. Each JPEG/PNG is limited to 5 MiB and normalized to a private JPEG. Both references and PENDING status commit together. APPROVED profiles must be rejected before resubmission. All upload aliases enforce two faces and return 202; legacy document is accepted as an alias for front, with back still required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "idNumber",
+                  "front",
+                  "back"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "idNumber": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 50
+                  },
+                  "front": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "One JPEG/PNG image, maximum 5 MiB."
+                  },
+                  "back": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "One JPEG/PNG image, maximum 5 MiB."
+                  }
+                }
+              },
+              "encoding": {
+                "front": {
+                  "contentType": "image/jpeg, image/png"
+                },
+                "back": {
+                  "contentType": "image/jpeg, image/png"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Both documents saved; review is PENDING",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "20000000-0000-4000-8000-000000000001",
+                    "authUserId": "10000000-0000-4000-8000-000000000001",
+                    "email": "user@example.com",
+                    "fullName": null,
+                    "phone": null,
+                    "address": null,
+                    "kycStatus": "PENDING",
+                    "kycTier": 0,
+                    "idNumber": "123456",
+                    "kycMimeType": "image/jpeg",
+                    "kycFileSize": 1024,
+                    "version": 1,
+                    "createdAt": "2026-10-07T08:00:00.000Z",
+                    "updatedAt": "2026-10-07T08:00:00.000Z",
+                    "deletedAt": null,
+                    "hasKycDocument": true
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate resource, concurrent update or invalid transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "CONCURRENT_UPDATE",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Upload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FILE_TOO_LARGE",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage or submission unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "KYC_SUBMISSION_FAILED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/lookup": {
+      "get": {
+        "operationId": "lookupRecipient",
+        "summary": "Look up a recipient by exact email or phone",
+        "description": "Signed USER only. Email matches are case-insensitive; phone matches are exact. No partial or wildcard matching. Missing, deleted, self and ambiguous recipients return the same 404. Ten attempts per rolling minute per Auth ID, including unsuccessful/invalid lookups. PostgreSQL shares the limit across restarts and instances. Responses use Cache-Control: no-store.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 254
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "authUserId",
+                        "maskedName"
+                      ],
+                      "properties": {
+                        "authUserId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "maskedName": {
+                          "type": "string",
+                          "example": "Nguyễn V. B."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed USER required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "RECIPIENT_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMIT_EXCEEDED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "example": 60
+                },
+                "description": "Seconds before retrying"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/kyc/{userId}/documents": {
+      "get": {
+        "operationId": "getAdminKycDocuments",
+        "summary": "Get both private KYC image URLs",
+        "description": "ADMIN only. Audits every valid request before calling User, without recording signed URLs. Cache-Control: no-store. Default URL TTL is 300 seconds (KYC_URL_TTL_SECONDS). Missing either image returns 404.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "frontUrl",
+                        "backUrl",
+                        "expiresAt"
+                      ],
+                      "properties": {
+                        "frontUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "backUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ADMIN required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found or KYC_DOCUMENTS_INCOMPLETE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Audit or User service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/kyc/{userId}/tier": {
+      "patch": {
+        "operationId": "changeAdminKycTier",
+        "summary": "Change an approved profiles tier with audit",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "tier",
+                  "reason"
+                ],
+                "properties": {
+                  "tier": {
+                    "type": "integer",
+                    "enum": [
+                      1,
+                      2
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Profile"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid tier/reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ADMIN required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "KYC_NOT_APPROVED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Audit or User unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }

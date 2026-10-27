@@ -10,6 +10,9 @@
         "db:generate": "prisma generate",
         "postinstall": "prisma generate",
         "test": "tsx --test tests/*.test.ts",
+        "test:integration": "tsx --test --test-concurrency=1 tests/financeEvents.integration.test.ts scripts/financeEventsEnrichment.integration.ts scripts/financeEventsStartup.integration.ts",
+        "measure:latency": "tsx scripts/measure-latency.ts",
+        "test:s16": "tsx scripts/test-s16-reconnect.ts",
         "typecheck": "tsc --noEmit",
         "socket:smoke": "tsx scripts/socket-smoke.ts"
     },

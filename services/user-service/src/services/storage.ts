@@ -43,9 +43,9 @@ export const storage = {
     try { await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: AbortSignal.timeout(15000) }) }
     finally { client.destroy() }
   },
-  async url(key: string) {
+  async url(key: string, expiresIn = env.kycUrlTtlSeconds) {
     const { bucket, client } = config(true)
-    try { return await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseCacheControl: 'no-store' }), { expiresIn: 60 }) }
+    try { return await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseCacheControl: 'no-store' }), { expiresIn }) }
     finally { client.destroy() }
   }
 }

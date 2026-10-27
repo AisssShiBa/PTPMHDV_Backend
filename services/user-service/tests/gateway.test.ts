@@ -9,7 +9,9 @@ import userApp from '../src/app'
 import { prisma as users } from '../src/config/prisma'
 import { stub } from './stub'
 
-test('real Gateway proxy reaches both services and strips client internal credentials', { timeout: 20000 }, async () => {
+test('real Gateway proxy reaches both services and strips client internal credentials', {
+  timeout: process.env.FINVAULT_ACCEPTANCE_CONFIG ? 90000 : 20000
+}, async () => {
   const pair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
   process.env.GATEWAY_PRIVATE_KEY = pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
   process.env.GATEWAY_PUBLIC_KEY = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString()

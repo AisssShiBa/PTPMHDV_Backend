@@ -1,7 +1,8 @@
 # Notification event catalog
 
-The notification service currently consumes `wallet.events`, `payment.events`,
-and `kyc.events`. Its notification type enum is defined in
+The notification service consumes the legacy `wallet.events`, `payment.events`,
+and `kyc.events` exchanges alongside the versioned `finvault.events` exchange.
+Its notification type enum is defined in
 `prisma/schema.prisma` and mirrored in `src/types/notification.ts`.
 
 | Source | Published event/type | Notification enum | Status |
@@ -15,10 +16,14 @@ and `kyc.events`. Its notification type enum is defined in
 | `wallet-service` outbox | `wallet.balance_deducted` → `WALLET_DEBITED` | `WALLET_DEBITED` | Published to `wallet.events`; HTTP fallback exists |
 | — | — | `KYC_APPROVED` | No current event source |
 | — | — | `KYC_REJECTED` | No current event source |
-| `user-service` outbox | `user.kyc_updated` on `finvault.events` | `KYC_TIER_CHANGED` | Not mapped to a notification type; the exchange is not consumed here |
-| `merchant-service` outbox | `merchant.status_updated` on `finvault.events` | `MERCHANT_APPROVED` | No current notification mapping; the exchange is not consumed here |
-| `merchant-service` outbox | `merchant.status_updated` on `finvault.events` | `MERCHANT_REJECTED` | No current notification mapping; the exchange is not consumed here |
+| `user-service` outbox | `user.kyc_updated` on `finvault.events` | `KYC_TIER_CHANGED` | Consumed; legacy events without `previousTier` are supported |
+| `merchant-service` outbox | `merchant.status_updated` on `finvault.events` | — | Bound and intentionally acknowledged without a notification; no recipient is defined |
+| `user-service` outbox | `user.registered` on `finvault.events` | — | Bound and intentionally acknowledged without a notification; no recipient is defined |
+| `payment-service` outbox | `payment.succeeded` on `finvault.events` | `PAYMENT_SUCCESS` | Creates one notification per distinct sender/receiver in one event transaction |
+| `payment-service` outbox | `payment.failed` on `finvault.events` | `PAYMENT_FAILED` | Consumed for the sender; failure details are not included in the message |
+| `payment-service` outbox | `payment.expired` on `finvault.events` | `PAYMENT_EXPIRED` | Consumed for the sender |
 
-`user-service` and `merchant-service` events on `finvault.events` are not
-connected to this consumer yet. `kyc.events` currently has no source publisher.
-Connecting these event flows is outside the current notification-service scope.
+The new consumer binds only these six exact event types. It does not bind
+`wallet.limit_exceeded` because no notification type is defined for it, nor
+does it use broad user or merchant wildcards. Legacy exchange consumption
+remains active during the migration.

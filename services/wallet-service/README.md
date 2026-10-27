@@ -1,42 +1,48 @@
 # Wallet service
 
-Independent NestJS service for wallet balances, holds and a double-entry ledger.
-It owns no `User` table and has no database foreign key to another service.  Before
-creating a non-system wallet it calls `GET {USER_SERVICE_URL}/internal/users/:id`;
-the response must identify an active user.
+Express service for wallet balances, holds and a double-entry ledger. It owns no
+`User` table and has no database foreign key to another service.
 
 ## Run with Docker
 
+From the repository root, build the service image:
+
 ```powershell
-Copy-Item .env.example .env
-docker compose up --build
+docker build -f services/wallet-service/Dockerfile -t wallet-service .
 ```
 
-The compose file runs an isolated PostgreSQL 16 database and this service.  Its
-database is exposed on port `5434` by default, so it does not collide with the
-other services.  In production, set a strong `INTERNAL_API_KEY` and a reachable
-`USER_SERVICE_URL`; the service intentionally refuses wallet creation without
-user verification.
+The image applies Prisma migrations on startup and exposes port `3004`. Set
+`DATABASE_URL` and `INTERNAL_KEY` for the deployment; `PORT` can override the
+server port. Wallet routes are mounted at `/api/wallets`; admin routes are
+mounted at `/api/wallets/admin`. The current wallet creation path does not call
+the user-service to verify that the supplied user is active.
 
 ## API
 
-All routes require `X-Internal-Key` when `INTERNAL_API_KEY` is configured.
+Wallet routes accept either a valid `x-gateway-token` (verified by
+`finvault-internal-auth`) or an `x-internal-key` matching `INTERNAL_KEY`.
+Gateway-authenticated users may operate only on their own wallet unless their
+role is `ADMIN`; internal calls are allowed through the owner check. Credit and
+debit additionally require an internal call or `ADMIN`.
+
+Admin routes require a valid `x-gateway-token` and the `ADMIN` role; they do not
+use the internal-key middleware.
 
 | Route | Purpose |
 | --- | --- |
-| `POST /internal/wallets` | Create a USER or MERCHANT wallet idempotently by `userId` |
-| `GET /internal/wallets/:userId/balance` | Read balance, held balance and available balance |
-| `POST /internal/wallets/:userId/hold` | Reserve available funds; body includes `amount`, `referenceId`, `expiresAt` |
-| `POST /internal/wallets/:userId/capture` | Convert a hold to a PAYMENT ledger transfer |
-| `POST /internal/wallets/:userId/release` | Release a pending hold |
-| `POST /internal/wallets/transfer` | P2P transfer using `fromUserId`, `toUserId`, `amount`, `referenceId` |
-| `POST /internal/wallets/:userId/credit` | TOPUP or REFUND from the clearing wallet |
-| `POST /internal/wallets/:userId/debit` | PAYMENT from a wallet to the clearing wallet |
-| `GET /internal/wallets/:userId/history` | Ledger history; range is limited to 90 days |
-| `POST /admin/wallets/:userId/lock`, `/unlock` | Lock/unlock new money operations |
-| `POST /admin/wallets/:userId/adjust` | Credit/debit adjustment with `direction`, `reason`, `referenceId` |
-| `GET /admin/wallets` | List/search wallets |
-| `GET /admin/reconciliation` | Report (never repair) ledger/balance mismatches |
+| `POST /api/wallets` | Create a USER or MERCHANT wallet idempotently by `userId` |
+| `GET /api/wallets/:userId/balance` | Read balance, held balance and available balance |
+| `POST /api/wallets/:userId/hold` | Reserve available funds; body includes `amount`, `referenceId`, `expiresAt`, and `destinationUserId` |
+| `POST /api/wallets/:userId/capture` | Convert a hold to a PAYMENT ledger transfer |
+| `POST /api/wallets/:userId/release` | Release a pending hold |
+| `POST /api/wallets/:userId/transfer` | P2P transfer using `toUserId`, `amount`, and `referenceId` |
+| `POST /api/wallets/:userId/credit` | Credit from the clearing wallet; internal call or ADMIN only |
+| `POST /api/wallets/:userId/debit` | Debit to the clearing wallet; internal call or ADMIN only |
+| `GET /api/wallets/:userId/history` | Ledger history |
+| `POST /api/wallets/admin/:userId/lock`, `/unlock` | Lock/unlock new money operations |
+| `POST /api/wallets/admin/:userId/adjust` | Credit/debit adjustment |
+| `GET /api/wallets/admin` | List/search wallets |
+| `GET /api/wallets/admin/reconciliation` | Report ledger/balance mismatches |
 
 Set `?ownerType=MERCHANT` on single-wallet operations when addressing a merchant
 wallet.  All money amounts are decimal strings with no more than two places.

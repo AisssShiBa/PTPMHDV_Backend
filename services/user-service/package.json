@@ -14,6 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test:db": "node tests/migrate.cjs",
     "worker": "tsx src/events/worker.ts",
+    "publisher": "tsx src/events/publisher-worker.ts",
+    "outbox:replay": "tsx src/events/replay-outbox.ts",
     "storage:cleanup": "tsx src/jobs/cleanup-kyc.ts",
     "db:migrate": "prisma migrate deploy",
     "events:replay": "tsx src/events/replay.ts"
@@ -37,6 +39,7 @@
     "prisma": "^6.19.3",
     "sharp": "^0.35.4",
     "zod": "^4.6.2",
+    "finvault-events": "file:../../packages/finvault-events",
     "finvault-internal-auth": "file:../../packages/finvault-internal-auth"
   },
   "devDependencies": {

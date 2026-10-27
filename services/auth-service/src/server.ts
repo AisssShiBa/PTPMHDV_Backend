@@ -1,10 +1,13 @@
 import app from './app'
 import { env } from './config/env'
 import { prisma } from './config/prisma'
+import { validateTransactionKeys } from './utils/transactionToken'
 import { initRabbitMQ } from './lib/rabbitmq'
 import { OutboxWorker } from './workers/outboxWorker'
 
 const startServer = async (): Promise<void> => {
+  validateTransactionKeys()
+
   try {
     await prisma.$connect()
     console.log('[AUTH] Kết nối PostgreSQL thành công')

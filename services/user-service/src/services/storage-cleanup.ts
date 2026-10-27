@@ -16,7 +16,7 @@ export async function removeUnreferenced(key: string, requireJob = false) {
     const job = await tx.storageCleanup.findUnique({ where: { objectKey: key } })
     if (requireJob && !job) return 'skipped' as const
     if (job && job.nextAttemptAt.getTime() > Date.now()) return 'protected' as const
-    const referenced = await tx.user.findFirst({ where: { kycObjectKey: key }, select: { id: true } })
+    const referenced = await tx.user.findFirst({ where: { OR: [{ kycObjectKey: key }, { kycBackObjectKey: key }] }, select: { id: true } })
     if (!referenced) await storage.remove(key)
     await tx.storageCleanup.deleteMany({ where: { objectKey: key } })
     return referenced ? 'referenced' as const : 'deleted' as const
@@ -41,7 +41,7 @@ export async function scanKycOrphans(options: {
     if (startedAt - object.lastModified.getTime() < graceMs) { summary.tooYoung++; continue }
     try {
       // A reference lookup error fails closed; tombstones still protect their documents.
-      const referenced = await prisma.user.findFirst({ where: { kycObjectKey: object.key }, select: { id: true } })
+      const referenced = await prisma.user.findFirst({ where: { OR: [{ kycObjectKey: object.key }, { kycBackObjectKey: object.key }] }, select: { id: true } })
       if (referenced) { summary.referenced++; continue }
       const job = await prisma.storageCleanup.findUnique({ where: { objectKey: object.key } })
       if (job && job.nextAttemptAt.getTime() > Date.now()) { summary.protected++; continue }

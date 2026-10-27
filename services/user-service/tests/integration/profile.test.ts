@@ -8,7 +8,7 @@ import request from 'supertest'
 import { prisma } from '../../src/config/prisma'
 import app from '../../src/app'
 import { consumeRegistration } from '../../src/events/registration'
-import { submitDocument, cleanupStorage } from '../../src/services/kyc.service'
+import { submitDocuments, cleanupStorage } from '../../src/services/kyc.service'
 import { storage } from '../../src/services/storage'
 import sharp from 'sharp'
 
@@ -94,10 +94,10 @@ test('failed storage writes leave durable cleanup jobs and no KYC state change',
   const user = await prisma.user.create({ data: { authUserId: randomUUID(), email: 'upload-fail@example.com' } })
   const image = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#ffffff' } }).png().toBuffer()
   const fail = mock.method(storage, 'put', async () => { throw new Error('Storage down') })
-  await assert.rejects(submitDocument(user, '123', { buffer: image, mimetype: 'image/png' }))
+  await assert.rejects(submitDocuments(user, '123', { buffer: image, mimetype: 'image/png' }, { buffer: image, mimetype: 'image/png' }))
   fail.mock.restore()
   assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).kycStatus, 'NONE')
-  assert.equal(await prisma.storageCleanup.count(), 1)
+  assert.equal(await prisma.storageCleanup.count(), 2)
 })
 test('cleanup protects an object referenced by a committed KYC submission', async () => {
   await prisma.user.create({ data: { authUserId: randomUUID(), email: 'reference@example.com', kycObjectKey: 'referenced.jpg' } })

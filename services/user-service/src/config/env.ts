@@ -1,6 +1,7 @@
-import { getGatewayPublicKey } from 'finvault-internal-auth'
+import { getGatewayPublicKey, loadSecretEnvironment } from 'finvault-internal-auth'
 import 'dotenv/config'
 import { z } from 'zod'
+loadSecretEnvironment(['INTERNAL_KEY'])
 
 const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3002),
@@ -13,6 +14,7 @@ const schema = z.object({
   EVENT_MAX_RETRIES: z.coerce.number().int().min(1).max(10).default(5),
   EVENT_RETRY_MS: z.coerce.number().int().min(100).max(60000).default(2000),
   OUTBOX_POLL_MS: z.coerce.number().int().min(100).default(1000),
+  KYC_URL_TTL_SECONDS: z.coerce.number().int().min(1).max(3600).default(300),
   KYC_CLEANUP_GRACE_MS: z.coerce.number().int().min(1).max(2592000000).default(86400000),
   STORAGE_CLEANUP_ENABLED: z.enum(['true', 'false']).default('true'),
   S3_ENDPOINT: z.string().url().optional(),
@@ -36,6 +38,7 @@ export const env = {
   rabbitmqUrl: config.RABBITMQ_URL, eventExchange: config.EVENT_EXCHANGE,
   eventMaxRetries: config.EVENT_MAX_RETRIES, eventRetryMs: config.EVENT_RETRY_MS,
   outboxPollMs: config.OUTBOX_POLL_MS,
+  kycUrlTtlSeconds: config.KYC_URL_TTL_SECONDS,
   cleanupGraceMs: config.KYC_CLEANUP_GRACE_MS,
   cleanupEnabled: config.STORAGE_CLEANUP_ENABLED === 'true',
   s3: { endpoint: config.S3_ENDPOINT, publicEndpoint: config.S3_PUBLIC_ENDPOINT, region: config.S3_REGION, bucket: config.S3_BUCKET,

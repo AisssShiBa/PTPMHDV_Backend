@@ -24,7 +24,7 @@ enum NotificationType {
 
 model Notification {
   id        String           @id @default(uuid())
-  eventId   String?          @unique
+  eventId   String?
   userId    String
   type      NotificationType
   message   String
@@ -32,6 +32,7 @@ model Notification {
   createdAt DateTime         @default(now())
 
   @@index([userId])
+  @@unique([eventId, userId])
 }
 
 model NotificationInbox {

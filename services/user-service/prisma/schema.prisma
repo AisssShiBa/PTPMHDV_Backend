@@ -21,6 +21,7 @@ model User {
   idNumber    String?   @map("id_number")
   idImageUrl  String?   @map("id_image_url")
   kycObjectKey String? @map("kyc_object_key")
+  kycBackObjectKey String? @map("kyc_back_object_key")
   kycMimeType String? @map("kyc_mime_type")
   kycFileSize Int? @map("kyc_file_size")
   version Int @default(0)
@@ -29,7 +30,14 @@ model User {
   deletedAt   DateTime? @map("deleted_at")
 
   @@index([authUserId])
+  @@index([phone])
   @@map("users")
+}
+
+model RecipientLookupLimit {
+  authUserId String @id @map("auth_user_id")
+  attempts DateTime[] @default([]) @db.Timestamptz(3)
+  @@map("recipient_lookup_limits")
 }
 
 enum KycStatus {
@@ -64,6 +72,11 @@ model UserOutboxEvent {
   status           String    @default("PENDING")
   createdAt        DateTime  @default(now()) @map("created_at")
   publishedAt      DateTime? @map("published_at")
+  attempts         Int       @default(0)
+  nextAttemptAt    DateTime  @default(now()) @map("next_attempt_at")
+  lockedUntil      DateTime? @map("locked_until")
+  lockToken        String?   @map("lock_token")
+  lastError        String?   @map("last_error")
 
   @@unique([aggregateId, aggregateVersion])
   @@index([status, createdAt])

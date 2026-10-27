@@ -14,7 +14,7 @@ test('dry-run finds tracked/untracked orphans and never mutates storage or clean
     yield { key: 'kyc/new', lastModified: new Date() }
     yield { key: 'kyc/unknown-age' }
   })
-  stub(prisma.user, 'findFirst', async ({ where }: any) => where.kycObjectKey === 'kyc/active' ? { id: 'active' } : null)
+  stub(prisma.user, 'findFirst', async ({ where }: any) => where.OR[0].kycObjectKey === 'kyc/active' ? { id: 'active' } : null)
   stub(prisma.storageCleanup, 'findUnique', async ({ where }: any) => where.objectKey === 'kyc/inflight'
     ? { nextAttemptAt: new Date(Date.now() + 10000) }
     : where.objectKey === 'kyc/tracked' ? { nextAttemptAt: new Date(0) } : null)
@@ -53,7 +53,7 @@ test('delete rechecks references under lock and continues after an individual de
       $queryRaw: async () => { locked = true; return [] },
       user: { findFirst: async ({ where }: any) => {
         assert.equal(locked, true)
-        return where.kycObjectKey === 'kyc/committed' ? { id: 'new reference' } : null
+        return where.OR[0].kycObjectKey === 'kyc/committed' ? { id: 'new reference' } : null
       } },
       storageCleanup: { findUnique: async () => null, deleteMany: async () => ({ count: 0 }) }
     })
