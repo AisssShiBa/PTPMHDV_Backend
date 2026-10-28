@@ -2,11 +2,11 @@ FROM node:20-alpine AS build
 RUN apk add --no-cache openssl
 WORKDIR /workspace/packages/finvault-internal-auth
 COPY packages/finvault-internal-auth/ ./
-RUN npm ci
+RUN npm install && npm run build
 WORKDIR /workspace/services/auth-service
 COPY services/auth-service/package*.json ./
 COPY services/auth-service/prisma ./prisma
-RUN npm ci
+RUN npm install
 COPY services/auth-service/src ./src
 COPY services/auth-service/tsconfig.json ./
 RUN npx prisma generate
