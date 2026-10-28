@@ -38,3 +38,31 @@ export const paginationSchema = z.object({
     status: z.string().optional(),
   }),
 });
+
+export const p2pQuoteSchema = z.object({
+  body: z.object({
+    destinationUserId: z.string({ message: "destinationUserId là bắt buộc" }).uuid({ message: "destinationUserId phải là UUID hợp lệ" }),
+    amount: z.union([
+      z.string({ message: "amount là bắt buộc" })
+        .refine((val) => !isNaN(Number(val)) && isFinite(Number(val)) && Number(val) > 0, {
+          message: "amount phải là một số hợp lệ lớn hơn 0"
+        })
+        .refine((val) => {
+          const parts = val.split('.');
+          return !parts[1] || parts[1].length <= 2;
+        }, {
+          message: "amount chỉ được tối đa 2 chữ số thập phân"
+        }),
+      z.number({ message: "amount là bắt buộc" })
+        .positive({ message: "amount phải lớn hơn 0" })
+        .refine((val) => {
+          const parts = val.toString().split('.');
+          return !parts[1] || parts[1].length <= 2;
+        }, {
+          message: "amount chỉ được tối đa 2 chữ số thập phân"
+        })
+        .transform(String)
+    ])
+  })
+});
+

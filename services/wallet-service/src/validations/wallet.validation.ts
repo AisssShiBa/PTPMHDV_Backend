@@ -46,7 +46,7 @@ export const holdSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).merge(z
     amount: amountSchema,
     referenceId: z.string(),
     expiresAt: z.string(),
-    destinationUserId: z.string().uuid(),
+    destinationUserId: z.string().uuid().optional(),
     destinationOwnerType: z.enum(['USER', 'MERCHANT', 'SYSTEM']).optional(),
   }),
 }));

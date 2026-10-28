@@ -45,3 +45,11 @@ export const list = async (req: Request, res: Response) => {
     const result = await paymentService.list(req.auth!.userId, type, status);
     res.json({ success: true, data: result });
 };
+
+export const p2pQuote = async (req: Request, res: Response) => {
+    const senderId = req.auth!.userId;
+    const { destinationUserId, amount } = req.body;
+    const result = await paymentService.p2pQuote(senderId, destinationUserId, String(amount));
+    res.json({ success: true, data: result });
+};
+

@@ -20,7 +20,7 @@ export class WalletHoldService {
     referenceId: string,
     expiresAtValue: string,
     ownerType: OwnerType = OwnerType.USER,
-    destUserId: string,
+    destUserId?: string,
     destOwnerType: OwnerType = OwnerType.USER,
   ) {
     const amount = money(amountValue);
@@ -32,7 +32,9 @@ export class WalletHoldService {
     return await prisma.$transaction(async (tx) => {
       // 1. Lock Wallets: Lock Wallet first to avoid deadlock
       const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
-      const destWallet = await this.ledgerService.findWalletTx(tx, destUserId, destOwnerType);
+      const destWallet = destUserId
+        ? await this.ledgerService.findWalletTx(tx, destUserId, destOwnerType)
+        : null;
 
       const existing = await tx.walletHold.findUnique({
         where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
@@ -73,7 +75,7 @@ export class WalletHoldService {
       const hold = await tx.walletHold.create({
         data: {
           sourceWalletId: wallet.id,
-          destinationWalletId: destWallet.id,
+          destinationWalletId: destWallet ? destWallet.id : null,
           amount,
           referenceId,
           expiresAt,

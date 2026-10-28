@@ -14,7 +14,8 @@ router.use('/topups', topupRoutes);
 router.use('/admin/topups', adminTopupRoutes);
 
 // Routes yêu cầu user đã đăng nhập (qua Gateway, ES256 verified)
-router.post('/checkout', requireGateway, attachRequestId, validate(schemas.checkoutSchema), paymentController.checkout);
+router.post('/p2p/quote', requireGateway, attachRequestId, validate(schemas.p2pQuoteSchema), paymentController.p2pQuote);
+router.post('/checkout',  requireGateway, attachRequestId, validate(schemas.checkoutSchema), paymentController.checkout);
 router.post('/:id/cancel', requireGateway, attachRequestId, validate(schemas.paramIdSchema), paymentController.cancel);
 router.get('/:id',         requireGateway, attachRequestId, validate(schemas.paramIdSchema), paymentController.getById);
 router.get('/',            requireGateway, attachRequestId, validate(schemas.paginationSchema), paymentController.list);

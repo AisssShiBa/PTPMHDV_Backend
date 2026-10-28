@@ -8,14 +8,18 @@ export class WalletClient {
     this.baseUrl = process.env.WALLET_SERVICE_URL || 'http://wallet-service:3004';
   }
 
-  async createHold(userId: string, amount: string, referenceId: string, expiresAt: string) {
+  async createHold(userId: string, amount: string, referenceId: string, expiresAt: string, destinationUserId?: string) {
+    const body: any = { amount, referenceId, expiresAt };
+    if (destinationUserId) {
+      body.destinationUserId = destinationUserId;
+    }
     const response = await fetch(`${this.baseUrl}/api/wallets/${userId}/hold`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-internal-key': internalKey!
       },
-      body: JSON.stringify({ amount, referenceId, expiresAt })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
@@ -114,4 +118,27 @@ export class WalletClient {
     const data = await response.json();
     return { success: true, data };
   }
+
+  // Lấy số dư người dùng trước khi thực hiện giao dịch như:
+  //  - Người dùng chuyển tiền cho một người khác.
+  async getBalance(userId: string) {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/wallets/${userId}/balance`, {
+        method: 'GET',
+        headers: {
+          'x-internal-key': internalKey!
+        }
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+      const resData = await response.json();
+      return resData.data;
+    } catch (err: any) {
+      console.error(`[Wallet getBalance] Error fetching balance for ${userId}:`, err.message);
+      return null;
+    }
+  }
 }
+

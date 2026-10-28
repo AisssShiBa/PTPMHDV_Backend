@@ -16,12 +16,12 @@ export interface CheckoutDto {
 }
 
 export class PaymentService {
-  constructor(private walletClient: WalletClient) {}
+  constructor(private walletClient: WalletClient) { }
 
   async checkout(dto: CheckoutDto) {
     const hashData = `${dto.amount}|${dto.type}|${dto.referenceId || ''}|${dto.callbackTopic}`;
     const requestHash = crypto.createHash('sha256').update(hashData).digest('hex');
-    
+
     const paymentId = randomUUID();
     const holdId = randomUUID();
     const holdExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 phút
@@ -60,9 +60,9 @@ export class PaymentService {
         const existing = await prisma.payment.findUnique({
           where: { userId_idempotencyKey: { userId: dto.userId, idempotencyKey: dto.idempotencyKey } }
         });
-        
+
         if (!existing) throw new DomainException(500, 'INTERNAL_ERROR', 'Idempotency conflict but record missing');
-        
+
         // Kiểm tra tính toàn vẹn Payload
         if (existing.requestHash !== requestHash && existing.requestHash !== 'LEGACY') {
           throw new DomainException(422, 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD', 'Idempotency key reused with different payload');
@@ -81,12 +81,12 @@ export class PaymentService {
           // Retry an toàn
           const updateRes = await prisma.payment.updateMany({
             where: { id: existing.id, idempotencyStatus: IdempotencyStatus.FAILED },
-            data: { 
-              idempotencyStatus: IdempotencyStatus.PROCESSING, 
-              requestHash, 
-              holdId, 
+            data: {
+              idempotencyStatus: IdempotencyStatus.PROCESSING,
+              requestHash,
+              holdId,
               holdExpiresAt,
-              idempotencyExpiresAt 
+              idempotencyExpiresAt
             }
           });
           if (updateRes.count === 0) {
@@ -102,15 +102,16 @@ export class PaymentService {
     // 2. Chạy nghiệp vụ Side-effect (Call sang Wallet Service)
     let holdSucceeded = false;
     try {
-      await this.walletClient.createHold(dto.userId, dto.amount.toString(), payment.holdId!, payment.holdExpiresAt!.toISOString());
+      const destinationUserId = dto.type === PaymentType.WALLET_TRANSFER ? dto.referenceId : undefined;
+      await this.walletClient.createHold(dto.userId, dto.amount.toString(), payment.holdId!, payment.holdExpiresAt!.toISOString(), destinationUserId);
       holdSucceeded = true;
     } catch (err: any) {
       // Nếu hold xịt, nhả khóa về FAILED cho phép retry
       await prisma.payment.update({
         where: { id: payment.id! },
-        data: { 
-          idempotencyStatus: IdempotencyStatus.FAILED, 
-          status: PaymentStatus.FAILED, 
+        data: {
+          idempotencyStatus: IdempotencyStatus.FAILED,
+          status: PaymentStatus.FAILED,
           failureReason: 'Hold failed: ' + (err.message || 'Unknown')
         }
       });
@@ -330,4 +331,48 @@ export class PaymentService {
       orderBy: { createdAt: 'desc' }
     });
   }
+
+  // Luồng chuyển tiền p2p thông qua payment service để quản lý transaction
+  // Luồng này sẽ tạo payment với status PENDING và hold số tiền tương ứng
+  // Sau đó user sẽ confirm payment để hoàn tất transaction
+  // Hoặc user có thể cancel payment để hoàn tác transaction
+  // ** Luồng này dùng cho người dùng cuối user 
+  async p2pQuote(senderId: string, destinationUserId: string, amountStr: string) {
+    if (senderId === destinationUserId) {
+      throw new DomainException(400, 'SELF_TRANSFER_NOT_ALLOWED', 'Không thể chuyển tiền cho chính mình');
+    }
+
+    const amountNum = Number(amountStr);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      throw new DomainException(400, 'INVALID_AMOUNT', 'Số tiền không hợp lệ');
+    }
+
+    // 1. Kiểm tra ví người nhận có tồn tại không
+    const destWallet = await this.walletClient.getBalance(destinationUserId);
+    if (!destWallet) {
+      throw new DomainException(404, 'DESTINATION_WALLET_NOT_FOUND', 'Người nhận không tồn tại hoặc chưa kích hoạt ví');
+    }
+
+    // 2. Kiểm tra số dư khả dụng của người gửi
+    const senderWallet = await this.walletClient.getBalance(senderId);
+    if (!senderWallet) {
+      throw new DomainException(404, 'SENDER_WALLET_NOT_FOUND', 'Ví người gửi không tồn tại');
+    }
+
+    const availableBalance = Number(senderWallet.availableBalance ?? senderWallet.balance);
+    if (availableBalance < amountNum) {
+      throw new DomainException(400, 'INSUFFICIENT_FUNDS', 'Số dư khả dụng không đủ để thực hiện giao dịch');
+    }
+
+    // 3. TTL 60 giây
+    const expiresAt = new Date(Date.now() + 60 * 1000).toISOString();
+
+    return {
+      destinationUserId,
+      amount: amountStr,
+      fee: 0,
+      expiresAt
+    };
+  }
 }
+
