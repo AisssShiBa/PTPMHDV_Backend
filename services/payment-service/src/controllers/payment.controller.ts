@@ -6,18 +6,23 @@ const walletClient = new WalletClient();
 const paymentService = new PaymentService(walletClient);
 
 // req.auth được inject bởi requireGateway (ES256 verified) từ finvault-internal-auth.
-// Tất cả endpoint ở đây đều đi qua requireGateway → req.auth luôn tồn tại.
+// Tất cả endpoint người dùng đều đi qua requireGateway → req.auth luôn tồn tại.
 
 export const checkout = async (req: Request, res: Response) => {
-    // userId lấy từ req.auth (đã verify ES256), không từ header x-user-id
     const userId = req.auth!.userId;
     const { payment, replayed } = await paymentService.checkout({ ...req.body, userId });
     res.status(201).json({ success: true, data: { ...payment, replayed } });
 };
 
 export const confirm = async (req: Request, res: Response) => {
-    const userId = (req as any).isInternalCall ? undefined : req.auth?.userId;
-    const result = await paymentService.confirm(req.params.id as string, userId);
+    const userId = req.auth!.userId;
+    const tokenPayload = req.transactionToken!;
+    const result = await paymentService.confirm(req.params.id as string, userId, tokenPayload);
+    res.json({ success: true, data: result });
+};
+
+export const internalConfirm = async (req: Request, res: Response) => {
+    const result = await paymentService.internalConfirm(req.params.id as string);
     res.json({ success: true, data: result });
 };
 

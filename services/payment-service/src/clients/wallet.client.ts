@@ -44,7 +44,7 @@ export class WalletClient {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || 'Capture failed');
+      const errorMsg = errorData.error?.message || errorData.message || 'Capture failed'; throw new Error(errorMsg);
     }
   }
 

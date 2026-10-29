@@ -1,6 +1,7 @@
 import { DomainException } from '../utils/domain.exception';
 import { PaymentStatus, OutboxEventStatus, PaymentType } from '../utils/enums';
-import { IdempotencyStatus } from '@prisma/client';
+import { IdempotencyStatus, Prisma } from '@prisma/client';
+import { TransactionTokenPayload } from '../middlewares/transactionToken';
 import { prisma } from '../utils/prisma';
 import { randomUUID } from 'crypto';
 import * as crypto from 'crypto';
@@ -150,21 +151,40 @@ export class PaymentService {
     return { payment: finalizedPayment, replayed: false };
   }
 
-  async confirm(id: string, requesterUserId?: string) {
+  async confirm(id: string, requesterUserId: string, tokenPayload: TransactionTokenPayload) {
     const payment = await prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
 
-    if (requesterUserId && payment.userId !== requesterUserId) {
+    // 1. Kiểm tra quyền sở hữu (ownership)
+    if (payment.userId !== requesterUserId || tokenPayload.sub !== requesterUserId) {
       throw new DomainException(403, 'FORBIDDEN', 'Bạn không có quyền xác nhận thanh toán này');
+    }
+
+    // 2. Kiểm tra claims gắn chặt với paymentId và amount
+    if (tokenPayload.paymentId !== payment.id) {
+      throw new DomainException(403, 'FORBIDDEN', 'Transaction token does not match payment ID');
+    }
+
+    const tokenAmount = new Prisma.Decimal(tokenPayload.amount);
+    if (!tokenAmount.equals(payment.amount)) {
+      throw new DomainException(403, 'FORBIDDEN', 'Transaction token amount does not match payment amount');
+    }
+
+    // 3. Kiểm tra trạng thái Payment
+    if (payment.status === PaymentStatus.SUCCESS) {
+      throw new DomainException(409, 'PAYMENT_ALREADY_CONFIRMED', 'Payment has already been confirmed');
     }
 
     if (payment.status !== PaymentStatus.PENDING) {
       throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot confirm.`);
     }
 
+    // 4. Kiểm tra TTL giữ tiền
     if (payment.holdExpiresAt && payment.holdExpiresAt.getTime() < Date.now()) {
-      await this.walletClient.releaseHold(payment.userId, payment.holdId!);
-      const updated = await prisma.payment.update({
+      if (payment.holdId) {
+        await this.walletClient.releaseHold(payment.userId, payment.holdId);
+      }
+      await prisma.payment.update({
         where: { id },
         data: {
           status: PaymentStatus.EXPIRED,
@@ -182,17 +202,27 @@ export class PaymentService {
     }
 
     let captureSucceeded = false;
-
     try {
-      await this.walletClient.captureHold(payment.userId, payment.holdId!);
-
-      captureSucceeded = true;
-      console.log(`[Saga] Wallet capture success for payment ${id}`);
-
-      // ⚠️ Giả lập lỗi timeout/crash SAU KHI wallet đã capture thành công nếu test
-      // throw new Error('[TEST] Simulated error after successful wallet capture');
-
       return await prisma.$transaction(async (tx) => {
+        // Atomic consume token: Chống Replay Attack bằng unique violation (P2002)
+        try {
+          await tx.usedTransactionToken.create({
+            data: {
+              jti: tokenPayload.jti,
+              paymentId: payment.id,
+              userId: tokenPayload.sub,
+            }
+          });
+        } catch (err) {
+          if (err.code === 'P2002') {
+            throw new DomainException(409, 'TXN_TOKEN_REUSED', 'Transaction token has already been used');
+          }
+          throw err;
+        }
+
+        await this.walletClient.captureHold(payment.userId, payment.holdId);
+        captureSucceeded = true;
+
         const updated = await tx.payment.update({
           where: { id },
           data: {
@@ -220,8 +250,11 @@ export class PaymentService {
         });
 
         return updated;
-      });
-    } catch (error: any) {
+      }, { maxWait: 15000, timeout: 25000 });
+    } catch (error) {
+      if (error instanceof DomainException) {
+        throw error;
+      }
       console.error(`Confirm payment failed for ${id}:`, error);
 
       if (captureSucceeded) {
@@ -231,6 +264,118 @@ export class PaymentService {
 
       const failureNote = captureSucceeded
         ? `Compensating Transaction: Wallet capture succeeded but DB update failed. Credit called. Lỗi gốc: ${error.message}`
+        : error.message;
+
+      return await prisma.$transaction(async (tx) => {
+        const updated = await tx.payment.update({
+          where: { id },
+          data: {
+            status: PaymentStatus.FAILED,
+            failureReason: failureNote,
+            histories: {
+              create: {
+                id: randomUUID(),
+                fromStatus: PaymentStatus.PENDING,
+                toStatus: PaymentStatus.FAILED,
+                note: failureNote,
+              }
+            }
+          }
+        });
+
+        await tx.outboxEvent.create({
+          data: {
+            id: randomUUID(),
+            aggregateId: id,
+            eventType: 'PAYMENT_FAILED',
+            topic: payment.callbackTopic,
+            payload: JSON.parse(JSON.stringify(updated)),
+            status: OutboxEventStatus.PENDING,
+          }
+        });
+
+        return updated;
+      });
+    }
+  }
+
+  async internalConfirm(id: string) {
+    const payment = await prisma.payment.findUnique({ where: { id } });
+    if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+
+    if (payment.status === PaymentStatus.SUCCESS) {
+      throw new DomainException(409, 'PAYMENT_ALREADY_CONFIRMED', 'Payment has already been confirmed');
+    }
+
+    if (payment.status !== PaymentStatus.PENDING) {
+      throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot confirm.`);
+    }
+
+    if (payment.holdExpiresAt && payment.holdExpiresAt.getTime() < Date.now()) {
+      if (payment.holdId) {
+        await this.walletClient.releaseHold(payment.userId, payment.holdId);
+      }
+      await prisma.payment.update({
+        where: { id },
+        data: {
+          status: PaymentStatus.EXPIRED,
+          histories: {
+            create: {
+              id: randomUUID(),
+              fromStatus: PaymentStatus.PENDING,
+              toStatus: PaymentStatus.EXPIRED,
+              note: 'Hold expired during internal confirm',
+            }
+          }
+        }
+      });
+      throw new DomainException(400, 'EXPIRED', 'Hold has expired, please checkout again');
+    }
+
+    let captureSucceeded = false;
+    try {
+      await this.walletClient.captureHold(payment.userId, payment.holdId);
+      captureSucceeded = true;
+
+      return await prisma.$transaction(async (tx) => {
+        const updated = await tx.payment.update({
+          where: { id },
+          data: {
+            status: PaymentStatus.SUCCESS,
+            histories: {
+              create: {
+                id: randomUUID(),
+                fromStatus: PaymentStatus.PENDING,
+                toStatus: PaymentStatus.SUCCESS,
+                note: 'Internal wallet capture successful',
+              }
+            }
+          }
+        });
+
+        await tx.outboxEvent.create({
+          data: {
+            id: randomUUID(),
+            aggregateId: id,
+            eventType: 'PAYMENT_SUCCESS',
+            topic: payment.callbackTopic,
+            payload: JSON.parse(JSON.stringify(updated)),
+            status: OutboxEventStatus.PENDING,
+          }
+        });
+
+        return updated;
+      });
+    } catch (error) {
+      if (error instanceof DomainException) throw error;
+      console.error(`Internal confirm payment failed for ${id}:`, error);
+
+      if (captureSucceeded) {
+        await this.walletClient.credit(payment.userId, payment.amount.toString(), `compensate_${payment.id}`);
+      }
+
+      const failureNote = captureSucceeded
+        ? `Compensating Transaction: Wallet capture succeeded but DB update failed. Lỗi gốc: ${error.message}`
         : error.message;
 
       return await prisma.$transaction(async (tx) => {

@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { requireGateway } from 'finvault-internal-auth';      // ← từ package chung
+import { requireGateway } from 'finvault-internal-auth';
 import { requireInternalAuth } from '../middlewares/internalAuth';
-import { requireGatewayOrInternalKey } from '../middlewares/gatewayOrInternalAuth';
+import { requireTransactionToken } from '../middlewares/transactionToken';
 import { attachRequestId } from '../middlewares/requestId';
 import { validate } from '../middlewares/validate';
 import * as paymentController from '../controllers/payment.controller';
@@ -22,8 +22,11 @@ router.post('/:id/cancel',   requireGateway, attachRequestId, validate(schemas.p
 router.get('/:id',           requireGateway, attachRequestId, validate(schemas.paramIdSchema), paymentController.getById);
 router.get('/',              requireGateway, attachRequestId, validate(schemas.paginationSchema), paymentController.list);
 
-// confirm hỗ trợ CẢ HAI: User xác nhận qua Gateway (Bearer token) HOẶC Service nội bộ (x-internal-key)
-router.post('/:id/confirm',  requireGatewayOrInternalKey, attachRequestId, validate(schemas.paramIdSchema), paymentController.confirm);
+// POST /api/payments/:id/confirm cho người dùng: requireGateway + requireTransactionToken (Đạt) (P0-2)
+router.post('/:id/confirm',  requireGateway, requireTransactionToken, attachRequestId, validate(schemas.paramIdSchema), paymentController.confirm);
+
+// Bản nội bộ đổi sang /internal/payments/:id/confirm (P0-2)
+router.post('/internal/:id/confirm', requireInternalAuth, attachRequestId, validate(schemas.paramIdSchema), paymentController.internalConfirm);
 
 // refund chỉ dành cho service nội bộ
 router.post('/:id/refund',   requireInternalAuth, validate(schemas.paramIdSchema), paymentController.refund);

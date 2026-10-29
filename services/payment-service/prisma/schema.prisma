@@ -139,3 +139,14 @@ model TopupAuditLog {
 
   @@index([topupRequestId])
 }
+
+model UsedTransactionToken {
+  jti       String   @id @db.VarChar(100)
+  paymentId String   @db.Uuid
+  userId    String   @db.VarChar(50)
+  usedAt    DateTime @default(now()) @db.Timestamp()
+
+  @@index([usedAt])
+  @@index([paymentId])
+}
+

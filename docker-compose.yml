@@ -288,6 +288,7 @@ services:
       - WALLET_SERVICE_URL=http://wallet-service:3004
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
       - RABBITMQ_URL=${RABBITMQ_URL:-amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672}
+      - AUTH_TXN_PUBLIC_KEY_FILE=/run/secrets/auth_txn_public_key
       - VNP_TMN_CODE=${VNP_TMN_CODE:-}
       - VNP_HASH_SECRET=${VNP_HASH_SECRET:-}
       - VNP_URL=${VNP_URL:-}
@@ -297,6 +298,7 @@ services:
       - vnp_hash_secret
       - gateway_public_key
       - internal_key
+      - auth_txn_public_key
     depends_on:
       postgres:
         condition: service_healthy
