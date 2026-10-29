@@ -72,25 +72,24 @@ async function main() {
   const textQuote = await resQuote.text();
   console.log('   Status:', resQuote.status, 'Response:', textQuote);
 
-  // Bước 5: Test API Checkout tạo thanh toán (Hold tiền)
-  console.log('\n5️⃣ Người gửi gọi API Checkout (POST /api/payments/checkout)...');
+  // Bước 5: Test API Checkout tạo thanh toán P2P (Hold tiền) theo chuẩn mới
+  console.log('\n5️⃣ Người gửi gọi API Checkout P2P (POST /api/payments/p2p/checkout)...');
   const idempotencyKey = 'p2p_idemp_' + Date.now();
-  const resCheckout = await fetch(`${GATEWAY_URL}/api/payments/checkout`, {
+  const resCheckout = await fetch(`${GATEWAY_URL}/api/payments/p2p/checkout`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${tokenSender}`
+      'Authorization': `Bearer ${tokenSender}`,
+      'Idempotency-Key': idempotencyKey
     },
     body: JSON.stringify({
+      destinationUserId: receiverId,
       amount: '100000',
-      type: 'WALLET_TRANSFER',
-      referenceId: receiverId,
-      callbackTopic: 'payment.p2p.events',
-      idempotencyKey: idempotencyKey
+      note: 'Chuyển tiền P2P theo chuẩn mới'
     })
   });
   const checkoutResult = await resCheckout.json();
-  console.log('   📦 Kết quả Checkout:', checkoutResult);
+  console.log('   📦 Kết quả Checkout P2P:', checkoutResult);
   const paymentId = checkoutResult.data?.id;
 
   // Bước 6: Kiểm tra số dư & tiền tạm giữ (Hold) trên ví người gửi

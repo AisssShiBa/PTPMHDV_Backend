@@ -66,3 +66,29 @@ export const p2pQuoteSchema = z.object({
   })
 });
 
+export const p2pCheckoutSchema = z.object({
+  headers: z.object({
+    'idempotency-key': z.string({
+      message: "Header 'Idempotency-Key' là bắt buộc"
+    }).min(1, "Header 'Idempotency-Key' không được để trống")
+  }).passthrough(),
+  body: z.object({
+    destinationUserId: z.string({
+      message: "destinationUserId là bắt buộc"
+    }).uuid({ message: "destinationUserId phải là UUID hợp lệ" }),
+    amount: z.string({
+      message: "amount là bắt buộc và phải là một chuỗi số"
+    })
+      .refine((val) => !isNaN(Number(val)) && isFinite(Number(val)) && Number(val) > 0, {
+        message: "amount phải là số hợp lệ lớn hơn 0"
+      })
+      .refine((val) => {
+        const parts = val.split('.');
+        return !parts[1] || parts[1].length <= 2;
+      }, {
+        message: "amount chỉ được tối đa 2 chữ số thập phân"
+      }),
+    note: z.string().max(255).optional(),
+  })
+});
+

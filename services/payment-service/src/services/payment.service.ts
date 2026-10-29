@@ -8,7 +8,7 @@ import { WalletClient } from '../clients/wallet.client';
 
 export interface CheckoutDto {
   userId: string;
-  amount: number;
+  amount: number | string;
   type: PaymentType;
   referenceId?: string;
   callbackTopic: string;
@@ -128,9 +128,14 @@ export class PaymentService {
     return { payment: finalizedPayment, replayed: false };
   }
 
-  async confirm(id: string) {
+  async confirm(id: string, requesterUserId?: string) {
     const payment = await prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+
+    if (requesterUserId && payment.userId !== requesterUserId) {
+      throw new DomainException(403, 'FORBIDDEN', 'Bạn không có quyền xác nhận thanh toán này');
+    }
+
     if (payment.status !== PaymentStatus.PENDING) {
       throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot confirm.`);
     }
@@ -373,6 +378,40 @@ export class PaymentService {
       fee: 0,
       expiresAt
     };
+  }
+
+  // Luồng chuyển tiền P2P checkout chuẩn hóa
+  async p2pCheckout(dto: {
+    senderId: string;
+    destinationUserId: string;
+    amount: string;
+    idempotencyKey: string;
+    note?: string;
+  }) {
+    if (dto.senderId === dto.destinationUserId) {
+      throw new DomainException(400, 'SELF_TRANSFER_NOT_ALLOWED', 'Không thể chuyển tiền cho chính mình');
+    }
+
+    const amountNum = Number(dto.amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      throw new DomainException(400, 'INVALID_AMOUNT', 'Số tiền không hợp lệ');
+    }
+
+    // 1. Kiểm tra ví người nhận có tồn tại không
+    const destWallet = await this.walletClient.getBalance(dto.destinationUserId);
+    if (!destWallet) {
+      throw new DomainException(404, 'DESTINATION_WALLET_NOT_FOUND', 'Người nhận không tồn tại hoặc chưa kích hoạt ví');
+    }
+
+    // 2. Tự động gán type WALLET_TRANSFER và callbackTopic cố định (bỏ client chỉ định)
+    return await this.checkout({
+      userId: dto.senderId,
+      amount: dto.amount,
+      type: PaymentType.WALLET_TRANSFER,
+      referenceId: dto.destinationUserId,
+      callbackTopic: 'payment.p2p.events',
+      idempotencyKey: dto.idempotencyKey,
+    });
   }
 }
 

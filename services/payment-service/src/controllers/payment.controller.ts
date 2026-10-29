@@ -16,8 +16,8 @@ export const checkout = async (req: Request, res: Response) => {
 };
 
 export const confirm = async (req: Request, res: Response) => {
-    // confirm được gọi từ internal service (requireInternalAuth), không có req.auth
-    const result = await paymentService.confirm(req.params.id as string);
+    const userId = (req as any).isInternalCall ? undefined : req.auth?.userId;
+    const result = await paymentService.confirm(req.params.id as string, userId);
     res.json({ success: true, data: result });
 };
 
@@ -51,5 +51,21 @@ export const p2pQuote = async (req: Request, res: Response) => {
     const { destinationUserId, amount } = req.body;
     const result = await paymentService.p2pQuote(senderId, destinationUserId, String(amount));
     res.json({ success: true, data: result });
+};
+
+export const p2pCheckout = async (req: Request, res: Response) => {
+    const senderId = req.auth!.userId;
+    const idempotencyKey = (req.headers['idempotency-key'] || req.headers['Idempotency-Key']) as string;
+    const { destinationUserId, amount, note } = req.body;
+
+    const { payment, replayed } = await paymentService.p2pCheckout({
+        senderId,
+        destinationUserId,
+        amount,
+        idempotencyKey,
+        note
+    });
+
+    res.status(201).json({ success: true, data: { ...payment, replayed } });
 };
 

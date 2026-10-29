@@ -24,7 +24,8 @@ export class WalletClient {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new DomainException(400, 'HOLD_FAILED', errorData.message || 'Failed to hold amount in wallet');
+      const errorMsg = errorData.error?.message || errorData.message || 'Failed to hold amount in wallet';
+      throw new DomainException(400, 'HOLD_FAILED', errorMsg);
     }
   }
 
