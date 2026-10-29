@@ -56,11 +56,12 @@ export const p2pQuote = async (req: Request, res: Response) => {
 export const p2pCheckout = async (req: Request, res: Response) => {
     const senderId = req.auth!.userId;
     const idempotencyKey = (req.headers['idempotency-key'] || req.headers['Idempotency-Key']) as string;
-    const { destinationUserId, amount, note } = req.body;
+    const { destinationUserId, destinationOwnerType, amount, note } = req.body;
 
     const { payment, replayed } = await paymentService.p2pCheckout({
         senderId,
         destinationUserId,
+        destinationOwnerType,
         amount,
         idempotencyKey,
         note
@@ -68,4 +69,3 @@ export const p2pCheckout = async (req: Request, res: Response) => {
 
     res.status(201).json({ success: true, data: { ...payment, replayed } });
 };
-

@@ -42,6 +42,8 @@ model Payment {
   amount               Decimal            @db.Decimal(20, 2)
   type                 PaymentType
   referenceId          String             @db.VarChar(255)
+  destinationUserId    String?            @db.VarChar(50)
+  destinationOwnerType String?            @default("USER") @db.VarChar(20)
   callbackTopic        String             @db.VarChar(100)
   idempotencyKey       String             @db.VarChar(255)
   requestHash          String             @db.VarChar(255)

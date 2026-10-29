@@ -20,6 +20,8 @@ export const checkoutSchema = z.object({
       }),
     type: z.enum(['CARD_TOPUP', 'BUS_TICKET', 'MOVIE_TICKET', 'TRAIN_TICKET', 'WALLET_TRANSFER']),
     referenceId: z.string().optional(),
+    destinationUserId: z.string().uuid({ message: "destinationUserId phải là UUID hợp lệ" }).optional(),
+    destinationOwnerType: z.enum(['USER', 'MERCHANT', 'SYSTEM']).optional().default('USER'),
     callbackTopic: z.string(),
     idempotencyKey: z.string(),
   }),
@@ -48,7 +50,7 @@ export const p2pQuoteSchema = z.object({
           message: "amount phải là một số hợp lệ lớn hơn 0"
         })
         .refine((val) => {
-          const parts = val.split('.');
+          const parts = val.toString().split('.');
           return !parts[1] || parts[1].length <= 2;
         }, {
           message: "amount chỉ được tối đa 2 chữ số thập phân"
@@ -76,6 +78,7 @@ export const p2pCheckoutSchema = z.object({
     destinationUserId: z.string({
       message: "destinationUserId là bắt buộc"
     }).uuid({ message: "destinationUserId phải là UUID hợp lệ" }),
+    destinationOwnerType: z.enum(['USER', 'MERCHANT', 'SYSTEM']).optional().default('USER'),
     amount: z.string({
       message: "amount là bắt buộc và phải là một chuỗi số"
     })
@@ -91,4 +94,3 @@ export const p2pCheckoutSchema = z.object({
     note: z.string().max(255).optional(),
   })
 });
-

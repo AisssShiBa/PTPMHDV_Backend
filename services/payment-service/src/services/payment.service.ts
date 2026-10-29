@@ -11,6 +11,8 @@ export interface CheckoutDto {
   amount: number | string;
   type: PaymentType;
   referenceId?: string;
+  destinationUserId?: string;
+  destinationOwnerType?: string;
   callbackTopic: string;
   idempotencyKey: string;
 }
@@ -19,12 +21,29 @@ export class PaymentService {
   constructor(private walletClient: WalletClient) { }
 
   async checkout(dto: CheckoutDto) {
-    const hashData = `${dto.amount}|${dto.type}|${dto.referenceId || ''}|${dto.callbackTopic}`;
+    const destUserId = dto.destinationUserId || (dto.type === PaymentType.WALLET_TRANSFER ? dto.referenceId : undefined);
+    const destOwnerType = dto.destinationOwnerType || (destUserId ? 'USER' : undefined);
+
+    // Kiểm tra nghiệp vụ người nhận: khác người gửi, tồn tại, ví ACTIVE
+    if (destUserId) {
+      if (destUserId === dto.userId) {
+        throw new DomainException(400, 'SELF_TRANSFER_NOT_ALLOWED', 'Không thể chuyển tiền cho chính mình');
+      }
+      const destWallet = await this.walletClient.getBalance(destUserId);
+      if (!destWallet) {
+        throw new DomainException(404, 'DESTINATION_WALLET_NOT_FOUND', 'Người nhận không tồn tại hoặc chưa kích hoạt ví');
+      }
+      if (destWallet.status !== 'ACTIVE') {
+        throw new DomainException(400, 'DESTINATION_WALLET_NOT_ACTIVE', 'Ví người nhận không ở trạng thái hoạt động');
+      }
+    }
+
+    const hashData = `${dto.amount}|${dto.type}|${dto.referenceId || ''}|${destUserId || ''}|${dto.callbackTopic}`;
     const requestHash = crypto.createHash('sha256').update(hashData).digest('hex');
 
     const paymentId = randomUUID();
     const holdId = randomUUID();
-    const holdExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 phút
+    const holdExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 phút (theo yêu cầu P0-3)
     const idempotencyExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 giờ
 
     let payment: any;
@@ -38,6 +57,8 @@ export class PaymentService {
           amount: dto.amount,
           type: dto.type,
           referenceId: dto.referenceId || '',
+          destinationUserId: destUserId || null,
+          destinationOwnerType: destOwnerType || null,
           callbackTopic: dto.callbackTopic,
           idempotencyKey: dto.idempotencyKey,
           requestHash,
@@ -102,8 +123,9 @@ export class PaymentService {
     // 2. Chạy nghiệp vụ Side-effect (Call sang Wallet Service)
     let holdSucceeded = false;
     try {
-      const destinationUserId = dto.type === PaymentType.WALLET_TRANSFER ? dto.referenceId : undefined;
-      await this.walletClient.createHold(dto.userId, dto.amount.toString(), payment.holdId!, payment.holdExpiresAt!.toISOString(), destinationUserId);
+      const destinationUserId = payment.destinationUserId || (dto.type === PaymentType.WALLET_TRANSFER ? dto.referenceId : undefined);
+      const destinationOwnerType = payment.destinationOwnerType || (destinationUserId ? 'USER' : undefined);
+      await this.walletClient.createHold(dto.userId, dto.amount.toString(), payment.holdId!, payment.holdExpiresAt!.toISOString(), destinationUserId, destinationOwnerType);
       holdSucceeded = true;
     } catch (err: any) {
       // Nếu hold xịt, nhả khóa về FAILED cho phép retry
@@ -384,31 +406,23 @@ export class PaymentService {
   async p2pCheckout(dto: {
     senderId: string;
     destinationUserId: string;
+    destinationOwnerType?: string;
     amount: string;
     idempotencyKey: string;
     note?: string;
   }) {
-    if (dto.senderId === dto.destinationUserId) {
-      throw new DomainException(400, 'SELF_TRANSFER_NOT_ALLOWED', 'Không thể chuyển tiền cho chính mình');
-    }
-
     const amountNum = Number(dto.amount);
     if (isNaN(amountNum) || amountNum <= 0) {
       throw new DomainException(400, 'INVALID_AMOUNT', 'Số tiền không hợp lệ');
     }
 
-    // 1. Kiểm tra ví người nhận có tồn tại không
-    const destWallet = await this.walletClient.getBalance(dto.destinationUserId);
-    if (!destWallet) {
-      throw new DomainException(404, 'DESTINATION_WALLET_NOT_FOUND', 'Người nhận không tồn tại hoặc chưa kích hoạt ví');
-    }
-
-    // 2. Tự động gán type WALLET_TRANSFER và callbackTopic cố định (bỏ client chỉ định)
     return await this.checkout({
       userId: dto.senderId,
       amount: dto.amount,
       type: PaymentType.WALLET_TRANSFER,
       referenceId: dto.destinationUserId,
+      destinationUserId: dto.destinationUserId,
+      destinationOwnerType: dto.destinationOwnerType || 'USER',
       callbackTopic: 'payment.p2p.events',
       idempotencyKey: dto.idempotencyKey,
     });

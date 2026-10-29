@@ -8,10 +8,13 @@ export class WalletClient {
     this.baseUrl = process.env.WALLET_SERVICE_URL || 'http://wallet-service:3004';
   }
 
-  async createHold(userId: string, amount: string, referenceId: string, expiresAt: string, destinationUserId?: string) {
+  async createHold(userId: string, amount: string, referenceId: string, expiresAt: string, destinationUserId?: string, destinationOwnerType?: string) {
     const body: any = { amount, referenceId, expiresAt };
     if (destinationUserId) {
       body.destinationUserId = destinationUserId;
+    }
+    if (destinationOwnerType) {
+      body.destinationOwnerType = destinationOwnerType;
     }
     const response = await fetch(`${this.baseUrl}/api/wallets/${userId}/hold`, {
       method: 'POST',
