@@ -17,6 +17,7 @@ enum PaymentType {
 
 enum PaymentStatus {
   PENDING
+  PROCESSING
   SUCCESS
   FAILED
   REFUNDED
