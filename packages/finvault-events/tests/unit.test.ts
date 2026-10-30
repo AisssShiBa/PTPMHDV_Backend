@@ -7,6 +7,7 @@ import { assertConsumerTopology, createConsumer, NonRetryableError, processConsu
 import { createInMemoryInbox } from '../src/inbox'
 import type { EventHandler, InboxAdapter } from '../src/inbox'
 import { createPublisher } from '../src/publisher'
+import { createEventFromOutbox, createSingleFlight } from '../src/outbox'
 import { addAmounts, compareAmounts } from '../src/money'
 import {
   eventPayloadHash,
@@ -205,6 +206,51 @@ test('hashes normalized event data without occurredAt and uses exact integer ari
   assert.equal(compareAmounts('100', '99'), 1)
   assert.throws(() => addAmounts('1.0', '2'), TypeError)
   assert.throws(() => addAmounts('1\n', '2'), TypeError)
+})
+
+test('builds a validated envelope from an outbox row using its ID and UTC creation time', () => {
+  const event = createEventFromOutbox(
+    { id: uuid, createdAt: new Date('2026-10-20T10:00:00-07:00') },
+    'payment.succeeded',
+    { paymentId: 'p-1', senderId: 'u1', receiverId: 'u2', amount: '50000', note: 'Rent' }
+  )
+
+  assert.deepEqual(event, {
+    eventId: uuid,
+    eventType: 'payment.succeeded',
+    eventVersion: 1,
+    occurredAt: '2026-10-20T17:00:00.000Z',
+    data: { paymentId: 'p-1', senderId: 'u1', receiverId: 'u2', amount: '50000', note: 'Rent' }
+  })
+  assert.throws(() => createEventFromOutbox(
+    { id: 'not-a-uuid', createdAt: new Date() },
+    'payment.expired',
+    { paymentId: 'p-1', senderId: 'u1' }
+  ), EventValidationError)
+  assert.throws(() => createEventFromOutbox(
+    { id: uuid, createdAt: 'invalid' },
+    'payment.expired',
+    { paymentId: 'p-1', senderId: 'u1' }
+  ), TypeError)
+})
+
+test('single-flight outbox drains do not overlap and can run again after completion', async () => {
+  let release!: () => void
+  let calls = 0
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const drain = createSingleFlight(async () => {
+    calls += 1
+    await gate
+  })
+
+  const first = drain()
+  const concurrent = drain()
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(calls, 1)
+  release()
+  await Promise.all([first, concurrent])
+  await drain()
+  assert.equal(calls, 2)
 })
 
 test('in-memory inbox processes once, detects duplicate/conflict, and commits only after handler success', async () => {

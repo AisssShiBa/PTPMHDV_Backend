@@ -6,13 +6,15 @@
   "scripts": {
     "dev": "nodemon --exec tsx src/server.ts",
     "start": "tsx src/server.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "finvault-events": "file:../../packages/finvault-events",
     "finvault-internal-auth": "file:../../packages/finvault-internal-auth",
     "@prisma/client": "^6.19.3",
     "amqplib": "^2.2.0",

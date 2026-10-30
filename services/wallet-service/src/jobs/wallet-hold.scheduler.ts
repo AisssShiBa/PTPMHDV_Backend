@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { WalletHoldService } from '../services/wallet-hold.service';
 import { LedgerService } from '../services/ledger.service';
+import { drainOutbox } from './outbox.scheduler';
 
 const ledgerService = new LedgerService();
 const walletHoldService = new WalletHoldService(ledgerService);
@@ -9,6 +10,7 @@ export const startHoldScheduler = () => {
   cron.schedule('*/10 * * * * *', async () => {
     try {
       const count = await walletHoldService.releaseExpiredHolds();
+      if (count > 0) await drainOutbox();
       if (count > 0) {
         console.log(`[Wallet] Released ${count} expired holds`);
       }

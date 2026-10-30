@@ -46,6 +46,16 @@ const assertRejected = async (url: string, options: Parameters<typeof createClie
   )
 }
 
+const getSocketTicket = async (userId: string): Promise<string> => {
+  const gatewayToken = createTestGatewayToken(userId)
+  const response = await fetch(`${baseUrl}/api/notifications/socket-ticket`, {
+    headers: { 'x-gateway-token': gatewayToken }
+  })
+  assert.equal(response.status, 200)
+  const body = await response.json() as { data: { ticket: string } }
+  return body.data.ticket
+}
+
 before(async () => {
   httpServer = http.createServer(app)
   socketServer = createSocketServer(httpServer, { maxAgeMs: 300 })
@@ -107,6 +117,14 @@ test('a Gateway Token jti can be used only once', async () => {
   firstSocket.close()
   await delay(10)
   await assertRejected(baseUrl, { auth: { token } })
+})
+
+test('a socket ticket can be used once through auth.ticket', async () => {
+  const ticket = await getSocketTicket('00000000-0000-4000-8000-000000000010')
+  const firstSocket = await openSocket(baseUrl, { auth: { ticket } })
+  firstSocket.close()
+  await delay(10)
+  await assertRejected(baseUrl, { auth: { ticket } })
 })
 
 test('socket ignores Gateway Token supplied only in the query string', async () => {

@@ -6,20 +6,21 @@ import {
   isNotificationType,
   NotificationIngestError
 } from '../services/notificationService'
+import { issueSocketTicket } from '../socket'
 
 export const getSocketTicket = async (req: Request, res: Response) => {
-  const ticket = req.headers['x-gateway-token']
-  if (typeof ticket !== 'string' || ticket.length === 0) {
+  const userId = req.auth?.userId
+  if (!userId) {
     return res.status(401).json({
       success: false,
       error: { code: 'INVALID_GATEWAY_TOKEN', message: 'Gateway Token không hợp lệ hoặc đã hết hạn.' }
     })
   }
 
-  // Ticket chỉ chứng minh danh tính đã xác thực của user hiện tại trong tối đa 60 giây; không ghi ticket vào log.
+  const ticket = issueSocketTicket(userId)
   return res.status(200).json({
     success: true,
-    data: { ticket }
+    data: ticket
   })
 }
 
