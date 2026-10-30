@@ -655,10 +655,14 @@ export class PaymentService {
     });
   }
 
-  async cancel(id: string, requesterId: string) {
+  // Thêm yêu cầu api phải chính là người dùng gọi hoặc là tài khoản admin
+  // Tránh hiện một người khác có mã paymentId có thể hủy.
+  async cancel(id: string, requesterId: string, requesterRole?: string) {
     const payment = await prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
-    if (payment.userId !== requesterId) throw new DomainException(403, 'FORBIDDEN', 'Payment belongs to another user');
+    if (requesterRole !== 'ADMIN' && payment.userId !== requesterId) {
+      throw new DomainException(403, 'FORBIDDEN', 'Payment belongs to another user');
+    }
     if (payment.status !== PaymentStatus.PENDING) {
       throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot cancel.`);
     }
@@ -676,19 +680,23 @@ export class PaymentService {
             id: randomUUID(),
             fromStatus: PaymentStatus.PENDING,
             toStatus: PaymentStatus.CANCELLED,
-            note: 'User cancelled and hold released',
+            note: requesterRole === 'ADMIN' && payment.userId !== requesterId ? 'Admin cancelled and hold released' : 'User cancelled and hold released',
           }
         }
       }
     });
   }
 
-  async getById(id: string, requesterId: string) {
+  // Chỉ người dùng hoặc admin mới được quyền gọi
+  async getById(id: string, requesterId: string, requesterRole?: string) {
     const payment = await prisma.payment.findUnique({
       where: { id },
       include: { histories: true }
     });
-    if (payment && payment.userId !== requesterId) throw new DomainException(403, 'FORBIDDEN', 'Payment belongs to another user');
+    if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+    if (requesterRole !== 'ADMIN' && payment.userId !== requesterId) {
+      throw new DomainException(403, 'FORBIDDEN', 'Payment belongs to another user');
+    }
     return payment;
   }
 

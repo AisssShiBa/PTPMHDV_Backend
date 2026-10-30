@@ -33,21 +33,28 @@ export const refund = async (req: Request, res: Response) => {
 };
 
 export const cancel = async (req: Request, res: Response) => {
-    const result = await paymentService.cancel(req.params.id as string, req.auth!.userId);
+    const result = await paymentService.cancel(req.params.id as string, req.auth!.userId, req.auth!.role);
     res.json({ success: true, data: result });
 };
 
 export const getById = async (req: Request, res: Response) => {
-    const result = await paymentService.getById(req.params.id as string, req.auth!.userId);
+    const result = await paymentService.getById(req.params.id as string, req.auth!.userId, req.auth!.role);
     if (!result) {
         return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Payment not found' } });
     }
-    res.json(result);
+    res.json({ success: true, data: result, ...result });
 };
 
 export const list = async (req: Request, res: Response) => {
-    const { type, status } = req.query as any;
-    const result = await paymentService.list(req.auth!.userId, type, status);
+    const requesterId = req.auth!.userId;
+    const requesterRole = req.auth!.role;
+    const { userId: queryUserId, type, status } = req.query as any;
+
+    // Chỉ ADMIN mới được truyền userId (lọc theo user khác hoặc xem tất cả).
+    // Với người dùng thông thường, luôn luôn lọc theo req.auth.userId (Mục 7).
+    const targetUserId = requesterRole === 'ADMIN' ? (queryUserId || undefined) : requesterId;
+
+    const result = await paymentService.list(targetUserId, type, status);
     res.json({ success: true, data: result });
 };
 
