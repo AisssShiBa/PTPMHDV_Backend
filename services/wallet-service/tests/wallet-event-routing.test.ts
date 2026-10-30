@@ -10,7 +10,7 @@ import {
 test('suppresses legacy wallet notifications for P2P transfer outbox rows', () => {
   assert.equal(shouldPublishLegacyWalletEvent({ transferType: 'P2P_TRANSFER' }), false)
   assert.equal(shouldPublishLegacyWalletEvent({ transferType: 'PAYMENT', isPeerTransfer: true }), false)
-  assert.equal(shouldPublishLegacyWalletEvent({ transferType: 'PAYMENT', isPeerTransfer: false }), true)
+  assert.equal(shouldPublishLegacyWalletEvent({ transferType: 'PAYMENT', isPeerTransfer: false }), false)
   assert.equal(shouldPublishLegacyWalletEvent({ transferType: 'TOPUP' }), true)
 })
 

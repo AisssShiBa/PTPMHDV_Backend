@@ -178,8 +178,10 @@ Gói thư viện: `packages/finvault-internal-auth` (Đã hoàn thiện bởi Đ
    ```
    `GET /api/notifications/socket-ticket` xác thực request qua Gateway và trả
    `{ success: true, data: { ticket, expiresAt } }`. Ticket hết hạn sau 60 giây
-   và chỉ dùng một lần. Ticket opaque được lưu trong bộ nhớ của instance; triển
-   khai nhiều instance cần storage dùng chung hoặc sticky routing để chống replay.
+   và chỉ dùng một lần; mỗi user được cấp tối đa 10 ticket/phút và giữ tối đa 5
+   ticket chưa dùng (vé cũ nhất bị loại). Ticket opaque được lưu trong bộ nhớ của
+   instance; triển khai nhiều instance cần storage dùng chung hoặc sticky routing
+   để giới hạn và chống replay nhất quán.
 2. **Frontend Developer (Client Web & Mobile):**
    * **Base URL:** Luôn luôn gọi qua `http://localhost:3000`.
    * **Kết nối WebSocket qua Gateway:** Gọi

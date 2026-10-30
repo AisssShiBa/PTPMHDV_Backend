@@ -71,8 +71,9 @@ wallet.  All money amounts are decimal strings with no more than two places.
 - Notification events are written to `WalletOutboxEvent` in the same transaction
   as balance mutations. The relay drains after commit and every second as a
   fallback, publishing legacy notification messages through `wallet.events`
-  (with HTTP fallback). P2P wallet messages are suppressed because the payment
-  flow emits the shared `payment.succeeded` event for both recipients.
+  (with HTTP   fallback). Wallet `PAYMENT` messages are suppressed because the payment flow
+  emits the canonical `payment.succeeded` event; TOPUP and REFUND messages are
+  still delivered from the wallet outbox.
 
 The SYSTEM clearing wallet is created lazily. As specified by the accounting
 model, a settlement process must provision clearing liquidity before a TOPUP or

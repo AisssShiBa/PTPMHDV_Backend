@@ -65,6 +65,21 @@ test('socket ticket endpoint issues a fresh one-time ticket and expiration for t
   assert.notEqual(second.data.ticket, first.data.ticket)
 })
 
+test('socket ticket endpoint rate-limits a user after ten requests in one minute', async () => {
+  const userId = randomUUID()
+  const token = createTestGatewayToken(userId)
+  const request = () => fetch(`${baseUrl}/api/notifications/socket-ticket`, {
+    headers: { 'x-gateway-token': token }
+  })
+
+  for (let count = 0; count < 10; count += 1) {
+    assert.equal((await request()).status, 200)
+  }
+  const limited = await request()
+  assert.equal(limited.status, 429)
+  assert.equal((await limited.json()).error.code, 'RATE_LIMITED')
+})
+
 test('notification client route rejects expired Gateway Token', async () => {
   const token = createTestGatewayToken('00000000-0000-4000-8000-000000000003', 'USER', 0, '-1s')
   const response = await getNotifications({ 'x-gateway-token': token })

@@ -6,7 +6,7 @@ import {
   isNotificationType,
   NotificationIngestError
 } from '../services/notificationService'
-import { issueSocketTicket } from '../socket'
+import { issueSocketTicket, SocketTicketRateLimitError } from '../socket'
 
 export const getSocketTicket = async (req: Request, res: Response) => {
   const userId = req.auth?.userId
@@ -17,7 +17,18 @@ export const getSocketTicket = async (req: Request, res: Response) => {
     })
   }
 
-  const ticket = issueSocketTicket(userId)
+  let ticket: ReturnType<typeof issueSocketTicket>
+  try {
+    ticket = issueSocketTicket(userId)
+  } catch (error) {
+    if (error instanceof SocketTicketRateLimitError) {
+      return res.status(429).json({
+        success: false,
+        error: { code: 'RATE_LIMITED', message: 'Quá nhiều yêu cầu cấp socket ticket.' }
+      })
+    }
+    throw error
+  }
   return res.status(200).json({
     success: true,
     data: ticket

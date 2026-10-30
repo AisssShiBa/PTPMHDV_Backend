@@ -5,6 +5,12 @@ import { io as createClient, type Socket } from 'socket.io-client'
 import { createTestGatewayToken } from 'finvault-internal-auth'
 import app from '../src/app'
 import { createSocketServer } from '../src/socket'
+import {
+  consumeSocketTicket,
+  issueSocketTicket,
+  SocketTicketRateLimitError
+} from '../src/socket'
+import { randomUUID } from 'node:crypto'
 
 const clients = new Set<Socket>()
 let httpServer: http.Server
@@ -125,6 +131,24 @@ test('a socket ticket can be used once through auth.ticket', async () => {
   firstSocket.close()
   await delay(10)
   await assertRejected(baseUrl, { auth: { ticket } })
+})
+
+test('socket ticket rate limit rejects the eleventh issue in one minute', () => {
+  const userId = randomUUID()
+  for (let count = 0; count < 10; count += 1) issueSocketTicket(userId)
+  assert.throws(
+    () => issueSocketTicket(userId),
+    (error: unknown) => error instanceof SocketTicketRateLimitError
+  )
+})
+
+test('socket ticket issuance caps unused tickets per user and evicts the oldest', () => {
+  const userId = randomUUID()
+  const tickets = Array.from({ length: 6 }, () => issueSocketTicket(userId).ticket)
+
+  assert.equal(consumeSocketTicket(tickets[0]), undefined)
+  assert.equal(consumeSocketTicket(tickets[1])?.userId, userId)
+  assert.equal(consumeSocketTicket(tickets[5])?.userId, userId)
 })
 
 test('socket ignores Gateway Token supplied only in the query string', async () => {

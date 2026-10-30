@@ -28,7 +28,10 @@ are claimed with `FOR UPDATE SKIP LOCKED`, drained after the state transaction
 commits, and retried by a one-second fallback scheduler. The legacy payment
 publisher remains active for refund/cancel events. Wallet outbox rows are
 similarly drained after commit and every second; P2P wallet messages are
-suppressed to avoid duplicating the shared payment notification. The new
+suppressed to avoid duplicating the shared payment notification. For merchant
+and other `PAYMENT` transfers, the shared payment event is the canonical
+notification; the legacy wallet debit/credit notification is suppressed.
+`TOPUP` and `REFUND` wallet notifications remain unchanged. The new
 consumer does not bind
 `wallet.limit_exceeded` because no notification type is defined for it, nor
 does it use broad user or merchant wildcards. Legacy exchange consumption
