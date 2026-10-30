@@ -3,6 +3,7 @@ import { OutboxEventStatus } from '../utils/enums';
 import { prisma } from '../utils/prisma';
 import { WalletClient } from '../clients/wallet.client';
 import { randomUUID } from 'crypto';
+import { drainOutbox } from './outbox.job';
 
 export const startPaymentExpiryJob = () => {
   const walletClient = new WalletClient();
@@ -24,30 +25,35 @@ export const startPaymentExpiryJob = () => {
             await walletClient.releaseHold(payment.userId, payment.holdId);
           }
 
-          const updated = await prisma.payment.update({
-            where: { id: payment.id },
-            data: {
-              status: 'EXPIRED',
-              histories: {
-                create: {
-                  id: randomUUID(),
-                  fromStatus: 'PENDING',
-                  toStatus: 'EXPIRED',
-                  note: 'Hold expired by scheduler',
+          await prisma.$transaction(async tx => {
+            const updated = await tx.payment.update({
+              where: { id: payment.id },
+              data: {
+                status: 'EXPIRED',
+                histories: {
+                  create: {
+                    id: randomUUID(),
+                    fromStatus: 'PENDING',
+                    toStatus: 'EXPIRED',
+                    note: 'Hold expired by scheduler',
+                  }
                 }
               }
-            }
-          });
+            });
 
-          await prisma.outboxEvent.create({
-            data: {
-              id: randomUUID(),
-              aggregateId: payment.id,
-              eventType: 'PAYMENT_EXPIRED',
-              topic: payment.callbackTopic,
-              payload: JSON.parse(JSON.stringify(updated)),
-              status: OutboxEventStatus.PENDING,
-            }
+            await tx.outboxEvent.create({
+              data: {
+                id: randomUUID(),
+                aggregateId: payment.id,
+                eventType: 'PAYMENT_EXPIRED',
+                topic: payment.callbackTopic,
+                payload: JSON.parse(JSON.stringify(updated)),
+                status: OutboxEventStatus.PENDING,
+              }
+            });
+          });
+          void drainOutbox().catch(error => {
+            console.error('[Payment Outbox] Post-expiry drain failed', error instanceof Error ? error.message : 'unknown error');
           });
         } catch (err: any) {
           console.error(`[Scheduler] Failed to process expired payment ${payment.id}:`, err.message);

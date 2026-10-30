@@ -72,6 +72,19 @@ test('payment.succeeded deduplicates a recipient who is both sender and receiver
   )
 })
 
+test('payment.succeeded includes an optional note in both recipient messages', () => {
+  const notifications = mapFinanceEventToNotifications(event('payment.succeeded', {
+    paymentId: 'payment-1',
+    senderId: 'sender',
+    receiverId: 'receiver',
+    amount: '50000',
+    note: 'Bữa tối'
+  }))
+
+  assert.equal(notifications.length, 2)
+  assert.ok(notifications.every(notification => notification.message.endsWith('Ghi chú: Bữa tối')))
+})
+
 test('legacy KYC event does not invent a previous tier', () => {
   assert.deepEqual(
     mapFinanceEventToNotifications(event('user.kyc_updated', {

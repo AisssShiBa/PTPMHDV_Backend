@@ -126,50 +126,67 @@ Gói thư viện: `packages/finvault-internal-auth` (Đã hoàn thiện bởi Đ
 ### 👨‍💻 Dành cho Nguyên (`notification-service` & `Frontend Web/Mobile`)
 *(Nhiệm vụ N4, N5, N6)*
 
-1. **Backend `notification-service` (HTTP & Socket.IO Handshake):**
+1. **Backend `notification-service` (Socket.IO handshake excerpt):**
    ```typescript
+   import { randomBytes, randomUUID } from 'node:crypto'
    import { verifyGatewayToken } from 'finvault-internal-auth'
 
+   const issuedTickets = new Map<
+     string,
+     { jti: string; userId: string; expiresAt: number }
+   >()
    const usedTickets = new Map<string, number>()
+
+   function issueSocketTicket(userId: string) {
+     const ticket = randomBytes(32).toString('base64url')
+     const expiresAt = Date.now() + 60_000
+     issuedTickets.set(ticket, { jti: randomUUID(), userId, expiresAt })
+     return { ticket, expiresAt: new Date(expiresAt).toISOString() }
+   }
+
+   // Inside createSocketServer(httpServer, options):
    const maxAgeMs = options.maxAgeMs ?? env.socketMaxAgeMs
-
    io.use((socket, next) => {
-       const token = socket.handshake.auth?.token
-       if (typeof token !== 'string' || token.length === 0) {
-           return next(new Error('INVALID_GATEWAY_TOKEN'))
+     const ticket = socket.handshake.auth?.ticket
+     if (typeof ticket === 'string' && ticket.length > 0) {
+       const record = issuedTickets.get(ticket)
+       issuedTickets.delete(ticket)
+       if (!record || record.expiresAt <= Date.now()) {
+         return next(new Error('INVALID_GATEWAY_TOKEN'))
        }
+       socket.data.userId = record.userId
+       return next()
+     }
 
-       try {
-           const auth = verifyGatewayToken(token)
-           if (!auth.jti || usedTickets.has(auth.jti)) {
-               return next(new Error('INVALID_GATEWAY_TOKEN'))
-           }
-           usedTickets.set(auth.jti, Date.now() + 60_000)
-           socket.data.userId = auth.userId
-           return next()
-       } catch {
-           return next(new Error('INVALID_GATEWAY_TOKEN'))
+     // Deprecated compatibility path: accept a Gateway JWT only without a ticket.
+     const token = socket.handshake.auth?.token
+     if (typeof token !== 'string' || token.length === 0) {
+       return next(new Error('INVALID_GATEWAY_TOKEN'))
+     }
+     try {
+       const auth = verifyGatewayToken(token)
+       if (!auth.jti || usedTickets.has(auth.jti)) {
+         return next(new Error('INVALID_GATEWAY_TOKEN'))
        }
-   })
-
-   io.on('connection', (socket) => {
-       socket.join(`user:${socket.data.userId}`)
-       const disconnectTimer = setTimeout(
-           () => socket.disconnect(true),
-           maxAgeMs
-       )
-       socket.once('disconnect', () => clearTimeout(disconnectTimer))
+       usedTickets.set(auth.jti, Date.now() + 60_000)
+       socket.data.userId = auth.userId
+       return next()
+     } catch {
+       return next(new Error('INVALID_GATEWAY_TOKEN'))
+     }
    })
    ```
-   Đây là luồng handshake được dùng trong
-   `services/notification-service/src/socket.ts`: ticket phải có `jti`, chỉ dùng
-   được một lần và hết hạn sau tối đa 60 giây. Ticket được đánh dấu đã dùng trên
-   một instance; triển khai nhiều instance cần storage dùng chung để chống replay.
+   `GET /api/notifications/socket-ticket` xác thực request qua Gateway và trả
+   `{ success: true, data: { ticket, expiresAt } }`. Ticket hết hạn sau 60 giây
+   và chỉ dùng một lần; mỗi user được cấp tối đa 10 ticket/phút và giữ tối đa 5
+   ticket chưa dùng (vé cũ nhất bị loại). Ticket opaque được lưu trong bộ nhớ của
+   instance; triển khai nhiều instance cần storage dùng chung hoặc sticky routing
+   để giới hạn và chống replay nhất quán.
 2. **Frontend Developer (Client Web & Mobile):**
    * **Base URL:** Luôn luôn gọi qua `http://localhost:3000`.
    * **Kết nối WebSocket qua Gateway:** Gọi
      `GET /api/notifications/socket-ticket` bằng HTTP client đang xác thực; lấy
-     `data.ticket` trong response. Dùng hàm `auth` để xin ticket mới mỗi lần
+     `     `data.ticket` trong response. Dùng hàm `auth` để xin ticket mới mỗi lần
      Socket.IO kết nối hoặc reconnect:
      ```javascript
      import { io } from 'socket.io-client'
@@ -178,16 +195,18 @@ Gói thư viện: `packages/finvault-internal-auth` (Đã hoàn thiện bởi Đ
        path: '/socket.io',
        auth: (callback) => {
          getSocketTicket()
-           .then((ticket) => callback({ token: ticket }))
+           .then((ticket) => callback({ ticket }))
            .catch((error) => {
              console.error('Failed to fetch notification socket ticket', error)
-             callback({ token: '' })
+             callback({ ticket: '' })
            })
        }
      })
      ```
-     Handshake dùng đúng `auth: { token: ticket }`. Không gửi access token trực
-     tiếp qua Socket.IO; ticket hết hạn sau 60 giây và chỉ dùng một lần.
+     Không gửi access token trực tiếp qua Socket.IO. Không tái sử dụng ticket:
+     ticket hết hạn sau 60 giây và chỉ dùng một lần. `auth.token` còn được chấp
+     nhận tạm thời như đường tương thích ngược cho Gateway JWT; client mới phải
+     dùng `auth.ticket`.
    * **Webhook / IPN VNPAY:**  
      Route `GET /api/funding/vnpay/ipn` và `/api/payments/topups/vnpay/*` đã được whitelist tại Gateway. VNPAY Sandbox có thể gọi trực tiếp callback mà không bị chặn `401`.
 

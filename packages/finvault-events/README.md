@@ -41,6 +41,28 @@ await publisher.close()
 
 Publishing validates envelope and payload, then waits for a publisher confirm. The message is persistent, has `messageId = eventId`, `type = eventType`, `contentType = application/json`, and `x-event-version`; the routing key is exactly `eventType`. Unroutable messages, broker nacks, timeouts, and channel/connection loss reject. A confirm means the broker accepted the message, **not** that a consumer processed it. A durable Outbox should only mark an event sent once `publish()` resolves and should drain after the business transaction commits.
 
+For Prisma-backed outboxes, `createEventFromOutbox` validates and builds the
+standard envelope from a persisted row. The row ID becomes `eventId` and
+`createdAt` becomes the UTC `occurredAt`; map service-specific columns into
+`data` before calling it:
+
+```ts
+const event = createEventFromOutbox(
+  { id: row.id, createdAt: row.createdAt },
+  'payment.succeeded',
+  {
+    paymentId: row.aggregateId,
+    senderId: payload.userId,
+    receiverId: payload.destinationUserId,
+    amount: String(payload.amount)
+  }
+)
+await publisher.publish(event)
+```
+
+Outbox IDs must be UUIDs because `eventId` is a UUID in the envelope contract.
+The helper validates the event type, version and mapped payload before returning.
+
 ## Consuming, inbox and transactions
 
 ```ts
@@ -126,4 +148,4 @@ Consumers that bind broad routing patterns may list valid event types they inten
 
 ## Example and current limits
 
-Run `npx tsx examples/demo.ts`. With `RABBITMQ_URL` it uses a real broker; without it the output explicitly identifies a fake-channel demonstration. There is not yet a shared Outbox implementation. Publisher confirms do not guarantee consumer processing, and in-memory inbox storage is never suitable for production.
+Run `npx tsx examples/demo.ts`. With `RABBITMQ_URL` it uses a real broker; without it the output explicitly identifies a fake-channel demonstration. The package provides reusable envelope construction and single-flight drain helpers, but services still own their database-specific transactional Outbox and Inbox implementations. Publisher confirms do not guarantee consumer processing, and in-memory inbox storage is never suitable for production.

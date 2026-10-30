@@ -6,6 +6,7 @@ import { prisma } from '../utils/prisma';
 import { randomUUID } from 'crypto';
 import * as crypto from 'crypto';
 import { WalletClient } from '../clients/wallet.client';
+import { drainOutbox } from '../jobs/outbox.job';
 
 export interface CheckoutDto {
   userId: string;
@@ -16,6 +17,12 @@ export interface CheckoutDto {
   destinationOwnerType?: string;
   callbackTopic: string;
   idempotencyKey: string;
+}
+
+function triggerOutboxDrain(): void {
+  void drainOutbox().catch(error => {
+    console.error('[Payment Outbox] Post-commit drain failed', error instanceof Error ? error.message : 'unknown error');
+  });
 }
 
 export class PaymentService {
@@ -184,30 +191,33 @@ export class PaymentService {
       if (payment.holdId) {
         await this.walletClient.releaseHold(payment.userId, payment.holdId);
       }
-      const updated = await prisma.payment.update({
-        where: { id },
-        data: {
-          status: PaymentStatus.EXPIRED,
-          histories: {
-            create: {
-              id: randomUUID(),
-              fromStatus: payment.status,
-              toStatus: PaymentStatus.EXPIRED,
-              note: 'Hold expired during confirm',
+      await prisma.$transaction(async tx => {
+        const updated = await tx.payment.update({
+          where: { id },
+          data: {
+            status: PaymentStatus.EXPIRED,
+            histories: {
+              create: {
+                id: randomUUID(),
+                fromStatus: payment.status,
+                toStatus: PaymentStatus.EXPIRED,
+                note: 'Hold expired during confirm',
+              }
             }
           }
-        }
+        });
+        await tx.outboxEvent.create({
+          data: {
+            id: randomUUID(),
+            aggregateId: id,
+            eventType: 'PAYMENT_EXPIRED',
+            topic: payment.callbackTopic,
+            payload: JSON.parse(JSON.stringify(updated)),
+            status: OutboxEventStatus.PENDING,
+          }
+        });
       });
-      await prisma.outboxEvent.create({
-        data: {
-          id: randomUUID(),
-          aggregateId: id,
-          eventType: 'PAYMENT_EXPIRED',
-          topic: payment.callbackTopic,
-          payload: JSON.parse(JSON.stringify(updated)),
-          status: OutboxEventStatus.PENDING,
-        }
-      });
+      triggerOutboxDrain();
       throw new DomainException(410, 'PAYMENT_EXPIRED', 'Hold has expired, please checkout again');
     }
 
@@ -273,7 +283,7 @@ export class PaymentService {
       await this.walletClient.captureHold(payment.userId, payment.holdId);
 
       // Capture thành công -> chuyển sang SUCCESS, ghi outbox event PAYMENT_SUCCESS
-      return await prisma.$transaction(async (tx) => {
+      const completed = await prisma.$transaction(async (tx) => {
         const updated = await tx.payment.update({
           where: { id },
           data: {
@@ -302,6 +312,8 @@ export class PaymentService {
 
         return updated;
       });
+      triggerOutboxDrain();
+      return completed;
     } catch (captureError: any) {
       if (captureError instanceof DomainException) {
         throw captureError;
@@ -356,6 +368,7 @@ export class PaymentService {
           });
         });
 
+        triggerOutboxDrain();
         throw new DomainException(410, 'PAYMENT_EXPIRED', captureError.message || 'Giao dịch thanh toán đã hết hạn');
       }
 
@@ -395,6 +408,7 @@ export class PaymentService {
           });
         });
 
+        triggerOutboxDrain();
         throw new DomainException(400, 'PAYMENT_FAILED', captureError.message || 'Thanh toán thất bại');
       }
 
@@ -430,30 +444,33 @@ export class PaymentService {
       if (payment.holdId) {
         await this.walletClient.releaseHold(payment.userId, payment.holdId);
       }
-      const updated = await prisma.payment.update({
-        where: { id },
-        data: {
-          status: PaymentStatus.EXPIRED,
-          histories: {
-            create: {
-              id: randomUUID(),
-              fromStatus: payment.status,
-              toStatus: PaymentStatus.EXPIRED,
-              note: 'Hold expired during internal confirm',
+      await prisma.$transaction(async tx => {
+        const updated = await tx.payment.update({
+          where: { id },
+          data: {
+            status: PaymentStatus.EXPIRED,
+            histories: {
+              create: {
+                id: randomUUID(),
+                fromStatus: payment.status,
+                toStatus: PaymentStatus.EXPIRED,
+                note: 'Hold expired during internal confirm',
+              }
             }
           }
-        }
+        });
+        await tx.outboxEvent.create({
+          data: {
+            id: randomUUID(),
+            aggregateId: id,
+            eventType: 'PAYMENT_EXPIRED',
+            topic: payment.callbackTopic,
+            payload: JSON.parse(JSON.stringify(updated)),
+            status: OutboxEventStatus.PENDING,
+          }
+        });
       });
-      await prisma.outboxEvent.create({
-        data: {
-          id: randomUUID(),
-          aggregateId: id,
-          eventType: 'PAYMENT_EXPIRED',
-          topic: payment.callbackTopic,
-          payload: JSON.parse(JSON.stringify(updated)),
-          status: OutboxEventStatus.PENDING,
-        }
-      });
+      triggerOutboxDrain();
       throw new DomainException(410, 'PAYMENT_EXPIRED', 'Hold has expired, please checkout again');
     }
 
@@ -477,7 +494,7 @@ export class PaymentService {
     try {
       await this.walletClient.captureHold(payment.userId, payment.holdId);
 
-      return await prisma.$transaction(async (tx) => {
+      const completed = await prisma.$transaction(async (tx) => {
         const updated = await tx.payment.update({
           where: { id },
           data: {
@@ -506,6 +523,8 @@ export class PaymentService {
 
         return updated;
       });
+      triggerOutboxDrain();
+      return completed;
     } catch (captureError: any) {
       if (captureError instanceof DomainException) throw captureError;
       console.error(`Internal confirm payment capture error for ${id}:`, captureError);
@@ -554,6 +573,7 @@ export class PaymentService {
           });
         });
 
+        triggerOutboxDrain();
         throw new DomainException(410, 'PAYMENT_EXPIRED', captureError.message || 'Giao dịch thanh toán đã hết hạn');
       }
 
@@ -593,6 +613,7 @@ export class PaymentService {
           });
         });
 
+        triggerOutboxDrain();
         throw new DomainException(400, 'PAYMENT_FAILED', captureError.message || 'Thanh toán nội bộ thất bại');
       }
 
@@ -611,7 +632,7 @@ export class PaymentService {
   }
 
   async refund(id: string) {
-    return await prisma.$transaction(async (tx) => {
+    const refunded = await prisma.$transaction(async (tx) => {
       const payment = await tx.payment.findUnique({ where: { id } });
       if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
       if (payment.status !== PaymentStatus.SUCCESS) {
@@ -653,6 +674,8 @@ export class PaymentService {
         throw new DomainException(500, 'INTERNAL_ERROR', 'Refund failed');
       }
     });
+    triggerOutboxDrain();
+    return refunded;
   }
 
   // Thêm yêu cầu api phải chính là người dùng gọi hoặc là tài khoản admin
@@ -780,4 +803,3 @@ export class PaymentService {
     });
   }
 }
-

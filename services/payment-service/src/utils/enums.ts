@@ -18,6 +18,7 @@ export enum PaymentStatus {
 
 export enum OutboxEventStatus {
   PENDING = 'PENDING',
+  PROCESSING = 'PROCESSING',
   SENT = 'SENT',
   FAILED = 'FAILED'
 }

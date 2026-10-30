@@ -19,30 +19,39 @@ the user-service to verify that the supplied user is active.
 
 ## API
 
-Wallet routes accept either a valid `x-gateway-token` (verified by
-`finvault-internal-auth`) or an `x-internal-key` matching `INTERNAL_KEY`.
-Gateway-authenticated users may operate only on their own wallet unless their
-role is `ADMIN`; internal calls are allowed through the owner check. Credit and
-debit additionally require an internal call or `ADMIN`.
+The Express app mounts wallet routes at `/api/wallets` and admin routes at
+`/api/wallets/admin`. Wallet routes first accept either a valid
+`x-gateway-token` (verified by `finvault-internal-auth`) or an `x-internal-key`
+matching `INTERNAL_KEY`. Gateway users are restricted to their own `userId`
+unless their role is `ADMIN`. The hold, capture, release, transfer, credit, and
+debit routes additionally require an internal call or `ADMIN`; balance and
+history allow the owner, `ADMIN`, or an internal call. Admin routes require a
+Gateway token with the `ADMIN` role and do not accept the internal-key path.
 
-Admin routes require a valid `x-gateway-token` and the `ADMIN` role; they do not
-use the internal-key middleware.
+**M23 access target:** end users should have only `GET balance` and `GET
+history`; money-changing operations must be internal or `ADMIN`. Those money
+routes already enforce that policy. `POST /api/wallets` currently allows an
+authenticated owner or `ADMIN` (or an internal call) to create a wallet; making
+creation internal/`ADMIN`-only remains **đang chờ K9**. This README records the
+target without changing wallet routes.
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/wallets` | Create a USER or MERCHANT wallet idempotently by `userId` |
-| `GET /api/wallets/:userId/balance` | Read balance, held balance and available balance |
-| `POST /api/wallets/:userId/hold` | Reserve available funds; body includes `amount`, `referenceId`, `expiresAt`, and `destinationUserId` |
-| `POST /api/wallets/:userId/capture` | Convert a hold to a PAYMENT ledger transfer |
-| `POST /api/wallets/:userId/release` | Release a pending hold |
-| `POST /api/wallets/:userId/transfer` | P2P transfer using `toUserId`, `amount`, and `referenceId` |
-| `POST /api/wallets/:userId/credit` | Credit from the clearing wallet; internal call or ADMIN only |
-| `POST /api/wallets/:userId/debit` | Debit to the clearing wallet; internal call or ADMIN only |
-| `GET /api/wallets/:userId/history` | Ledger history |
-| `POST /api/wallets/admin/:userId/lock`, `/unlock` | Lock/unlock new money operations |
-| `POST /api/wallets/admin/:userId/adjust` | Credit/debit adjustment |
-| `GET /api/wallets/admin` | List/search wallets |
-| `GET /api/wallets/admin/reconciliation` | Report ledger/balance mismatches |
+| Route | Purpose | Access |
+| --- | --- | --- |
+| `POST /api/wallets` | Create a USER or MERCHANT wallet idempotently by `userId` | Current: owner, `ADMIN`, or internal; target: `ADMIN`/internal (đang chờ K9) |
+| `GET /api/wallets/:userId/balance` | Read balance, held balance and available balance | Owner, `ADMIN`, or internal |
+| `POST /api/wallets/:userId/hold` | Reserve funds; body includes `amount`, `referenceId`, `expiresAt`, and `destinationUserId` | Internal or `ADMIN` |
+| `POST /api/wallets/:userId/capture` | Convert a hold to a PAYMENT ledger transfer | Internal or `ADMIN` |
+| `POST /api/wallets/:userId/release` | Release a pending hold | Internal or `ADMIN` |
+| `POST /api/wallets/:userId/transfer` | P2P transfer using `toUserId`, `amount`, and `referenceId` | Internal or `ADMIN` |
+| `POST /api/wallets/:userId/credit` | Credit from the clearing wallet | Internal or `ADMIN` |
+| `POST /api/wallets/:userId/debit` | Debit to the clearing wallet | Internal or `ADMIN` |
+| `GET /api/wallets/:userId/history` | Ledger history | Owner, `ADMIN`, or internal |
+| `POST /api/wallets/admin/:userId/lock`, `/unlock` | Lock/unlock new money operations | Gateway `ADMIN` |
+| `POST /api/wallets/admin/:userId/adjust` | Credit/debit adjustment | Gateway `ADMIN` |
+| `GET /api/wallets/admin` | List/search wallets | Gateway `ADMIN` |
+| `GET /api/wallets/admin/reconciliation` | Report ledger/balance mismatches | Gateway `ADMIN` |
 
 Set `?ownerType=MERCHANT` on single-wallet operations when addressing a merchant
 wallet.  All money amounts are decimal strings with no more than two places.
@@ -60,9 +69,11 @@ wallet.  All money amounts are decimal strings with no more than two places.
 - Expired holds are released by the scheduled worker. Capture/release of an
   already-resolved hold is safe and never double-adjusts held balance.
 - Notification events are written to `WalletOutboxEvent` in the same transaction
-  as the money operation. A queue relay can publish `wallet.credited`,
-  `wallet.debited` and `wallet.locked` to notification-service without allowing
-  notification failures to roll back money.
+  as balance mutations. The relay drains after commit and every second as a
+  fallback, publishing legacy notification messages through `wallet.events`
+  (with HTTP   fallback). Wallet `PAYMENT` messages are suppressed because the payment flow
+  emits the canonical `payment.succeeded` event; TOPUP and REFUND messages are
+  still delivered from the wallet outbox.
 
 The SYSTEM clearing wallet is created lazily. As specified by the accounting
 model, a settlement process must provision clearing liquidity before a TOPUP or

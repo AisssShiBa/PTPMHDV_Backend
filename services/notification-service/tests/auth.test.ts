@@ -45,17 +45,39 @@ test('socket ticket endpoint rejects a missing Gateway Token', async () => {
   assert.equal((await response.json()).error.code, 'INVALID_GATEWAY_TOKEN')
 })
 
-test('socket ticket endpoint returns the verified request Gateway Token', async () => {
+test('socket ticket endpoint issues a fresh one-time ticket and expiration for the verified user', async () => {
   const token = createTestGatewayToken('00000000-0000-4000-8000-000000000002')
-  const response = await fetch(`${baseUrl}/api/notifications/socket-ticket`, {
+  const request = () => fetch(`${baseUrl}/api/notifications/socket-ticket`, {
+    headers: { 'x-gateway-token': token }
+  })
+  const response = await request()
+
+  assert.equal(response.status, 200)
+  const first = await response.json() as { success: boolean; data: { ticket: string; expiresAt: string } }
+  assert.equal(first.success, true)
+  assert.notEqual(first.data.ticket, token)
+  assert.equal(Number.isNaN(Date.parse(first.data.expiresAt)), false)
+  assert.ok(Date.parse(first.data.expiresAt) - Date.now() <= 60_000)
+  assert.ok(Date.parse(first.data.expiresAt) - Date.now() > 0)
+
+  const secondResponse = await request()
+  const second = await secondResponse.json() as { data: { ticket: string } }
+  assert.notEqual(second.data.ticket, first.data.ticket)
+})
+
+test('socket ticket endpoint rate-limits a user after ten requests in one minute', async () => {
+  const userId = randomUUID()
+  const token = createTestGatewayToken(userId)
+  const request = () => fetch(`${baseUrl}/api/notifications/socket-ticket`, {
     headers: { 'x-gateway-token': token }
   })
 
-  assert.equal(response.status, 200)
-  assert.deepEqual(await response.json(), {
-    success: true,
-    data: { ticket: token }
-  })
+  for (let count = 0; count < 10; count += 1) {
+    assert.equal((await request()).status, 200)
+  }
+  const limited = await request()
+  assert.equal(limited.status, 429)
+  assert.equal((await limited.json()).error.code, 'RATE_LIMITED')
 })
 
 test('notification client route rejects expired Gateway Token', async () => {

@@ -34,6 +34,11 @@ const requiredTier = (data: Record<string, unknown>, key: string): number => {
 const formatAmount = (amount: string): string =>
   `${new Intl.NumberFormat('vi-VN').format(BigInt(amount))}đ`
 
+const withNote = (message: string, data: Record<string, unknown>): string => {
+  const note = typeof data.note === 'string' ? data.note.trim() : ''
+  return note ? `${message.replace(/[.!?]+$/, '')}. Ghi chú: ${note}` : message
+}
+
 export function paymentCounterpartyIds(event: FinvaultEvent): [string, string] {
   const data = eventData(event.data)
   return [requiredString(data, 'senderId'), requiredString(data, 'receiverId')]
@@ -62,7 +67,7 @@ export function mapFinanceEventToNotifications(
         return [{
           userId: senderId,
           type: 'PAYMENT_SUCCESS',
-          message: `Giao dịch thanh toán ${amount} đã thành công.`
+          message: withNote(`Giao dịch thanh toán ${amount} đã thành công`, data)
         }]
       }
       const displayName = (userId: string) => {
@@ -75,12 +80,12 @@ export function mapFinanceEventToNotifications(
         {
           userId: senderId,
           type: 'PAYMENT_SUCCESS',
-          message: `Bạn đã chuyển ${amount} cho ${receiverName}`
+          message: withNote(`Bạn đã chuyển ${amount} cho ${receiverName}`, data)
         },
         {
           userId: receiverId,
           type: 'PAYMENT_SUCCESS',
-          message: `Bạn nhận ${amount} từ ${senderName}`
+          message: withNote(`Bạn nhận ${amount} từ ${senderName}`, data)
         }
       ]
     }

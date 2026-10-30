@@ -5,6 +5,8 @@ import { TransferDto, CreditDto, DebitDto } from "../dtos/wallet.dto";
 import { assertWalletActive, conflict, decimalToString, insufficientBalance, money } from "../utils/wallet.helpers";
 
 import { LimitService } from "./limit.service";
+import { drainOutbox } from "../jobs/outbox.scheduler";
+import { isPeerWalletPayment } from "../jobs/wallet-event-routing";
 
 const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, INTERNAL_SERVER_ERROR: 500 };
 const prisma = new PrismaClient();
@@ -65,7 +67,7 @@ export class LedgerService {
     }
     const amount = money(dto.amount);
 
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const ids = await this.getWalletIds(tx, [
         { userId: dto.fromUserId, ownerType: OwnerType.USER },
         { userId: dto.toUserId, ownerType: OwnerType.USER }
@@ -90,6 +92,10 @@ export class LedgerService {
         transferType: TransferType.P2P_TRANSFER,
       });
     }, { maxWait: 15000, timeout: 25000 });
+    void drainOutbox().catch(error => {
+      console.error("[Wallet Outbox] Post-commit drain failed", error instanceof Error ? error.message : "unknown error");
+    });
+    return result;
   }
 
   async credit(userId: string, dto: CreditDto, ownerType: OwnerType = OwnerType.USER) {
@@ -97,7 +103,7 @@ export class LedgerService {
     const systemCode = dto.systemCode ?? this.getSystemWalletCode(transferType);
     const amount = money(dto.amount);
 
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const ids = await this.getWalletIds(tx, [
         { userId, ownerType },
         { ownerType: OwnerType.SYSTEM, systemCode }
@@ -114,6 +120,10 @@ export class LedgerService {
         transferType,
       });
     });
+    void drainOutbox().catch(error => {
+      console.error("[Wallet Outbox] Post-commit drain failed", error instanceof Error ? error.message : "unknown error");
+    });
+    return result;
   }
 
   async debit(userId: string, dto: DebitDto, ownerType: OwnerType = OwnerType.USER) {
@@ -121,7 +131,7 @@ export class LedgerService {
     const systemCode = dto.systemCode ?? this.getSystemWalletCode(transferType);
     const amount = money(dto.amount);
 
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const ids = await this.getWalletIds(tx, [
         { userId, ownerType },
         { ownerType: OwnerType.SYSTEM, systemCode }
@@ -138,6 +148,10 @@ export class LedgerService {
         transferType,
       });
     });
+    void drainOutbox().catch(error => {
+      console.error("[Wallet Outbox] Post-commit drain failed", error instanceof Error ? error.message : "unknown error");
+    });
+    return result;
   }
 
   async getSystemWalletTx(tx: Prisma.TransactionClient, systemCode: SystemWalletCode = SystemWalletCode.MAIN): Promise<Wallet> {
@@ -250,6 +264,7 @@ export class LedgerService {
             amount: decimalToString(amount),
             balanceAfter: decimalToString(updatedSource.balance),
             transferType: input.transferType,
+            isPeerTransfer: isPeerWalletPayment(input.transferType, fromWallet.ownerType, toWallet.ownerType),
             referenceId: input.referenceId,
             transactionId,
             note: input.note || '',
@@ -267,6 +282,7 @@ export class LedgerService {
             amount: decimalToString(amount),
             balanceAfter: decimalToString(updatedDest.balance),
             transferType: input.transferType,
+            isPeerTransfer: isPeerWalletPayment(input.transferType, fromWallet.ownerType, toWallet.ownerType),
             referenceId: input.referenceId,
             transactionId,
             note: input.note || '',

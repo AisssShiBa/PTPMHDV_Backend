@@ -1,9 +1,10 @@
-import { HoldStatus, OwnerType, PrismaClient, TransferType } from "@prisma/client";
+import { HoldStatus, OwnerType, Prisma, PrismaClient, TransferType } from "@prisma/client";
 import { DomainException } from "../utils/domain.exception";
 import { assertWalletActive, conflict, insufficientBalance, money } from "../utils/wallet.helpers";
 import { LedgerService } from "./ledger.service";
 import { LimitService } from "./limit.service";
 import { getVnDay } from "../utils/timezone.helper";
+import { drainOutbox } from "../jobs/outbox.scheduler";
 
 const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, CONFLICT: 409 };
 const prisma = new PrismaClient();
@@ -176,6 +177,11 @@ export class WalletHoldService {
         replayed: movement.replayed,
       };
     });
+    if (!result.expired) {
+      void drainOutbox().catch(error => {
+        console.error("[Wallet Outbox] Post-commit drain failed", error instanceof Error ? error.message : "unknown error");
+      });
+    }
     if (result.expired) throw conflict("HOLD_EXPIRED", "Hold has expired and was released");
     return result;
   }

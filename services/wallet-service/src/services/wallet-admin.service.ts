@@ -3,6 +3,7 @@ import { DomainException } from "../utils/domain.exception";
 import { money } from "../utils/wallet.helpers";
 import { LedgerService } from "./ledger.service";
 import { AdjustDto } from "../dtos/wallet.dto";
+import { drainOutbox } from "../jobs/outbox.scheduler";
 
 const HttpStatus = { NOT_FOUND: 404 };
 const prisma = new PrismaClient();
@@ -14,7 +15,7 @@ export class WalletAdminService {
     const amount = money(dto.amount);
     const userIsSource = dto.direction === LedgerDirection.DEBIT;
 
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const userWallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
       const systemWallet = await this.ledgerService.getSystemWalletTx(tx);
 
@@ -28,6 +29,10 @@ export class WalletAdminService {
         bypassLockedFrom: userIsSource,
       });
     });
+    void drainOutbox().catch(error => {
+      console.error("[Wallet Outbox] Post-commit drain failed", error instanceof Error ? error.message : "unknown error");
+    });
+    return result;
   }
 
   async setLock(userId: string, locked: boolean, ownerType: OwnerType = OwnerType.USER) {

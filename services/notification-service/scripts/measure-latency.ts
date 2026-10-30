@@ -31,7 +31,7 @@ async function getSocketTicket(): Promise<string> {
 
 function connectSocket(ticket: string): Promise<Socket> {
   const socket = createSocketClient(socketUrl, {
-    auth: { token: ticket },
+    auth: { ticket },
     autoConnect: false,
     forceNew: true,
     reconnection: false,
@@ -70,6 +70,7 @@ async function main(): Promise<void> {
   let socket: Socket | undefined
   const eventIds: string[] = []
   const samples: number[] = []
+  const rows: { iteration: number; eventId: string; latencyMs: string; result: string }[] = []
 
   try {
     socket = await connectSocket(await getSocketTicket())
@@ -93,12 +94,20 @@ async function main(): Promise<void> {
       const receivedAt = await received
       const latencyMs = Math.max(0, receivedAt - publishResolvedAt)
       samples.push(latencyMs)
-      console.log(`R1 ${index}/10: ${latencyMs.toFixed(1)} ms`)
+      rows.push({
+        iteration: index,
+        eventId,
+        latencyMs: latencyMs.toFixed(1),
+        result: latencyMs <= 3000 ? 'PASS' : 'FAIL'
+      })
     }
 
     const withinThreshold = samples.filter(sample => sample <= 3000).length
+    console.log('R1 acceptance path: publisher confirm -> RabbitMQ -> notification consumer -> Socket.IO')
+    console.table(rows)
     console.log(`R1 result: ${withinThreshold}/10 samples <= 3000 ms`)
     console.log(`R1 conclusion: ${withinThreshold >= 9 ? 'PASS' : 'FAIL'} (at least 9/10 <= 3000 ms)`)
+    console.log('Limitation: this test publishes a synthetic event directly; it does not measure payment HTTP confirmation or database Outbox scheduling.')
     assert.ok(withinThreshold >= 9, `Expected at least 9/10 samples <= 3000 ms; got ${withinThreshold}/10`)
   } finally {
     socket?.close()
