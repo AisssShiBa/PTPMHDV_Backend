@@ -1,3 +1,4 @@
+import { createPublisher, type FinvaultEvent } from 'finvault-events';
 import cron from 'node-cron';
 import { OutboxEventStatus } from '../utils/enums';
 import { prisma } from '../utils/prisma';
@@ -20,8 +21,12 @@ const ROUTING_KEY = 'payment.notification';
 
 export const startOutboxJob = () => {
   const notificationClient = new NotificationClient();
+  const publisher = createPublisher({ url: process.env.RABBITMQ_URL!, exchange: 'finvault.events' });
+  let running = false;
 
-  cron.schedule('*/5 * * * * *', async () => {
+  cron.schedule('* * * * * *', async () => {
+    if (running) return;
+    running = true;
     try {
       const pendingEvents = await prisma.outboxEvent.findMany({
         where: {
@@ -38,6 +43,17 @@ export const startOutboxJob = () => {
         console.log(`[Outbox] Processing event ${event.id} - ${event.topic}`);
 
         try {
+          if (event.eventType.startsWith('payment.')) {
+            try {
+              await publisher.publish(event.payload as unknown as FinvaultEvent);
+              await prisma.outboxEvent.update({ where: { id: event.id }, data: { status: OutboxEventStatus.SENT, sentAt: new Date() } });
+            } catch {
+              await prisma.outboxEvent.update({ where: { id: event.id }, data: {
+                retryCount: { increment: 1 }, nextRetryAt: new Date(Date.now()+Math.min(30000, 1000*2**Math.min(event.retryCount,5)))
+              } });
+            }
+            continue;
+          }
           const payload = event.payload as Record<string, unknown>;
           let message = `Giao dịch ${String(payload.id ?? '')} đã được xử lý.`;
 
@@ -132,7 +148,8 @@ export const startOutboxJob = () => {
     } catch (error) {
       console.error('[Outbox Scheduler Error]', error);
     }
+    running = false;
   });
 
-  console.log('Outbox Job started (runs every 5 seconds)');
+  console.log('Outbox Job started (runs every second)');
 };

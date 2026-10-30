@@ -3,7 +3,7 @@ import app from './app';
 import { startHoldScheduler } from './jobs/wallet-hold.scheduler';
 import { startOutboxScheduler } from './jobs/outbox.scheduler';
 import { closeRabbitMQ } from './utils/rabbitmq.publisher';
-import { startKycConsumer } from './events/kyc.consumer';
+import { startKycConsumer, stopKycConsumer } from './events/kyc.consumer';
 
 const port = process.env.PORT || 3004;
 
@@ -17,6 +17,7 @@ const server = app.listen(port, () => {
 async function shutdown(signal: string) {
   console.log(`[Wallet] Received ${signal}, shutting down gracefully...`);
   server.close();
+  await stopKycConsumer();
   await closeRabbitMQ();
   process.exit(0);
 }

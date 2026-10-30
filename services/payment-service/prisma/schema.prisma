@@ -39,6 +39,8 @@ enum IdempotencyStatus {
 model Payment {
   id                   String             @id @default(uuid()) @db.Uuid
   userId               String             @db.VarChar(50)
+  destinationUserId    String?            @db.VarChar(50)
+  workflow             String             @default("IDLE")
   amount               Decimal            @db.Decimal(20, 2)
   type                 PaymentType
   referenceId          String             @db.VarChar(255)
@@ -46,7 +48,7 @@ model Payment {
   idempotencyKey       String             @db.VarChar(255)
   requestHash          String             @db.VarChar(255)
   idempotencyStatus    IdempotencyStatus  @default(PROCESSING)
-  idempotencyExpiresAt DateTime           @db.Timestamp()
+  idempotencyExpiresAt DateTime           @db.Timestamp(3)
   status         PaymentStatus    @default(PENDING)
   failureReason  String?          @db.Text
   holdId         String?          @db.VarChar(255)
@@ -59,6 +61,12 @@ model Payment {
   @@index([status])
   @@unique([userId, idempotencyKey])
   @@index([idempotencyExpiresAt])
+}
+
+model UsedTransactionToken {
+  jti String @id @db.Uuid
+  paymentId String @db.Uuid
+  usedAt DateTime @default(now())
 }
 
 model PaymentHistory {

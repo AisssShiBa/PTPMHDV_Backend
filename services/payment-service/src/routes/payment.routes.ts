@@ -19,10 +19,8 @@ router.post('/:id/cancel', requireGateway, attachRequestId, validate(schemas.par
 router.get('/:id',         requireGateway, attachRequestId, validate(schemas.paramIdSchema), paymentController.getById);
 router.get('/',            requireGateway, attachRequestId, validate(schemas.paginationSchema), paymentController.list);
 
-// confirm và refund được gọi từ service nội bộ (VD: sau khi xử lý payment workflow),
-// không có user context → xác thực bằng INTERNAL_KEY (timingSafeEqual, fail-closed).
-// Quyết định: KHÔNG dùng requireGateway ở đây vì không có Bearer token của user.
-router.post('/:id/confirm', requireInternalAuth, validate(schemas.paramIdSchema), paymentController.confirm);
+// Confirm requires user identity and a PIN token; refunds remain internal.
+router.post('/:id/confirm', requireGateway, attachRequestId, validate(schemas.confirmSchema), paymentController.confirm);
 router.post('/:id/refund',  requireInternalAuth, validate(schemas.paramIdSchema), paymentController.refund);
 
 export default router;

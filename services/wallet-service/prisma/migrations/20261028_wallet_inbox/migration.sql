@@ -1,0 +1,4 @@
+CREATE TABLE "WalletInbox" (
+  "eventId" TEXT PRIMARY KEY, "payloadHash" TEXT NOT NULL,
+  "processedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

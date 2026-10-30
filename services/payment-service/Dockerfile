@@ -4,6 +4,7 @@ WORKDIR /app
 # Copy and install shared internal packages
 COPY packages ./packages
 RUN cd /app/packages/finvault-internal-auth && npm install
+RUN cd /app/packages/finvault-events && npm ci
 
 # Copy service dependencies and config
 WORKDIR /app/services/payment-service
@@ -17,4 +18,4 @@ COPY services/payment-service/src ./src
 RUN npx prisma generate
 
 EXPOSE 3005
-CMD ["sh", "-c", "npx prisma db push && npm run start"]
+CMD ["sh", "-c", "npx prisma migrate deploy && npm run start"]

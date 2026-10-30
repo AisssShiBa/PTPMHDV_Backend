@@ -7,6 +7,11 @@ async function main() {
     // Durable observation queue for local/demo deployment; not a business consumer.
     const queue = process.env.MERCHANT_EVENT_QUEUE || 'finvault.demo.merchant-events.v1'
     await channel.assertExchange(exchange, 'topic', { durable: true })
+    // Provisioning must reach both durable queues even before either consumer starts.
+    for (const subscriber of ['user-service.user-registered.v1', 'wallet-service.kyc-updated']) {
+      await channel.assertQueue(subscriber, { durable: true })
+      await channel.bindQueue(subscriber, exchange, 'user.registered')
+    }
     await channel.assertQueue(queue, { durable: true })
     for (const key of ['merchant.registered', 'merchant.status_updated', 'merchant.profile_updated'])
       await channel.bindQueue(queue, exchange, key)

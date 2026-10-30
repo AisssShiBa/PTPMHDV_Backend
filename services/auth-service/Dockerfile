@@ -3,6 +3,9 @@ RUN apk add --no-cache openssl
 WORKDIR /workspace/packages/finvault-internal-auth
 COPY packages/finvault-internal-auth/ ./
 RUN npm ci
+WORKDIR /workspace/packages/finvault-events
+COPY packages/finvault-events/ ./
+RUN npm ci
 WORKDIR /workspace/services/auth-service
 COPY services/auth-service/package*.json ./
 COPY services/auth-service/prisma ./prisma

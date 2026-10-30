@@ -1,3 +1,4 @@
+import { DomainException } from '../utils/domain.exception';
 import { Request, Response } from 'express';
 import { PaymentService } from '../services/payment.service';
 import { WalletClient } from '../clients/wallet.client';
@@ -11,13 +12,18 @@ const paymentService = new PaymentService(walletClient);
 export const checkout = async (req: Request, res: Response) => {
     // userId lấy từ req.auth (đã verify ES256), không từ header x-user-id
     const userId = req.auth!.userId;
-    const { payment, replayed } = await paymentService.checkout({ ...req.body, userId });
+    const headerKey = req.get('Idempotency-Key');
+    if (headerKey && req.body.idempotencyKey && headerKey !== req.body.idempotencyKey)
+      throw new DomainException(400, 'IDEMPOTENCY_KEY_MISMATCH', 'Header and body keys differ');
+    const idempotencyKey = headerKey || req.body.idempotencyKey;
+    if (!idempotencyKey || idempotencyKey.length > 255) throw new DomainException(400, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key is required');
+    const { payment, replayed } = await paymentService.checkout({ ...req.body, idempotencyKey, userId });
     res.status(201).json({ success: true, data: { ...payment, replayed } });
 };
 
 export const confirm = async (req: Request, res: Response) => {
-    // confirm được gọi từ internal service (requireInternalAuth), không có req.auth
-    const result = await paymentService.confirm(req.params.id as string);
+    // Confirm requires signed user identity and a one-time PIN token.
+    const result = await paymentService.confirm(req.params.id as string, req.auth!.userId, req.body.transactionToken);
     res.json({ success: true, data: result });
 };
 

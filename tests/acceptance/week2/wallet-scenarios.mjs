@@ -193,6 +193,31 @@ export async function s10(ctx) {
     evidence(ctx, 'S10', { deliveries: 2, distinctEventIds: 1, updates, walletTier: Number(walletTier(ctx, user)) })
     assert.equal(updates, 1, 'Same eventId must update Wallet exactly once (duplicate UPDATE detected)')
     assert.equal(walletTier(ctx, user), '1')
+    const concurrentId = uuid(), rollbackId = uuid()
+    assert.equal(docker(ctx, 'exec', '-T', 'wallet-service', 'node', '--import', 'tsx', '-e', `
+      const assert=require('node:assert/strict');const {walletInbox}=require('./src/events/kyc.consumer');
+      const {PrismaClient}=require('@prisma/client');const db=new PrismaClient();const inbox=walletInbox(db);
+      (async()=>{try{
+        await assert.rejects(inbox.runOnce({eventId:'${rollbackId}',payloadHash:'rollback'},async tx=>{
+          await tx.wallet.updateMany({where:{userId:'${user.id}'},data:{kycTier:0}});throw Error('rollback');
+        }),/rollback/);
+        assert.equal(await db.walletInbox.count({where:{eventId:'${rollbackId}'}}),0);
+        const results=await Promise.all(Array.from({length:10},()=>inbox.runOnce({eventId:'${concurrentId}',payloadHash:'same'},
+          tx=>tx.wallet.updateMany({where:{userId:'${user.id}'},data:{kycTier:2}}))));
+        assert.equal(results.filter(r=>r.status==='processed').length,1);
+        assert.equal(results.filter(r=>r.status==='duplicate').length,9);console.log('ok');
+      }finally{await db.$disconnect()}})().then(()=>process.exit(0)).catch(()=>process.exit(1));`), 'ok')
+    assert.equal(count(), 2, 'Concurrent deliveries must commit one update; failed handler must roll back')
+    docker(ctx, 'restart', 'wallet-service')
+    publish()
+    await until(() => {
+      const queues = JSON.parse(docker(ctx, 'exec', '-T', 'rabbitmq', 'rabbitmqctl', '-q',
+        'list_queues', 'name', 'messages', 'consumers', '--formatter', 'json'))
+      const queue = queues.find(row => row.name === 'wallet-service.kyc-updated')
+      return queue && Number(queue.consumers) > 0 && Number(queue.messages) === 0
+    }, 'S10: restarted Wallet did not consume replay')
+    assert.equal(count(), 2, 'Restart must preserve event deduplication')
+    assert.equal(walletTier(ctx, user), '2', 'Old duplicate must not revert a newer tier')
   } finally {
     sql(ctx, 'wallet_service', `DROP TRIGGER acceptance_t1_kyc ON "Wallet";
       DROP FUNCTION acceptance_t1.record_update(); DROP TABLE acceptance_t1.kyc_updates; DROP SCHEMA acceptance_t1;`)

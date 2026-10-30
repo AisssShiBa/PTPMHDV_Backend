@@ -4,6 +4,7 @@ WORKDIR /app
 # Copy and install shared internal packages
 COPY packages ./packages
 RUN cd /app/packages/finvault-internal-auth && npm install
+RUN cd /app/packages/finvault-events && npm ci
 
 # Copy service dependencies and config
 WORKDIR /app/services/wallet-service

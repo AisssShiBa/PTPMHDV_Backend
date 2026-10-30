@@ -1,3 +1,4 @@
+import { transactionPublicKey } from './utils/transaction-token';
 import 'dotenv/config';
 import app from './app';
 import { startPaymentExpiryJob } from './jobs/payment-expiry.job';
@@ -5,6 +6,7 @@ import { startOutboxJob } from './jobs/outbox.job';
 import { startTopupExpiryJob } from './jobs/expireTopups.job';
 import { closeRabbitMQ } from './utils/rabbitmq.publisher';
 
+transactionPublicKey();
 const port = process.env.PORT || 3005;
 
 const server = app.listen(port, () => {

@@ -2,7 +2,6 @@ import app from './app'
 import { env } from './config/env'
 import { prisma } from './config/prisma'
 import { validateTransactionKeys } from './utils/transactionToken'
-import { initRabbitMQ } from './lib/rabbitmq'
 import { OutboxWorker } from './workers/outboxWorker'
 
 const startServer = async (): Promise<void> => {
@@ -16,7 +15,6 @@ const startServer = async (): Promise<void> => {
   }
 
   // Khởi tạo kết nối RabbitMQ và tiến trình quét Outbox Worker
-  initRabbitMQ()
   OutboxWorker.start()
 
   const server = app.listen(env.port, () => {
@@ -28,9 +26,10 @@ const startServer = async (): Promise<void> => {
     console.log(`[AUTH] Nhận tín hiệu ${signal}, đang tiến hành đóng dịch vụ...`)
 
     // Dừng Outbox Worker để không quét tiếp trong khi đang tắt server
-    OutboxWorker.stop()
+    const stopped = OutboxWorker.stop()
 
     server.close(async () => {
+      await stopped
       await prisma.$disconnect().catch(() => {})
       console.log('[AUTH] Đã đóng HTTP server và ngắt kết nối Database an toàn.')
       process.exit(0)
