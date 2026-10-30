@@ -3,7 +3,11 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { createSingleFlight } from 'finvault-events';
 import { publish } from '../utils/rabbitmq.publisher';
 import { env } from '../config/env';
-import { shouldPublishLegacyWalletEvent } from './wallet-event-routing';
+import {
+  InvalidWalletOutboxDataError,
+  shouldPublishLegacyWalletEvent,
+  validateWalletOutboxPayload
+} from './wallet-event-routing';
 
 const ROUTING_KEY = 'wallet.notification';
 const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL ?? 'http://notification-service:3006';
@@ -27,6 +31,7 @@ const runOutboxDrain = async (): Promise<void> => {
 
       try {
         const payload = event.payload as Record<string, unknown>;
+        validateWalletOutboxPayload(event.topic, payload);
         if (!shouldPublishLegacyWalletEvent(payload)) {
           await tx.walletOutboxEvent.update({
             where: { id: event.id },
@@ -89,6 +94,17 @@ const runOutboxDrain = async (): Promise<void> => {
           });
         }
       } catch (error: unknown) {
+        if (error instanceof InvalidWalletOutboxDataError) {
+          console.error('[Wallet Outbox] Invalid event data; marking row complete', {
+            eventId: event.id,
+            topic: event.topic
+          });
+          await tx.walletOutboxEvent.update({
+            where: { id: event.id },
+            data: { publishedAt: new Date() }
+          });
+          continue;
+        }
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[Wallet Outbox] Error processing event ${event.id}:`, message);
         await tx.walletOutboxEvent.update({

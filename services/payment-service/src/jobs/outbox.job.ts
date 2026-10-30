@@ -5,9 +5,9 @@ import { prisma } from '../utils/prisma'
 import { NotificationClient } from '../clients/notification.client'
 import { publish } from '../utils/rabbitmq.publisher'
 import {
-  buildPaymentFinvaultEvent,
   createPaymentFinvaultPublisher
 } from '../events/finvault.publisher'
+import { processPaymentOutboxEvent } from './payment-outbox-event'
 
 const legacyRoutingKey = 'payment.notification'
 const notificationClient = new NotificationClient()
@@ -17,8 +17,6 @@ const getFinvaultPublisher = () => {
   if (!finvaultPublisher) finvaultPublisher = createPaymentFinvaultPublisher()
   return finvaultPublisher
 }
-
-const finvaultEventTypes = new Set(['PAYMENT_SUCCESS', 'PAYMENT_FAILED', 'PAYMENT_EXPIRED'])
 
 function legacyMessage(eventType: string, payload: Record<string, unknown>): string | undefined {
   if (eventType === 'PAYMENT_REFUNDED') {
@@ -50,13 +48,31 @@ async function drainPendingOutbox(): Promise<void> {
     for (const event of events) {
       const payload = event.payload as Record<string, unknown>
       try {
-        const finvaultEvent = buildPaymentFinvaultEvent(event)
-        if (finvaultEvent) {
-          await getFinvaultPublisher().publish(finvaultEvent)
-          await tx.outboxEvent.update({
-            where: { id: event.id },
-            data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
-          })
+        const finvaultResult = await processPaymentOutboxEvent(event, {
+          publish: finvaultEvent => getFinvaultPublisher().publish(finvaultEvent),
+          markSent: async () => {
+            await tx.outboxEvent.update({
+              where: { id: event.id },
+              data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
+            })
+          },
+          markFailed: async () => {
+            await tx.outboxEvent.update({
+              where: { id: event.id },
+              data: { status: OutboxEventStatus.FAILED }
+            })
+          },
+          scheduleRetry: async delayMs => {
+            await tx.outboxEvent.update({
+              where: { id: event.id },
+              data: {
+                retryCount: { increment: 1 },
+                nextRetryAt: new Date(Date.now() + delayMs)
+              }
+            })
+          }
+        })
+        if (finvaultResult !== 'unhandled') {
           continue
         }
 
@@ -93,21 +109,6 @@ async function drainPendingOutbox(): Promise<void> {
           data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
         })
       } catch (error) {
-        if (finvaultEventTypes.has(event.eventType)) {
-          console.error('[Payment Outbox] FinVault publish failed; event remains pending', {
-            eventId: event.id,
-            eventType: event.eventType
-          })
-          await tx.outboxEvent.update({
-            where: { id: event.id },
-            data: {
-              retryCount: { increment: 1 },
-              nextRetryAt: new Date(Date.now() + 1000)
-            }
-          })
-          continue
-        }
-
         const axiosError = error as { response?: { status?: number }; message?: string }
         console.error('[Payment Outbox] Legacy notification publish failed', {
           eventId: event.id,
