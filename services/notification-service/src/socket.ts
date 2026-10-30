@@ -95,10 +95,16 @@ export const createSocketServer = (
       return next()
     }
 
-    // Deprecated compatibility path: accept a Gateway token only when no ticket is supplied.
+    // Deprecated compatibility path: older clients sent the one-use ticket as auth.token.
     const token = socket.handshake.auth?.token
     if (typeof token !== 'string' || token.length === 0) {
       return next(new Error('INVALID_GATEWAY_TOKEN'))
+    }
+
+    const legacyTicket = consumeSocketTicket(token)
+    if (legacyTicket) {
+      socket.data.userId = legacyTicket.userId
+      return next()
     }
 
     try {

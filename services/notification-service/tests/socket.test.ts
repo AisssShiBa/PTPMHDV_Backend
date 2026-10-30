@@ -133,6 +133,14 @@ test('a socket ticket can be used once through auth.ticket', async () => {
   await assertRejected(baseUrl, { auth: { ticket } })
 })
 
+test('a socket ticket remains compatible through deprecated auth.token', async () => {
+  const ticket = await getSocketTicket('00000000-0000-4000-8000-000000000011')
+  const firstSocket = await openSocket(baseUrl, { auth: { token: ticket } })
+  firstSocket.close()
+  await delay(10)
+  await assertRejected(baseUrl, { auth: { token: ticket } })
+})
+
 test('socket ticket rate limit rejects the eleventh issue in one minute', () => {
   const userId = randomUUID()
   for (let count = 0; count < 10; count += 1) issueSocketTicket(userId)
