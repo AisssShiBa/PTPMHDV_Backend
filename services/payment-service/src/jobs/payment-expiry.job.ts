@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto';
 export const startPaymentExpiryJob = () => {
   const walletClient = new WalletClient();
 
-  cron.schedule('*/5 * * * *', async () => {
+  cron.schedule('*/30 * * * * *', async () => {
     try {
       const expiredPayments = await prisma.payment.findMany({
         where: {
@@ -57,5 +57,5 @@ export const startPaymentExpiryJob = () => {
       console.error('[Payment Expiration Scheduler Error]', error);
     }
   });
-  console.log('Payment Expiry Job started (runs every 5 minutes)');
+  console.log('Payment Expiry Job started (runs every 30 seconds)');
 };

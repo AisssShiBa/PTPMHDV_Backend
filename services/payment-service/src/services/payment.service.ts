@@ -184,7 +184,7 @@ export class PaymentService {
       if (payment.holdId) {
         await this.walletClient.releaseHold(payment.userId, payment.holdId);
       }
-      await prisma.payment.update({
+      const updated = await prisma.payment.update({
         where: { id },
         data: {
           status: PaymentStatus.EXPIRED,
@@ -198,7 +198,17 @@ export class PaymentService {
           }
         }
       });
-      throw new DomainException(400, 'EXPIRED', 'Hold has expired, please checkout again');
+      await prisma.outboxEvent.create({
+        data: {
+          id: randomUUID(),
+          aggregateId: id,
+          eventType: 'PAYMENT_EXPIRED',
+          topic: payment.callbackTopic,
+          payload: JSON.parse(JSON.stringify(updated)),
+          status: OutboxEventStatus.PENDING,
+        }
+      });
+      throw new DomainException(410, 'PAYMENT_EXPIRED', 'Hold has expired, please checkout again');
     }
 
     // 5. PENDING -> PROCESSING và consume token chống replay
@@ -301,6 +311,54 @@ export class PaymentService {
       // Nếu capture lỗi dứt khoát (Deterministic, e.g. 4xx từ wallet):
       // -> FAILED, release hold, hoàn usage, ghi sự kiện outbox PAYMENT_FAILED
       // Tuyệt đối không gọi credit (compensate) tạo tiền từ hư không (P0-4)!
+      // Ánh xạ HOLD_EXPIRED hoặc HOLD_NOT_CAPTURABLE -> EXPIRED (410 PAYMENT_EXPIRED)
+      const isHoldExpired =
+        captureError.code === 'HOLD_EXPIRED' ||
+        captureError.code === 'HOLD_NOT_CAPTURABLE' ||
+        captureError.message?.includes('HOLD_EXPIRED') ||
+        captureError.message?.includes('HOLD_NOT_CAPTURABLE') ||
+        captureError.message?.includes('Hold has expired') ||
+        captureError.message?.includes('Hold has already been released');
+
+      if (isHoldExpired) {
+        if (payment.holdId) {
+          await this.walletClient.releaseHold(payment.userId, payment.holdId);
+        }
+
+        const expiredNote = captureError.message || 'Hold expired or not capturable';
+
+        await prisma.$transaction(async (tx) => {
+          const updated = await tx.payment.update({
+            where: { id },
+            data: {
+              status: PaymentStatus.EXPIRED,
+              failureReason: expiredNote,
+              histories: {
+                create: {
+                  id: randomUUID(),
+                  fromStatus: PaymentStatus.PROCESSING,
+                  toStatus: PaymentStatus.EXPIRED,
+                  note: expiredNote,
+                }
+              }
+            }
+          });
+
+          await tx.outboxEvent.create({
+            data: {
+              id: randomUUID(),
+              aggregateId: id,
+              eventType: 'PAYMENT_EXPIRED',
+              topic: payment.callbackTopic,
+              payload: JSON.parse(JSON.stringify(updated)),
+              status: OutboxEventStatus.PENDING,
+            }
+          });
+        });
+
+        throw new DomainException(410, 'PAYMENT_EXPIRED', captureError.message || 'Giao dịch thanh toán đã hết hạn');
+      }
+
       if (captureError.isDeterministic) {
         if (payment.holdId) {
           await this.walletClient.releaseHold(payment.userId, payment.holdId);
@@ -372,7 +430,7 @@ export class PaymentService {
       if (payment.holdId) {
         await this.walletClient.releaseHold(payment.userId, payment.holdId);
       }
-      await prisma.payment.update({
+      const updated = await prisma.payment.update({
         where: { id },
         data: {
           status: PaymentStatus.EXPIRED,
@@ -386,7 +444,17 @@ export class PaymentService {
           }
         }
       });
-      throw new DomainException(400, 'EXPIRED', 'Hold has expired, please checkout again');
+      await prisma.outboxEvent.create({
+        data: {
+          id: randomUUID(),
+          aggregateId: id,
+          eventType: 'PAYMENT_EXPIRED',
+          topic: payment.callbackTopic,
+          payload: JSON.parse(JSON.stringify(updated)),
+          status: OutboxEventStatus.PENDING,
+        }
+      });
+      throw new DomainException(410, 'PAYMENT_EXPIRED', 'Hold has expired, please checkout again');
     }
 
     if (payment.status === PaymentStatus.PENDING) {
@@ -441,6 +509,53 @@ export class PaymentService {
     } catch (captureError: any) {
       if (captureError instanceof DomainException) throw captureError;
       console.error(`Internal confirm payment capture error for ${id}:`, captureError);
+
+      const isHoldExpired =
+        captureError.code === 'HOLD_EXPIRED' ||
+        captureError.code === 'HOLD_NOT_CAPTURABLE' ||
+        captureError.message?.includes('HOLD_EXPIRED') ||
+        captureError.message?.includes('HOLD_NOT_CAPTURABLE') ||
+        captureError.message?.includes('Hold has expired') ||
+        captureError.message?.includes('Hold has already been released');
+
+      if (isHoldExpired) {
+        if (payment.holdId) {
+          await this.walletClient.releaseHold(payment.userId, payment.holdId);
+        }
+
+        const expiredNote = captureError.message || 'Hold expired or not capturable';
+
+        await prisma.$transaction(async (tx) => {
+          const updated = await tx.payment.update({
+            where: { id },
+            data: {
+              status: PaymentStatus.EXPIRED,
+              failureReason: expiredNote,
+              histories: {
+                create: {
+                  id: randomUUID(),
+                  fromStatus: PaymentStatus.PROCESSING,
+                  toStatus: PaymentStatus.EXPIRED,
+                  note: expiredNote,
+                }
+              }
+            }
+          });
+
+          await tx.outboxEvent.create({
+            data: {
+              id: randomUUID(),
+              aggregateId: id,
+              eventType: 'PAYMENT_EXPIRED',
+              topic: payment.callbackTopic,
+              payload: JSON.parse(JSON.stringify(updated)),
+              status: OutboxEventStatus.PENDING,
+            }
+          });
+        });
+
+        throw new DomainException(410, 'PAYMENT_EXPIRED', captureError.message || 'Giao dịch thanh toán đã hết hạn');
+      }
 
       if (captureError.isDeterministic) {
         if (payment.holdId) {

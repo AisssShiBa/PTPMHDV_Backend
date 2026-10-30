@@ -49,9 +49,10 @@ export const startOutboxJob = () => {
             message = `Thanh toán đã được hoàn tiền ${String(payload.amount ?? '')} VND.`;
           } else if (event.eventType === 'PAYMENT_CANCELLED') {
             message = `Thanh toán đã bị hủy.`;
+          } else if (event.eventType === 'PAYMENT_EXPIRED') {
+            message = `Giao dịch thanh toán đã hết hạn.`;
           } else {
-            // PAYMENT_EXPIRED và các type khác không có trong whitelist notification-service
-            // → đánh dấu SENT ngay, không gửi
+            // Các type khác không có trong whitelist notification-service
             await prisma.outboxEvent.update({
               where: { id: event.id },
               data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
@@ -65,7 +66,8 @@ export const startOutboxJob = () => {
           // --- Thử RabbitMQ trước ---
           let sent = false;
           try {
-            sent = await publish('payment.events', ROUTING_KEY, mqPayload, { messageId: event.id });
+            const routingKey = event.eventType === 'PAYMENT_EXPIRED' ? 'payment.expired' : ROUTING_KEY;
+          sent = await publish('payment.events', routingKey, mqPayload, { messageId: event.id });
           } catch {
             sent = false;
           }
