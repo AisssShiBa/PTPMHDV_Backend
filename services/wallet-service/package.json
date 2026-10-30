@@ -9,7 +9,8 @@
         "start": "tsx src/server.ts",
         "start:prod": "node dist/main.js",
         "prisma:generate": "prisma generate",
-        "prisma:migrate:deploy": "prisma migrate deploy"
+        "prisma:migrate:deploy": "prisma migrate deploy",
+        "test:concurrency": "tsx tests/concurrency.ts"
     },
     "keywords": [],
     "author": "",

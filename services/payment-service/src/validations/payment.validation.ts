@@ -20,6 +20,8 @@ export const checkoutSchema = z.object({
       }),
     type: z.enum(['CARD_TOPUP', 'BUS_TICKET', 'MOVIE_TICKET', 'TRAIN_TICKET', 'WALLET_TRANSFER']),
     referenceId: z.string().optional(),
+    destinationUserId: z.string().uuid({ message: "destinationUserId phải là UUID hợp lệ" }).optional(),
+    destinationOwnerType: z.enum(['USER', 'MERCHANT', 'SYSTEM']).optional().default('USER'),
     callbackTopic: z.string(),
     idempotencyKey: z.string(),
   }),
@@ -37,4 +39,58 @@ export const paginationSchema = z.object({
     type: z.string().optional(),
     status: z.string().optional(),
   }),
+});
+
+export const p2pQuoteSchema = z.object({
+  body: z.object({
+    destinationUserId: z.string({ message: "destinationUserId là bắt buộc" }).uuid({ message: "destinationUserId phải là UUID hợp lệ" }),
+    amount: z.union([
+      z.string({ message: "amount là bắt buộc" })
+        .refine((val) => !isNaN(Number(val)) && isFinite(Number(val)) && Number(val) > 0, {
+          message: "amount phải là một số hợp lệ lớn hơn 0"
+        })
+        .refine((val) => {
+          const parts = val.toString().split('.');
+          return !parts[1] || parts[1].length <= 2;
+        }, {
+          message: "amount chỉ được tối đa 2 chữ số thập phân"
+        }),
+      z.number({ message: "amount là bắt buộc" })
+        .positive({ message: "amount phải lớn hơn 0" })
+        .refine((val) => {
+          const parts = val.toString().split('.');
+          return !parts[1] || parts[1].length <= 2;
+        }, {
+          message: "amount chỉ được tối đa 2 chữ số thập phân"
+        })
+        .transform(String)
+    ])
+  })
+});
+
+export const p2pCheckoutSchema = z.object({
+  headers: z.object({
+    'idempotency-key': z.string({
+      message: "Header 'Idempotency-Key' là bắt buộc"
+    }).min(1, "Header 'Idempotency-Key' không được để trống")
+  }).passthrough(),
+  body: z.object({
+    destinationUserId: z.string({
+      message: "destinationUserId là bắt buộc"
+    }).uuid({ message: "destinationUserId phải là UUID hợp lệ" }),
+    destinationOwnerType: z.enum(['USER', 'MERCHANT', 'SYSTEM']).optional().default('USER'),
+    amount: z.string({
+      message: "amount là bắt buộc và phải là một chuỗi số"
+    })
+      .refine((val) => !isNaN(Number(val)) && isFinite(Number(val)) && Number(val) > 0, {
+        message: "amount phải là số hợp lệ lớn hơn 0"
+      })
+      .refine((val) => {
+        const parts = val.split('.');
+        return !parts[1] || parts[1].length <= 2;
+      }, {
+        message: "amount chỉ được tối đa 2 chữ số thập phân"
+      }),
+    note: z.string().max(255).optional(),
+  })
 });

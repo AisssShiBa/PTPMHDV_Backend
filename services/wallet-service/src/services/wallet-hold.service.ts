@@ -20,7 +20,7 @@ export class WalletHoldService {
     referenceId: string,
     expiresAtValue: string,
     ownerType: OwnerType = OwnerType.USER,
-    destUserId: string,
+    destUserId?: string,
     destOwnerType: OwnerType = OwnerType.USER,
   ) {
     const amount = money(amountValue);
@@ -32,7 +32,9 @@ export class WalletHoldService {
     return await prisma.$transaction(async (tx) => {
       // 1. Lock Wallets: Lock Wallet first to avoid deadlock
       const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
-      const destWallet = await this.ledgerService.findWalletTx(tx, destUserId, destOwnerType);
+      const destWallet = destUserId
+        ? await this.ledgerService.findWalletTx(tx, destUserId, destOwnerType)
+        : null;
 
       const existing = await tx.walletHold.findUnique({
         where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
@@ -46,6 +48,9 @@ export class WalletHoldService {
       }
 
       assertWalletActive(wallet);
+      if (destWallet) {
+        assertWalletActive(destWallet);
+      }
 
       // 2. Kiểm tra hạn mức TRƯỚC KHI kiểm tra số dư (áp dụng cho USER wallet)
       let usageDay: string | null = null;
@@ -73,7 +78,7 @@ export class WalletHoldService {
       const hold = await tx.walletHold.create({
         data: {
           sourceWalletId: wallet.id,
-          destinationWalletId: destWallet.id,
+          destinationWalletId: destWallet ? destWallet.id : null,
           amount,
           referenceId,
           expiresAt,
@@ -115,10 +120,16 @@ export class WalletHoldService {
         });
 
         if (updated.count === 1) {
-          await tx.wallet.update({
-            where: { id: wallet.id },
-            data: { heldBalance: { decrement: hold.amount } }
-          });
+          const currentHeld = wallet.heldBalance;
+          const decrementAmount = currentHeld.gt(0)
+            ? (currentHeld.lt(hold.amount) ? currentHeld : hold.amount)
+            : new Prisma.Decimal(0);
+          if (decrementAmount.gt(0)) {
+            await tx.wallet.update({
+              where: { id: wallet.id },
+              data: { heldBalance: { decrement: decrementAmount } }
+            });
+          }
 
           // Hoàn hạn mức đúng row usageDay
           const usageDay = hold.usageDay || getVnDay(hold.createdAt);
@@ -195,10 +206,16 @@ export class WalletHoldService {
       });
 
       if (updated.count === 1) {
-        await tx.wallet.update({
-          where: { id: wallet.id },
-          data: { heldBalance: { decrement: hold.amount } }
-        });
+        const currentHeld = wallet.heldBalance;
+        const decrementAmount = currentHeld.gt(0)
+          ? (currentHeld.lt(hold.amount) ? currentHeld : hold.amount)
+          : new Prisma.Decimal(0);
+        if (decrementAmount.gt(0)) {
+          await tx.wallet.update({
+            where: { id: wallet.id },
+            data: { heldBalance: { decrement: decrementAmount } }
+          });
+        }
 
         // Hoàn lại hạn mức đúng row usageDay
         const usageDay = hold.usageDay || getVnDay(hold.createdAt);
@@ -236,11 +253,20 @@ export class WalletHoldService {
           });
 
           if (updated.count === 1) {
-            // Safe to decrement because we secured the wallet lock and hold was confirmed PENDING
-            await tx.wallet.update({
+            const w = await tx.wallet.findUnique({
               where: { id: hold.sourceWalletId },
-              data: { heldBalance: { decrement: hold.amount } }
+              select: { heldBalance: true }
             });
+            const currentHeld = w?.heldBalance || new Prisma.Decimal(0);
+            const decrementAmount = currentHeld.gt(0)
+              ? (currentHeld.lt(hold.amount) ? currentHeld : hold.amount)
+              : new Prisma.Decimal(0);
+            if (decrementAmount.gt(0)) {
+              await tx.wallet.update({
+                where: { id: hold.sourceWalletId },
+                data: { heldBalance: { decrement: decrementAmount } }
+              });
+            }
 
             // Hoàn hạn mức đúng row usageDay
             const usageDay = hold.usageDay || getVnDay(hold.createdAt);
