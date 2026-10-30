@@ -4,13 +4,13 @@ import { OutboxEventStatus } from '../utils/enums'
 import { prisma } from '../utils/prisma'
 import { NotificationClient } from '../clients/notification.client'
 import { publish } from '../utils/rabbitmq.publisher'
-import {
-  createPaymentFinvaultPublisher
-} from '../events/finvault.publisher'
-import { processPaymentOutboxEvent } from './payment-outbox-event'
+import { createPaymentFinvaultPublisher } from '../events/finvault.publisher'
+import { claimPaymentOutboxEvents } from './payment-outbox-claim'
+import { paymentRetryDelayMs, processPaymentOutboxEvent } from './payment-outbox-event'
 
 const legacyRoutingKey = 'payment.notification'
 const notificationClient = new NotificationClient()
+const MAX_LEGACY_RETRIES = 10
 let finvaultPublisher: ReturnType<typeof createPaymentFinvaultPublisher> | undefined
 
 const getFinvaultPublisher = () => {
@@ -26,119 +26,128 @@ function legacyMessage(eventType: string, payload: Record<string, unknown>): str
   return undefined
 }
 
-async function drainPendingOutbox(): Promise<void> {
-  await prisma.$transaction(async tx => {
-    const now = new Date()
-    const claimed = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT "id"
-      FROM "OutboxEvent"
-      WHERE "status" = 'PENDING'
-        AND ("nextRetryAt" IS NULL OR "nextRetryAt" <= ${now})
-      ORDER BY "createdAt" ASC
-      LIMIT 50
-      FOR UPDATE SKIP LOCKED
-    `
-    if (claimed.length === 0) return
+async function updateClaimed(
+  id: string,
+  lockToken: string,
+  data: Parameters<typeof prisma.outboxEvent.updateMany>[0]['data']
+): Promise<void> {
+  await prisma.outboxEvent.updateMany({
+    where: { id, status: OutboxEventStatus.PROCESSING, lockToken },
+    data: { ...data, lockedUntil: null, lockToken: null }
+  })
+}
 
-    const events = await tx.outboxEvent.findMany({
-      where: { id: { in: claimed.map(row => row.id) } },
-      orderBy: { createdAt: 'asc' }
+async function processClaimedEvent(id: string, lockToken: string): Promise<void> {
+  const event = await prisma.outboxEvent.findFirst({
+    where: { id, status: OutboxEventStatus.PROCESSING, lockToken }
+  })
+  if (!event) return
+
+  const payload = event.payload as Record<string, unknown>
+  const finvaultResult = await processPaymentOutboxEvent(event, {
+    publish: finvaultEvent => getFinvaultPublisher().publish(finvaultEvent),
+    markSent: () => updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.SENT,
+      sentAt: new Date()
+    }),
+    markFailed: () => updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.FAILED
+    }),
+    scheduleRetry: delayMs => updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.PENDING,
+      retryCount: { increment: 1 },
+      nextRetryAt: new Date(Date.now() + delayMs)
     })
+  })
+  if (finvaultResult !== 'unhandled') return
 
-    for (const event of events) {
-      const payload = event.payload as Record<string, unknown>
-      try {
-        const finvaultResult = await processPaymentOutboxEvent(event, {
-          publish: finvaultEvent => getFinvaultPublisher().publish(finvaultEvent),
-          markSent: async () => {
-            await tx.outboxEvent.update({
-              where: { id: event.id },
-              data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
-            })
-          },
-          markFailed: async () => {
-            await tx.outboxEvent.update({
-              where: { id: event.id },
-              data: { status: OutboxEventStatus.FAILED }
-            })
-          },
-          scheduleRetry: async delayMs => {
-            await tx.outboxEvent.update({
-              where: { id: event.id },
-              data: {
-                retryCount: { increment: 1 },
-                nextRetryAt: new Date(Date.now() + delayMs)
-              }
-            })
-          }
-        })
-        if (finvaultResult !== 'unhandled') {
-          continue
-        }
+  const message = legacyMessage(event.eventType, payload)
+  if (!message) {
+    await updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.SENT,
+      sentAt: new Date()
+    })
+    return
+  }
 
-        const message = legacyMessage(event.eventType, payload)
-        if (!message) {
-          await tx.outboxEvent.update({
-            where: { id: event.id },
-            data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
-          })
-          continue
-        }
+  const userId = typeof payload.userId === 'string' ? payload.userId : ''
+  if (!userId.trim()) {
+    console.error('[Payment Outbox] Invalid legacy event data; marking row FAILED', {
+      eventId: event.id,
+      eventType: event.eventType
+    })
+    await updateClaimed(id, lockToken, { status: OutboxEventStatus.FAILED })
+    return
+  }
 
-        const userId = typeof payload.userId === 'string' ? payload.userId : ''
-        if (!userId) throw new TypeError('Legacy payment outbox payload is missing userId')
-        const legacyPayload = { eventId: event.id, userId, type: event.eventType, message }
-        let sent = false
-        try {
-          sent = await publish(
-            'payment.events',
-            event.eventType === 'PAYMENT_EXPIRED' ? 'payment.expired' : legacyRoutingKey,
-            legacyPayload,
-            { messageId: event.id }
-          )
-        } catch {
-          sent = false
-        }
+  const legacyPayload = { eventId: event.id, userId, type: event.eventType, message }
+  let sent = false
+  try {
+    sent = await publish(
+      'payment.events',
+      event.eventType === 'PAYMENT_EXPIRED' ? 'payment.expired' : legacyRoutingKey,
+      legacyPayload,
+      { messageId: event.id }
+    )
+  } catch {
+    sent = false
+  }
 
-        if (!sent) {
-          await notificationClient.send(userId, event.eventType, message, event.id)
-        }
-
-        await tx.outboxEvent.update({
-          where: { id: event.id },
-          data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
-        })
-      } catch (error) {
-        const axiosError = error as { response?: { status?: number }; message?: string }
-        console.error('[Payment Outbox] Legacy notification publish failed', {
-          eventId: event.id,
-          eventType: event.eventType,
-          status: axiosError.response?.status
-        })
-        const retryCount = event.retryCount + 1
-        if (axiosError.response?.status && axiosError.response.status >= 400 &&
-            axiosError.response.status < 500) {
-          await tx.outboxEvent.update({
-            where: { id: event.id },
-            data: { status: OutboxEventStatus.FAILED, retryCount }
-          })
-        } else if (retryCount >= 5) {
-          await tx.outboxEvent.update({
-            where: { id: event.id },
-            data: { status: OutboxEventStatus.FAILED, retryCount }
-          })
-        } else {
-          await tx.outboxEvent.update({
-            where: { id: event.id },
-            data: {
-              retryCount,
-              nextRetryAt: new Date(Date.now() + Math.min(30_000, 2 ** retryCount * 1000))
-            }
-          })
-        }
-      }
+  try {
+    if (!sent) await notificationClient.send(userId, event.eventType, message, event.id)
+    await updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.SENT,
+      sentAt: new Date()
+    })
+  } catch (error) {
+    const status = (error as { response?: { status?: number } }).response?.status
+    const nextRetryCount = event.retryCount + 1
+    console.error('[Payment Outbox] Legacy notification delivery failed', {
+      eventId: event.id,
+      eventType: event.eventType,
+      status
+    })
+    if ((status !== undefined && status >= 400 && status < 500) ||
+        nextRetryCount >= MAX_LEGACY_RETRIES) {
+      await updateClaimed(id, lockToken, {
+        status: OutboxEventStatus.FAILED,
+        retryCount: nextRetryCount
+      })
+      return
     }
-  }, { maxWait: 15000, timeout: 120000 })
+
+    await updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.PENDING,
+      retryCount: nextRetryCount,
+      nextRetryAt: new Date(Date.now() + paymentRetryDelayMs(event.retryCount))
+    })
+  }
+}
+
+async function drainPendingOutbox(): Promise<void> {
+  const claimed = await claimPaymentOutboxEvents(prisma)
+  for (const event of claimed) {
+    try {
+      // Publishing happens after the short claim transaction. If a worker dies,
+      // the lease expires and the stable eventId permits safe at-least-once retry.
+      await processClaimedEvent(event.id, event.lockToken)
+    } catch (error) {
+      console.error('[Payment Outbox] Claimed event processing failed', {
+        eventId: event.id,
+        error: error instanceof Error ? error.message : 'unknown error'
+      })
+      await updateClaimed(event.id, event.lockToken, {
+        status: OutboxEventStatus.PENDING,
+        retryCount: { increment: 1 },
+        nextRetryAt: new Date(Date.now() + 1000)
+      }).catch(updateError => {
+        console.error('[Payment Outbox] Could not release failed event lease', {
+          eventId: event.id,
+          error: updateError instanceof Error ? updateError.message : 'unknown error'
+        })
+      })
+    }
+  }
 }
 
 const runDrain = createSingleFlight(drainPendingOutbox)

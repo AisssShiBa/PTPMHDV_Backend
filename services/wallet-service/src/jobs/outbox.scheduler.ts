@@ -1,10 +1,10 @@
 import cron from 'node-cron';
-import { Prisma, PrismaClient } from '@prisma/client';
-import { createSingleFlight } from 'finvault-events';
+import { PrismaClient } from '@prisma/client';
 import { publish } from '../utils/rabbitmq.publisher';
 import { env } from '../config/env';
 import {
   InvalidWalletOutboxDataError,
+  createWalletOutboxDrain,
   shouldPublishLegacyWalletEvent,
   validateWalletOutboxPayload
 } from './wallet-event-routing';
@@ -12,111 +12,131 @@ import {
 const ROUTING_KEY = 'wallet.notification';
 const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL ?? 'http://notification-service:3006';
 const INTERNAL_KEY = env.internalApiKey;
+const MAX_BATCH_SIZE = 10;
 const prisma = new PrismaClient();
 
-const runOutboxDrain = async (): Promise<void> => {
-  await prisma.$transaction(async tx => {
-    const claimed = await tx.$queryRaw<{ id: string }[]>`
+async function claimPendingRows(): Promise<string[]> {
+  // Wallet has no lease column by ownership constraint: this short lock prevents
+  // overlapping claims only while selecting; stable eventId makes cross-process
+  // duplicate publication safe for the receiving inbox.
+  return prisma.$transaction(async tx => {
+    const claimed = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id
       FROM "WalletOutboxEvent"
       WHERE "publishedAt" IS NULL
       ORDER BY "createdAt" ASC
-      LIMIT 50
+      LIMIT ${MAX_BATCH_SIZE}
       FOR UPDATE SKIP LOCKED
     `;
+    return claimed.map(row => row.id);
+  }, { maxWait: 5000, timeout: 15_000 });
+}
 
-    for (const { id } of claimed) {
-      const event = await tx.walletOutboxEvent.findUnique({ where: { id } });
-      if (!event) continue;
+async function markPublished(id: string): Promise<void> {
+  await prisma.walletOutboxEvent.update({
+    where: { id },
+    data: { publishedAt: new Date() }
+  });
+}
 
-      try {
-        const payload = event.payload as Record<string, unknown>;
-        validateWalletOutboxPayload(event.topic, payload);
-        if (!shouldPublishLegacyWalletEvent(payload)) {
-          await tx.walletOutboxEvent.update({
-            where: { id: event.id },
-            data: { publishedAt: new Date() }
-          });
-          continue;
-        }
+async function processWalletOutboxRow(id: string): Promise<void> {
+  const event = await prisma.walletOutboxEvent.findFirst({
+    where: { id, publishedAt: null }
+  });
+  if (!event) return;
 
-        const isAdded = event.topic === 'wallet.balance_added';
-        const typeLabel = isAdded ? 'cộng' : 'trừ';
-        const amount = String(payload.amount ?? '');
-        const balanceAfter = String(payload.balanceAfter ?? '');
-        const transferType = String(payload.transferType ?? '');
-        const userId = String(payload.userId ?? '');
-        let message = `Ví của bạn vừa được ${typeLabel} ${amount} VND. Số dư mới: ${balanceAfter} VND.`;
+  try {
+    const payload = event.payload as Record<string, unknown>;
+    validateWalletOutboxPayload(event.topic, payload);
+    if (!shouldPublishLegacyWalletEvent(payload)) {
+      await markPublished(event.id)
+      return;
+    }
 
-        if (transferType === 'TOPUP') {
-          message = `Nạp tiền thành công ${amount} VND. Số dư: ${balanceAfter} VND.`;
-        } else if (transferType === 'PAYMENT' && !isAdded) {
-          message = `Thanh toán dịch vụ trừ ${amount} VND. Số dư: ${balanceAfter} VND.`;
-        } else if (transferType === 'REFUND' && isAdded) {
-          message = `Hoàn tiền dịch vụ cộng ${amount} VND. Số dư: ${balanceAfter} VND.`;
-        }
+    const isAdded = event.topic === 'wallet.balance_added';
+    const amount = String(payload.amount);
+    const balanceAfter = String(payload.balanceAfter);
+    const transferType = String(payload.transferType);
+    const userId = String(payload.userId);
+    let message = `Ví của bạn vừa được ${isAdded ? 'cộng' : 'trừ'} ${amount} VND. Số dư mới: ${balanceAfter} VND.`;
 
-        let type = event.topic.toUpperCase().replace('.', '_');
-        if (type === 'WALLET_BALANCE_ADDED') type = 'WALLET_CREDITED';
-        if (type === 'WALLET_BALANCE_DEDUCTED') type = 'WALLET_DEBITED';
+    if (transferType === 'TOPUP') {
+      message = `Nạp tiền thành công ${amount} VND. Số dư: ${balanceAfter} VND.`;
+    } else if (transferType === 'PAYMENT' && !isAdded) {
+      message = `Thanh toán dịch vụ trừ ${amount} VND. Số dư: ${balanceAfter} VND.`;
+    } else if (transferType === 'REFUND' && isAdded) {
+      message = `Hoàn tiền dịch vụ cộng ${amount} VND. Số dư: ${balanceAfter} VND.`;
+    }
 
-        const mqPayload = { eventId: String(event.id), userId, type, message };
-        const sent = await publish('wallet.events', ROUTING_KEY, mqPayload, { messageId: String(event.id) })
-          .catch(() => false);
+    let type = event.topic.toUpperCase().replace('.', '_');
+    if (type === 'WALLET_BALANCE_ADDED') type = 'WALLET_CREDITED';
+    if (type === 'WALLET_BALANCE_DEDUCTED') type = 'WALLET_DEBITED';
 
-        if (sent) {
-          await tx.walletOutboxEvent.update({
-            where: { id: event.id },
-            data: { publishedAt: new Date() }
-          });
-          continue;
-        }
+    const mqPayload = { eventId: String(event.id), userId, type, message };
+    const sent = await publish('wallet.events', ROUTING_KEY, mqPayload, { messageId: String(event.id) })
+      .catch(() => false);
 
-        const response = await fetch(`${NOTIFICATION_SERVICE_URL}/api/notifications`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Internal-Key': INTERNAL_KEY
-          },
-          body: JSON.stringify(mqPayload)
-        });
+    if (!sent) {
+      const response = await fetch(`${NOTIFICATION_SERVICE_URL}/api/notifications`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Key': INTERNAL_KEY
+        },
+        body: JSON.stringify(mqPayload),
+        signal: AbortSignal.timeout(8000)
+      });
 
-        if (response.ok) {
-          await tx.walletOutboxEvent.update({
-            where: { id: event.id },
-            data: { publishedAt: new Date() }
-          });
-        } else {
-          console.error(`[Wallet Outbox] HTTP fallback failed for event ${event.id}: status ${response.status}`);
-          await tx.walletOutboxEvent.update({
-            where: { id: event.id },
-            data: { attempts: { increment: 1 } }
-          });
-        }
-      } catch (error: unknown) {
-        if (error instanceof InvalidWalletOutboxDataError) {
-          console.error('[Wallet Outbox] Invalid event data; marking row complete', {
-            eventId: event.id,
-            topic: event.topic
-          });
-          await tx.walletOutboxEvent.update({
-            where: { id: event.id },
-            data: { publishedAt: new Date() }
-          });
-          continue;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[Wallet Outbox] Error processing event ${event.id}:`, message);
-        await tx.walletOutboxEvent.update({
-          where: { id: event.id },
-          data: { attempts: { increment: 1 } }
-        });
+      if (!response.ok) {
+        const error = new Error(`Notification fallback returned HTTP ${response.status}`)
+        Object.assign(error, { status: response.status })
+        throw error
       }
     }
-  }, { maxWait: 15000, timeout: 60000 });
-};
 
-export const drainOutbox = createSingleFlight(runOutboxDrain);
+    await markPublished(event.id);
+  } catch (error: unknown) {
+    if (error instanceof InvalidWalletOutboxDataError) {
+      console.error('[Wallet Outbox] Invalid event data; marking row complete', {
+        eventId: event.id,
+        topic: event.topic
+      });
+      await markPublished(event.id);
+      return;
+    }
+
+    const status = (error as { status?: number }).status;
+    const attempts = event.attempts + 1;
+    if (status !== undefined && status >= 400 && status < 500) {
+      console.error('[Wallet Outbox] Permanent notification rejection', {
+        eventId: event.id,
+        topic: event.topic,
+        status
+      });
+      await markPublished(event.id);
+      return;
+    }
+
+    console.error('[Wallet Outbox] Delivery failed; event remains pending', {
+      eventId: event.id,
+      topic: event.topic,
+      error: error instanceof Error ? error.message : 'unknown error'
+    });
+    await prisma.walletOutboxEvent.update({
+      where: { id: event.id },
+      data: { attempts }
+    });
+  }
+}
+
+async function runOutboxDrain(): Promise<void> {
+  const claimedIds = await claimPendingRows();
+  for (const id of claimedIds) {
+    await processWalletOutboxRow(id);
+  }
+}
+
+export const drainOutbox = createWalletOutboxDrain(runOutboxDrain);
 
 export function startOutboxScheduler(): void {
   cron.schedule('*/1 * * * * *', () => {

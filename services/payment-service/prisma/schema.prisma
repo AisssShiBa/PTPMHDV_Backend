@@ -27,6 +27,7 @@ enum PaymentStatus {
 
 enum OutboxEventStatus {
   PENDING
+  PROCESSING
   SENT
   FAILED
 }
@@ -87,7 +88,10 @@ model OutboxEvent {
   sentAt      DateTime?         @db.Timestamp()
   retryCount  Int               @default(0)
   nextRetryAt DateTime?         @db.Timestamp()
+  lockedUntil DateTime?         @db.Timestamp(3)
+  lockToken   String?           @db.Uuid
 
+  @@index([status, nextRetryAt, lockedUntil])
   @@index([status, createdAt])
   @@index([nextRetryAt])
 }
@@ -150,4 +154,3 @@ model UsedTransactionToken {
   @@index([usedAt])
   @@index([paymentId])
 }
-

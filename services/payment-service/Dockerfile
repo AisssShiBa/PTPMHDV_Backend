@@ -19,4 +19,4 @@ COPY services/payment-service/src ./src
 RUN ./node_modules/.bin/prisma generate && npm run build
 
 EXPOSE 3005
-CMD ["sh", "-c", "./node_modules/.bin/prisma db push && npm run start"]
+CMD ["sh", "-c", "./node_modules/.bin/prisma db push && ./node_modules/.bin/prisma migrate deploy && npm run start"]

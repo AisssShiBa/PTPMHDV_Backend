@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   isPeerWalletPayment,
+  createWalletOutboxDrain,
   shouldPublishLegacyWalletEvent,
   validateWalletOutboxPayload
 } from '../src/jobs/wallet-event-routing'
@@ -33,4 +34,22 @@ test('rejects malformed wallet outbox rows instead of retrying them indefinitely
     }),
     /topic/
   )
+})
+
+test('parallel wallet drains share one claim operation', async () => {
+  let claims = 0
+  let releaseDrain: (() => void) | undefined
+  const drain = createWalletOutboxDrain(async () => {
+    claims += 1
+    await new Promise<void>(resolve => { releaseDrain = resolve })
+  })
+
+  const first = drain()
+  const second = drain()
+  await Promise.resolve()
+  assert.equal(first, second)
+  assert.equal(claims, 1)
+  releaseDrain?.()
+  await Promise.all([first, second])
+  assert.equal(claims, 1)
 })

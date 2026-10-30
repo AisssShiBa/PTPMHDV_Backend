@@ -1,3 +1,5 @@
+import { createSingleFlight } from 'finvault-events'
+
 export function shouldPublishLegacyWalletEvent(payload: Record<string, unknown>): boolean {
   return payload.transferType !== 'P2P_TRANSFER' && payload.isPeerTransfer !== true
 }
@@ -13,6 +15,9 @@ export function isPeerWalletPayment(
 }
 
 export class InvalidWalletOutboxDataError extends TypeError {}
+
+export const createWalletOutboxDrain = (drain: () => Promise<void>): (() => Promise<void>) =>
+  createSingleFlight(drain)
 
 export function validateWalletOutboxPayload(
   topic: string,
