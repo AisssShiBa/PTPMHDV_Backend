@@ -8,6 +8,7 @@ export const validate = (schema: ZodSchema) => {
         body: req.body,
         query: req.query,
         params: req.params,
+        headers: req.headers,
       }) as any;
       
       // Override req with validated and transformed data

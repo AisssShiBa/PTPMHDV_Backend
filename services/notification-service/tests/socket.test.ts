@@ -5,6 +5,12 @@ import { io as createClient, type Socket } from 'socket.io-client'
 import { createTestGatewayToken } from 'finvault-internal-auth'
 import app from '../src/app'
 import { createSocketServer } from '../src/socket'
+import {
+  consumeSocketTicket,
+  issueSocketTicket,
+  SocketTicketRateLimitError
+} from '../src/socket'
+import { randomUUID } from 'node:crypto'
 
 const clients = new Set<Socket>()
 let httpServer: http.Server
@@ -44,6 +50,16 @@ const assertRejected = async (url: string, options: Parameters<typeof createClie
   await assert.rejects(openSocket(url, options), (error: unknown) =>
     error instanceof Error && error.message === 'INVALID_GATEWAY_TOKEN'
   )
+}
+
+const getSocketTicket = async (userId: string): Promise<string> => {
+  const gatewayToken = createTestGatewayToken(userId)
+  const response = await fetch(`${baseUrl}/api/notifications/socket-ticket`, {
+    headers: { 'x-gateway-token': gatewayToken }
+  })
+  assert.equal(response.status, 200)
+  const body = await response.json() as { data: { ticket: string } }
+  return body.data.ticket
 }
 
 before(async () => {
@@ -107,6 +123,40 @@ test('a Gateway Token jti can be used only once', async () => {
   firstSocket.close()
   await delay(10)
   await assertRejected(baseUrl, { auth: { token } })
+})
+
+test('a socket ticket can be used once through auth.ticket', async () => {
+  const ticket = await getSocketTicket('00000000-0000-4000-8000-000000000010')
+  const firstSocket = await openSocket(baseUrl, { auth: { ticket } })
+  firstSocket.close()
+  await delay(10)
+  await assertRejected(baseUrl, { auth: { ticket } })
+})
+
+test('a socket ticket remains compatible through deprecated auth.token', async () => {
+  const ticket = await getSocketTicket('00000000-0000-4000-8000-000000000011')
+  const firstSocket = await openSocket(baseUrl, { auth: { token: ticket } })
+  firstSocket.close()
+  await delay(10)
+  await assertRejected(baseUrl, { auth: { token: ticket } })
+})
+
+test('socket ticket rate limit rejects the eleventh issue in one minute', () => {
+  const userId = randomUUID()
+  for (let count = 0; count < 10; count += 1) issueSocketTicket(userId)
+  assert.throws(
+    () => issueSocketTicket(userId),
+    (error: unknown) => error instanceof SocketTicketRateLimitError
+  )
+})
+
+test('socket ticket issuance caps unused tickets per user and evicts the oldest', () => {
+  const userId = randomUUID()
+  const tickets = Array.from({ length: 6 }, () => issueSocketTicket(userId).ticket)
+
+  assert.equal(consumeSocketTicket(tickets[0]), undefined)
+  assert.equal(consumeSocketTicket(tickets[1])?.userId, userId)
+  assert.equal(consumeSocketTicket(tickets[5])?.userId, userId)
 })
 
 test('socket ignores Gateway Token supplied only in the query string', async () => {

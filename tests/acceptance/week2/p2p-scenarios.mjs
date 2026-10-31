@@ -39,9 +39,13 @@ const state = (ctx, user) => JSON.stringify(JSON.parse(sql(ctx, 'wallet_service'
   'ledger',(SELECT count(*) FROM "LedgerEntry" WHERE "walletId"=w.id)) FROM "Wallet" w WHERE "userId"='${user.id}' AND "ownerType"='USER'`)))
 
 export async function a4(ctx, a) {
-  const payment = (await checkout(ctx, a.an, a.binh, '1000')).data
+  // Exercise main's P2P route/header contract alongside Huu's generic/body API.
+  const payment = (await call(ctx, '/payments/p2p/checkout', { method: 'POST', token: a.an.token, expected: 201,
+    headers: { 'Idempotency-Key': uuid() }, body: { destinationUserId: a.binh.id, amount: '1000' } })).data
   const token = await tokenFor(ctx, a.an, payment)
-  assert.equal((await confirm(ctx, a.an, payment, token)).data.status, 'SUCCESS')
+  const confirmed = await call(ctx, '/payments/' + payment.id + '/confirm', { method: 'POST', token: a.an.token,
+    headers: { 'X-Transaction-Token': token }, body: {} })
+  assert.equal(confirmed.data.status, 'SUCCESS')
   assert.equal((await confirm(ctx, a.an, payment, token, 409)).error.code, 'TXN_TOKEN_REUSED')
   assert.equal(sql(ctx, 'wallet_service', `SELECT count(*) FROM "LedgerEntry" WHERE "referenceId"='${payment.holdId}'`), '2')
   const expiring = (await checkout(ctx, a.an, a.binh, '1000')).data

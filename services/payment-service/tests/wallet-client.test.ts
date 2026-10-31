@@ -11,9 +11,10 @@ test('Wallet errors preserve limit metadata and transport failures remain retrya
     global.fetch = async (_url, options) => {
       const body = JSON.parse(String(options?.body));
       assert.equal(body.destinationUserId, 'receiver');
+      assert.equal(body.destinationOwnerType, 'MERCHANT');
       return new Response(JSON.stringify({ error: { code: 'LIMIT_EXCEEDED', message: 'limit', limitType: 'PER_DAY', remaining: '0' } }), { status: 422 });
     };
-    await assert.rejects(client.createHold('sender', '1000', 'reference', 'expiry', 'receiver'),
+    await assert.rejects(client.createHold('sender', '1000', 'reference', 'expiry', 'receiver', 'MERCHANT'),
       (error: any) => error.status === 422 && error.code === 'LIMIT_EXCEEDED' && error.details.limitType === 'PER_DAY');
     global.fetch = async () => { throw new Error('lost response'); };
     await assert.rejects(client.captureHold('sender', 'reference'), { status: 503, code: 'WALLET_UNAVAILABLE' });

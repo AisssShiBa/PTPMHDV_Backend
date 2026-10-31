@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "Payment" ADD COLUMN IF NOT EXISTS "destinationUserId" VARCHAR(50);
+ALTER TABLE "Payment" ADD COLUMN IF NOT EXISTS "destinationOwnerType" VARCHAR(20) DEFAULT 'USER';
+

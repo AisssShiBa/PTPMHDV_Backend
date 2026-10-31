@@ -4,7 +4,9 @@ import app from './app';
 import { startPaymentExpiryJob } from './jobs/payment-expiry.job';
 import { startOutboxJob } from './jobs/outbox.job';
 import { startTopupExpiryJob } from './jobs/expireTopups.job';
+import { startTokenCleanupJob } from './jobs/cleanup-tokens.job';
 import { closeRabbitMQ } from './utils/rabbitmq.publisher';
+import { closeFinvaultOutboxPublisher } from './jobs/outbox.job';
 
 transactionPublicKey();
 const port = process.env.PORT || 3005;
@@ -14,11 +16,13 @@ const server = app.listen(port, () => {
   startPaymentExpiryJob();
   startOutboxJob();
   startTopupExpiryJob();
+  startTokenCleanupJob();
 });
 
 async function shutdown(signal: string) {
   console.log(`[Payment] Received ${signal}, shutting down gracefully...`);
   server.close();
+  await closeFinvaultOutboxPublisher();
   await closeRabbitMQ();
   process.exit(0);
 }

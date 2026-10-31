@@ -1,155 +1,175 @@
-import { createPublisher, type FinvaultEvent } from 'finvault-events';
-import cron from 'node-cron';
-import { OutboxEventStatus } from '../utils/enums';
-import { prisma } from '../utils/prisma';
-import { NotificationClient } from '../clients/notification.client';
-import { publish } from '../utils/rabbitmq.publisher';
+import cron from 'node-cron'
+import { createSingleFlight } from 'finvault-events'
+import { OutboxEventStatus } from '../utils/enums'
+import { prisma } from '../utils/prisma'
+import { NotificationClient } from '../clients/notification.client'
+import { publish } from '../utils/rabbitmq.publisher'
+import { createPaymentFinvaultPublisher } from '../events/finvault.publisher'
+import { claimPaymentOutboxEvents } from './payment-outbox-claim'
+import { paymentRetryDelayMs, processPaymentOutboxEvent } from './payment-outbox-event'
 
-/**
- * Type validation (Bước 4):
- * eventType từ payment outbox phải thuộc whitelist của notification-service:
- *   PAYMENT_SUCCESS    ✅
- *   PAYMENT_FAILED     ✅
- *   PAYMENT_REFUNDED   ✅
- *   PAYMENT_CANCELLED  ✅
- *   PAYMENT_EXPIRED    ❌ — KHÔNG có trong whitelist notification-service
- *                         → xử lý như cũ: mark SENT ngay, skip gửi
- *
- * Routing key: 'payment.notification' (binding '#' của consumer khớp tất cả)
- */
-const ROUTING_KEY = 'payment.notification';
+const legacyRoutingKey = 'payment.notification'
+const notificationClient = new NotificationClient()
+const MAX_LEGACY_RETRIES = 10
+let finvaultPublisher: ReturnType<typeof createPaymentFinvaultPublisher> | undefined
+
+const getFinvaultPublisher = () => {
+  if (!finvaultPublisher) finvaultPublisher = createPaymentFinvaultPublisher()
+  return finvaultPublisher
+}
+
+function legacyMessage(eventType: string, payload: Record<string, unknown>): string | undefined {
+  if (eventType === 'PAYMENT_REFUNDED') {
+    return `Thanh toán đã được hoàn tiền ${String(payload.amount ?? '')} VND.`
+  }
+  if (eventType === 'PAYMENT_CANCELLED') return 'Thanh toán đã bị hủy.'
+  return undefined
+}
+
+async function updateClaimed(
+  id: string,
+  lockToken: string,
+  data: Parameters<typeof prisma.outboxEvent.updateMany>[0]['data']
+): Promise<void> {
+  await prisma.outboxEvent.updateMany({
+    where: { id, status: OutboxEventStatus.PROCESSING, lockToken },
+    data: { ...data, lockedUntil: null, lockToken: null }
+  })
+}
+
+async function processClaimedEvent(id: string, lockToken: string): Promise<void> {
+  const event = await prisma.outboxEvent.findFirst({
+    where: { id, status: OutboxEventStatus.PROCESSING, lockToken }
+  })
+  if (!event) return
+
+  const payload = event.payload as Record<string, unknown>
+  const finvaultResult = await processPaymentOutboxEvent(event, {
+    publish: finvaultEvent => getFinvaultPublisher().publish(finvaultEvent),
+    markSent: () => updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.SENT,
+      sentAt: new Date()
+    }),
+    markFailed: () => updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.FAILED
+    }),
+    scheduleRetry: delayMs => updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.PENDING,
+      retryCount: { increment: 1 },
+      nextRetryAt: new Date(Date.now() + delayMs)
+    })
+  })
+  if (finvaultResult !== 'unhandled') return
+
+  const message = legacyMessage(event.eventType, payload)
+  if (!message) {
+    await updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.SENT,
+      sentAt: new Date()
+    })
+    return
+  }
+
+  const userId = typeof payload.userId === 'string' ? payload.userId : ''
+  if (!userId.trim()) {
+    console.error('[Payment Outbox] Invalid legacy event data; marking row FAILED', {
+      eventId: event.id,
+      eventType: event.eventType
+    })
+    await updateClaimed(id, lockToken, { status: OutboxEventStatus.FAILED })
+    return
+  }
+
+  const legacyPayload = { eventId: event.id, userId, type: event.eventType, message }
+  let sent = false
+  try {
+    sent = await publish(
+      'payment.events',
+      event.eventType === 'PAYMENT_EXPIRED' ? 'payment.expired' : legacyRoutingKey,
+      legacyPayload,
+      { messageId: event.id }
+    )
+  } catch {
+    sent = false
+  }
+
+  try {
+    if (!sent) await notificationClient.send(userId, event.eventType, message, event.id)
+    await updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.SENT,
+      sentAt: new Date()
+    })
+  } catch (error) {
+    const status = (error as { response?: { status?: number } }).response?.status
+    const nextRetryCount = event.retryCount + 1
+    console.error('[Payment Outbox] Legacy notification delivery failed', {
+      eventId: event.id,
+      eventType: event.eventType,
+      status
+    })
+    if ((status !== undefined && status >= 400 && status < 500) ||
+        nextRetryCount >= MAX_LEGACY_RETRIES) {
+      await updateClaimed(id, lockToken, {
+        status: OutboxEventStatus.FAILED,
+        retryCount: nextRetryCount
+      })
+      return
+    }
+
+    await updateClaimed(id, lockToken, {
+      status: OutboxEventStatus.PENDING,
+      retryCount: nextRetryCount,
+      nextRetryAt: new Date(Date.now() + paymentRetryDelayMs(event.retryCount))
+    })
+  }
+}
+
+async function drainPendingOutbox(): Promise<void> {
+  const claimed = await claimPaymentOutboxEvents(prisma)
+  for (const event of claimed) {
+    try {
+      // Publishing happens after the short claim transaction. If a worker dies,
+      // the lease expires and the stable eventId permits safe at-least-once retry.
+      await processClaimedEvent(event.id, event.lockToken)
+    } catch (error) {
+      console.error('[Payment Outbox] Claimed event processing failed', {
+        eventId: event.id,
+        error: error instanceof Error ? error.message : 'unknown error'
+      })
+      await updateClaimed(event.id, event.lockToken, {
+        status: OutboxEventStatus.PENDING,
+        retryCount: { increment: 1 },
+        nextRetryAt: new Date(Date.now() + 1000)
+      }).catch(updateError => {
+        console.error('[Payment Outbox] Could not release failed event lease', {
+          eventId: event.id,
+          error: updateError instanceof Error ? updateError.message : 'unknown error'
+        })
+      })
+    }
+  }
+}
+
+const runDrain = createSingleFlight(drainPendingOutbox)
+
+export function drainOutbox(): Promise<void> {
+  return runDrain()
+}
+
+export async function closeFinvaultOutboxPublisher(): Promise<void> {
+  const publisher = finvaultPublisher
+  finvaultPublisher = undefined
+  await publisher?.close()
+}
 
 export const startOutboxJob = () => {
-  const notificationClient = new NotificationClient();
-  const publisher = createPublisher({ url: process.env.RABBITMQ_URL!, exchange: 'finvault.events' });
-  let running = false;
-
-  cron.schedule('* * * * * *', async () => {
-    if (running) return;
-    running = true;
-    try {
-      const pendingEvents = await prisma.outboxEvent.findMany({
-        where: {
-          status: OutboxEventStatus.PENDING,
-          OR: [
-            { nextRetryAt: null },
-            { nextRetryAt: { lte: new Date() } }
-          ]
-        },
-        take: 50,
-      });
-
-      for (const event of pendingEvents) {
-        console.log(`[Outbox] Processing event ${event.id} - ${event.topic}`);
-
-        try {
-          if (event.eventType.startsWith('payment.')) {
-            try {
-              await publisher.publish(event.payload as unknown as FinvaultEvent);
-              await prisma.outboxEvent.update({ where: { id: event.id }, data: { status: OutboxEventStatus.SENT, sentAt: new Date() } });
-            } catch {
-              await prisma.outboxEvent.update({ where: { id: event.id }, data: {
-                retryCount: { increment: 1 }, nextRetryAt: new Date(Date.now()+Math.min(30000, 1000*2**Math.min(event.retryCount,5)))
-              } });
-            }
-            continue;
-          }
-          const payload = event.payload as Record<string, unknown>;
-          let message = `Giao dịch ${String(payload.id ?? '')} đã được xử lý.`;
-
-          if (event.eventType === 'PAYMENT_SUCCESS') {
-            message = `Thanh toán thành công ${String(payload.amount ?? '')} VND.`;
-          } else if (event.eventType === 'PAYMENT_FAILED') {
-            message = `Thanh toán thất bại. Lý do: ${String(payload.failureReason ?? 'Lỗi hệ thống')}`;
-          } else if (event.eventType === 'PAYMENT_REFUNDED') {
-            message = `Thanh toán đã được hoàn tiền ${String(payload.amount ?? '')} VND.`;
-          } else if (event.eventType === 'PAYMENT_CANCELLED') {
-            message = `Thanh toán đã bị hủy.`;
-          } else {
-            // PAYMENT_EXPIRED và các type khác không có trong whitelist notification-service
-            // → đánh dấu SENT ngay, không gửi
-            await prisma.outboxEvent.update({
-              where: { id: event.id },
-              data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
-            });
-            continue;
-          }
-
-          const userId = String(payload.userId ?? '');
-          const mqPayload = { userId, type: event.eventType, message };
-
-          // --- Thử RabbitMQ trước ---
-          let sent = false;
-          try {
-            sent = await publish('payment.events', ROUTING_KEY, mqPayload, { messageId: event.id });
-          } catch {
-            sent = false;
-          }
-
-          if (sent) {
-            // RabbitMQ đã confirm — đánh dấu thành công
-            await prisma.outboxEvent.update({
-              where: { id: event.id },
-              data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
-            });
-            console.log(`[Outbox] Event ${event.id} sent via RabbitMQ.`);
-            continue;
-          }
-
-          // --- Fallback: HTTP POST sang notification-service ---
-          console.warn(`[Outbox] RabbitMQ unavailable for event ${event.id}, falling back to HTTP.`);
-          await notificationClient.send(userId, event.eventType, message);
-
-          await prisma.outboxEvent.update({
-            where: { id: event.id },
-            data: { status: OutboxEventStatus.SENT, sentAt: new Date() }
-          });
-          console.log(`[Outbox] Event ${event.id} sent via HTTP fallback.`);
-
-        } catch (err: unknown) {
-          const axiosErr = err as { response?: { status?: number; data?: unknown }; message?: string };
-          console.error(
-            `[Outbox] Lỗi khi gửi event ${event.id}:`,
-            axiosErr?.response?.data ?? axiosErr?.message
-          );
-
-          const httpStatus = axiosErr?.response?.status;
-
-          if (httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500) {
-            // Lỗi 4xx từ notification-service (payload sai, type không hợp lệ)
-            // → đánh dấu FAILED, không retry (chỉ áp dụng cho nhánh HTTP fallback)
-            await prisma.outboxEvent.update({
-              where: { id: event.id },
-              data: { status: OutboxEventStatus.FAILED }
-            });
-          } else {
-            // Lỗi mạng, 5xx, hoặc lỗi publish RabbitMQ → Exponential Backoff & DLQ
-            const newRetryCount = (event.retryCount ?? 0) + 1;
-
-            if (newRetryCount >= 5) {
-              console.error(`[Outbox DLQ] Event ${event.id} vượt quá số lần thử lại (5 lần). Chuyển sang FAILED.`);
-              await prisma.outboxEvent.update({
-                where: { id: event.id },
-                data: { status: OutboxEventStatus.FAILED, retryCount: newRetryCount }
-              });
-            } else {
-              const delaySeconds = Math.pow(2, newRetryCount);
-              const nextRetryAt = new Date(Date.now() + delaySeconds * 1000);
-              console.log(`[Outbox Backoff] Event ${event.id}. Thử lại lần ${newRetryCount} vào ${nextRetryAt.toISOString()}`);
-
-              await prisma.outboxEvent.update({
-                where: { id: event.id },
-                data: { retryCount: newRetryCount, nextRetryAt }
-              });
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[Outbox Scheduler Error]', error);
-    }
-    running = false;
-  });
-
-  console.log('Outbox Job started (runs every second)');
-};
+  cron.schedule('*/1 * * * * *', () => {
+    void drainOutbox().catch(error => {
+      console.error('[Payment Outbox] Drain failed', error instanceof Error ? error.message : 'unknown error')
+    })
+  })
+  void drainOutbox().catch(error => {
+    console.error('[Payment Outbox] Initial drain failed', error instanceof Error ? error.message : 'unknown error')
+  })
+  console.log('Outbox Job started (runs every second)')
+}

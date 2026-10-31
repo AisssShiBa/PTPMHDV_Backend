@@ -15,8 +15,7 @@ export function transactionPublicKey() {
     throw new Error('Auth transaction public key must use ES256 P-256');
   return value;
 }
-export function verifyPaymentToken(token: string) {
-  const publicKey = transactionPublicKey();
+export function verifyPaymentToken(token: string, publicKey = transactionPublicKey()) {
   try {
     const result = claims.parse(jwt.verify(token, publicKey, {
       algorithms: ['ES256'], issuer: 'finvault-auth-service', audience: 'finvault-payment-service'

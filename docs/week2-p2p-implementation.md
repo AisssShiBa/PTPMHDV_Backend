@@ -29,6 +29,13 @@ Payment kiểm ES256, issuer/audience, thời hạn tối đa 60 giây, `sub`, `
 `amount`, `jti`. Sai binding trả 403 `TXN_TOKEN_MISMATCH`, hết hạn trả 401
 `TXN_TOKEN_EXPIRED`, dùng lại trả 409 `TXN_TOKEN_REUSED`.
 
+Sau hợp nhất `main` vào `Huu` (31/10/2026), cả `/payments/p2p/quote` và
+`/payments/p2p/checkout` của main vẫn được giữ. Confirm cũng nhận header
+`X-Transaction-Token`; nếu gửi cả header và body thì hai token phải trùng nhau.
+Hai endpoint checkout chuyển tiền dùng chung workflow phục hồi và hold có hạn
+5 phút. Route confirm nội bộ chỉ dành cho các loại thanh toán khác, không bỏ qua
+PIN của chuyển tiền ví. Các API thanh toán khác và quyền đọc/hủy của ADMIN được giữ.
+
 ## Khôi phục khi service gặp sự cố
 
 - Auth ghi User và Outbox cùng transaction; publisher dùng lease, broker confirm
@@ -51,6 +58,13 @@ Payment kiểm ES256, issuer/audience, thời hạn tối đa 60 giây, `sub`, `
 
 Các migration mới: Auth Outbox; Wallet Inbox; Payment baseline và P2P/token.
 Docker Payment chuyển từ `db push` sang `migrate deploy`.
+
+Merge giữ baseline của Huu, migration destination/PROCESSING/Outbox lease của
+main và thêm `20261031_reconcile_transaction_tokens`. Migration tạo bảng token
+của main dùng `IF NOT EXISTS` để nhận bảng đã được Huu tạo trước đó; migration
+reconcile giữ các token đã dùng, đổi kiểu `jti` và bổ sung `userId` từ Payment.
+Outbox mới có lease/chống tranh chấp giữa worker, nhận cả payload Payment cũ
+và envelope v1 đã lưu của Huu mà không đổi eventId.
 
 DB sạch dùng trực tiếp `migrate deploy`. Với DB Payment cũ đã tạo bằng `db push`,
 cần sao lưu và đối chiếu schema với migration trước khi baseline migration history;

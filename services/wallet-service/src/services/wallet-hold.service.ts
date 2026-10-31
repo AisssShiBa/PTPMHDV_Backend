@@ -1,9 +1,10 @@
-import { HoldStatus, OwnerType, PrismaClient, TransferType } from "@prisma/client";
+import { HoldStatus, OwnerType, Prisma, PrismaClient, TransferType } from "@prisma/client";
 import { DomainException } from "../utils/domain.exception";
 import { assertWalletActive, conflict, insufficientBalance, money } from "../utils/wallet.helpers";
 import { LedgerService } from "./ledger.service";
 import { LimitService } from "./limit.service";
 import { getVnDay } from "../utils/timezone.helper";
+import { drainOutbox } from "../jobs/outbox.scheduler";
 
 const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, CONFLICT: 409 };
 const prisma = new PrismaClient();
@@ -20,7 +21,7 @@ export class WalletHoldService {
     referenceId: string,
     expiresAtValue: string,
     ownerType: OwnerType = OwnerType.USER,
-    destUserId: string,
+    destUserId?: string,
     destOwnerType: OwnerType = OwnerType.USER,
   ) {
     const amount = money(amountValue);
@@ -32,25 +33,27 @@ export class WalletHoldService {
     return await prisma.$transaction(async (tx) => {
       // 1. Lock Wallets: Lock Wallet first to avoid deadlock
       const ids = await this.ledgerService.getWalletIds(tx, [
-        { userId, ownerType }, { userId: destUserId, ownerType: destOwnerType }
+        { userId, ownerType }, ...(destUserId ? [{ userId: destUserId, ownerType: destOwnerType }] : [])
       ]);
       if (ids[0] === ids[1]) throw conflict('SAME_WALLET_TRANSFER', 'Wallets must differ');
       const wallets = await this.ledgerService.lockAndFetchWalletsTx(tx, ids);
-      const wallet = wallets[ids[0]], destWallet = wallets[ids[1]];
-      assertWalletActive(destWallet);
+      const wallet = wallets[ids[0]], destWallet = destUserId ? wallets[ids[1]] : null;
 
       const existing = await tx.walletHold.findUnique({
         where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
       });
 
       if (existing) {
-        if (!existing.amount.equals(amount) || existing.destinationWalletId !== destWallet.id) {
+        if (!existing.amount.equals(amount) || existing.destinationWalletId !== (destWallet?.id ?? null)) {
           throw conflict("REFERENCE_ID_REUSED", "referenceId was used with a different amount");
         }
         return { hold: existing, replayed: true };
       }
 
       assertWalletActive(wallet);
+      if (destWallet) {
+        assertWalletActive(destWallet);
+      }
 
       // 2. Kiểm tra hạn mức TRƯỚC KHI kiểm tra số dư (áp dụng cho USER wallet)
       let usageDay: string | null = null;
@@ -78,7 +81,7 @@ export class WalletHoldService {
       const hold = await tx.walletHold.create({
         data: {
           sourceWalletId: wallet.id,
-          destinationWalletId: destWallet.id,
+          destinationWalletId: destWallet ? destWallet.id : null,
           amount,
           referenceId,
           expiresAt,
@@ -131,10 +134,16 @@ export class WalletHoldService {
         });
 
         if (updated.count === 1) {
-          await tx.wallet.update({
-            where: { id: wallet.id },
-            data: { heldBalance: { decrement: hold.amount } }
-          });
+          const currentHeld = wallet.heldBalance;
+          const decrementAmount = currentHeld.gt(0)
+            ? (currentHeld.lt(hold.amount) ? currentHeld : hold.amount)
+            : new Prisma.Decimal(0);
+          if (decrementAmount.gt(0)) {
+            await tx.wallet.update({
+              where: { id: wallet.id },
+              data: { heldBalance: { decrement: decrementAmount } }
+            });
+          }
 
           // Hoàn hạn mức đúng row usageDay
           const usageDay = hold.usageDay || getVnDay(hold.createdAt);
@@ -182,6 +191,9 @@ export class WalletHoldService {
       };
     }, { maxWait: 15000, timeout: 25000 });
     if (result.expired) throw conflict("HOLD_EXPIRED", "Hold has expired and was released");
+    void drainOutbox().catch(error => {
+      console.error('[Wallet Outbox] Post-commit drain failed', error instanceof Error ? error.message : 'unknown error');
+    });
     return result;
   }
 
@@ -211,10 +223,16 @@ export class WalletHoldService {
       });
 
       if (updated.count === 1) {
-        await tx.wallet.update({
-          where: { id: wallet.id },
-          data: { heldBalance: { decrement: hold.amount } }
-        });
+        const currentHeld = wallet.heldBalance;
+        const decrementAmount = currentHeld.gt(0)
+          ? (currentHeld.lt(hold.amount) ? currentHeld : hold.amount)
+          : new Prisma.Decimal(0);
+        if (decrementAmount.gt(0)) {
+          await tx.wallet.update({
+            where: { id: wallet.id },
+            data: { heldBalance: { decrement: decrementAmount } }
+          });
+        }
 
         // Hoàn lại hạn mức đúng row usageDay
         const usageDay = hold.usageDay || getVnDay(hold.createdAt);
@@ -252,11 +270,20 @@ export class WalletHoldService {
           });
 
           if (updated.count === 1) {
-            // Safe to decrement because we secured the wallet lock and hold was confirmed PENDING
-            await tx.wallet.update({
+            const w = await tx.wallet.findUnique({
               where: { id: hold.sourceWalletId },
-              data: { heldBalance: { decrement: hold.amount } }
+              select: { heldBalance: true }
             });
+            const currentHeld = w?.heldBalance || new Prisma.Decimal(0);
+            const decrementAmount = currentHeld.gt(0)
+              ? (currentHeld.lt(hold.amount) ? currentHeld : hold.amount)
+              : new Prisma.Decimal(0);
+            if (decrementAmount.gt(0)) {
+              await tx.wallet.update({
+                where: { id: hold.sourceWalletId },
+                data: { heldBalance: { decrement: decrementAmount } }
+              });
+            }
 
             // Hoàn hạn mức đúng row usageDay
             const usageDay = hold.usageDay || getVnDay(hold.createdAt);

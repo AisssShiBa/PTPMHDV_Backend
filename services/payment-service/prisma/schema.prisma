@@ -17,6 +17,7 @@ enum PaymentType {
 
 enum PaymentStatus {
   PENDING
+  PROCESSING
   SUCCESS
   FAILED
   REFUNDED
@@ -26,6 +27,7 @@ enum PaymentStatus {
 
 enum OutboxEventStatus {
   PENDING
+  PROCESSING
   SENT
   FAILED
 }
@@ -39,11 +41,12 @@ enum IdempotencyStatus {
 model Payment {
   id                   String             @id @default(uuid()) @db.Uuid
   userId               String             @db.VarChar(50)
-  destinationUserId    String?            @db.VarChar(50)
   workflow             String             @default("IDLE")
   amount               Decimal            @db.Decimal(20, 2)
   type                 PaymentType
   referenceId          String             @db.VarChar(255)
+  destinationUserId    String?            @db.VarChar(50)
+  destinationOwnerType String?            @default("USER") @db.VarChar(20)
   callbackTopic        String             @db.VarChar(100)
   idempotencyKey       String             @db.VarChar(255)
   requestHash          String             @db.VarChar(255)
@@ -61,12 +64,6 @@ model Payment {
   @@index([status])
   @@unique([userId, idempotencyKey])
   @@index([idempotencyExpiresAt])
-}
-
-model UsedTransactionToken {
-  jti String @id @db.Uuid
-  paymentId String @db.Uuid
-  usedAt DateTime @default(now())
 }
 
 model PaymentHistory {
@@ -92,7 +89,10 @@ model OutboxEvent {
   sentAt      DateTime?         @db.Timestamp()
   retryCount  Int               @default(0)
   nextRetryAt DateTime?         @db.Timestamp()
+  lockedUntil DateTime?         @db.Timestamp(3)
+  lockToken   String?           @db.Uuid
 
+  @@index([status, nextRetryAt, lockedUntil])
   @@index([status, createdAt])
   @@index([nextRetryAt])
 }
@@ -144,4 +144,14 @@ model TopupAuditLog {
   topupRequest    TopupRequest @relation(fields: [topupRequestId], references: [id], onDelete: Cascade)
 
   @@index([topupRequestId])
+}
+
+model UsedTransactionToken {
+  jti       String   @id @db.VarChar(100)
+  paymentId String   @db.Uuid
+  userId    String   @db.VarChar(50)
+  usedAt    DateTime @default(now()) @db.Timestamp()
+
+  @@index([usedAt])
+  @@index([paymentId])
 }

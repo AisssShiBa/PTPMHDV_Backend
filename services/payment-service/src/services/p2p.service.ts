@@ -4,9 +4,10 @@ import { prisma } from '../utils/prisma';
 import { DomainException } from '../utils/domain.exception';
 import { verifyPaymentToken } from '../utils/transaction-token';
 import { WalletClient } from '../clients/wallet.client';
+import type { TransactionTokenPayload } from '../middlewares/transactionToken';
 
 type Checkout = { userId: string; destinationUserId: string; amount: string | number;
-  type: any; referenceId?: string; callbackTopic?: string; idempotencyKey: string };
+  destinationOwnerType?: string; type: any; referenceId?: string; callbackTopic?: string; idempotencyKey: string };
 const transactionOptions = { maxWait: 15000, timeout: 25000 };
 async function locked(tx: Prisma.TransactionClient, id: string) {
   await tx.$queryRaw`SELECT id FROM "Payment" WHERE id=${id}::uuid FOR UPDATE`;
@@ -37,14 +38,19 @@ export class P2pService {
     if (dto.type !== 'WALLET_TRANSFER') throw new DomainException(422, 'UNSUPPORTED_PAYMENT_TYPE', 'Checkout supports wallet transfers');
     if (dto.userId === dto.destinationUserId) throw new DomainException(400, 'SAME_WALLET_TRANSFER', 'Wallets must differ');
     const amount = new Prisma.Decimal(dto.amount);
-    const hash = createHash('sha256').update(JSON.stringify([amount.toFixed(0), dto.type, dto.destinationUserId, dto.referenceId || ''])).digest('hex');
+    if (!amount.isInteger() || !amount.isPositive()) throw new DomainException(400, 'INVALID_AMOUNT', 'Amount must be a positive whole VND value');
+    const ownerType = dto.destinationOwnerType || 'USER';
+    // Preserve the existing USER request hash while distinguishing other wallet owners.
+    const hashData = [amount.toFixed(0), dto.type, dto.destinationUserId, dto.referenceId || ''];
+    if (ownerType !== 'USER') hashData.push(ownerType);
+    const hash = createHash('sha256').update(JSON.stringify(hashData)).digest('hex');
     let payment: Payment;
     try {
       payment = await prisma.payment.create({ data: {
-        userId: dto.userId, destinationUserId: dto.destinationUserId, amount, type: dto.type,
+        userId: dto.userId, destinationUserId: dto.destinationUserId, destinationOwnerType: ownerType, amount, type: dto.type,
         referenceId: dto.referenceId || '', callbackTopic: 'finvault.events', idempotencyKey: dto.idempotencyKey,
         requestHash: hash, idempotencyStatus: 'PROCESSING', idempotencyExpiresAt: new Date(Date.now()+86400000),
-        holdId: randomUUID(), holdExpiresAt: new Date(Date.now()+900000), workflow: 'HOLDING',
+        holdId: randomUUID(), holdExpiresAt: new Date(Date.now()+300000), workflow: 'HOLDING',
         histories: { create: { toStatus: 'PENDING', note: 'Checkout requested' } }
       } });
     } catch (error: any) {
@@ -68,7 +74,7 @@ export class P2pService {
       if (payment.idempotencyStatus === 'FAILED') return { error: new DomainException(409, 'CHECKOUT_FAILED', 'Previous checkout failed') };
       if (payment.workflow !== 'HOLDING') return { payment };
       try {
-        await this.wallet.createHold(payment.userId, payment.amount.toString(), payment.holdId!, payment.holdExpiresAt!.toISOString(), payment.destinationUserId!);
+        await this.wallet.createHold(payment.userId, payment.amount.toString(), payment.holdId!, payment.holdExpiresAt!.toISOString(), payment.destinationUserId!, payment.destinationOwnerType || 'USER');
         return { payment: await tx.payment.update({ where: { id }, data: { workflow: 'IDLE', idempotencyStatus: 'COMPLETED' } }) };
       } catch (error) {
         if (error instanceof DomainException && error.status < 500) {
@@ -79,8 +85,8 @@ export class P2pService {
     }, transactionOptions);
   }
 
-  async confirm(id: string, userId: string, token: string) {
-    const authorization = verifyPaymentToken(token);
+  async confirm(id: string, userId: string, token: string | TransactionTokenPayload) {
+    const authorization = typeof token === 'string' ? verifyPaymentToken(token) : token;
     await prisma.$transaction(async tx => {
       const payment = await locked(tx, id);
       if (payment.userId !== userId || authorization.sub !== userId || authorization.paymentId !== id ||
@@ -89,10 +95,11 @@ export class P2pService {
         throw new DomainException(409, 'TXN_TOKEN_REUSED', 'Transaction token already used');
       if (payment.status !== 'PENDING' || payment.workflow !== 'IDLE' || payment.idempotencyStatus !== 'COMPLETED')
         throw new DomainException(409, 'PAYMENT_NOT_CONFIRMABLE', 'Payment cannot be confirmed');
-      await tx.usedTransactionToken.create({ data: { jti: authorization.jti, paymentId: id } });
+      await tx.usedTransactionToken.create({ data: { jti: authorization.jti, paymentId: id, userId } });
       await tx.payment.update({ where: { id }, data: { workflow: 'CONFIRMING' } });
     }, transactionOptions);
     const result = await this.resume(id);
+    if (result.status === 'EXPIRED') throw new DomainException(410, 'PAYMENT_EXPIRED', 'Payment hold expired');
     if (result.status === 'PENDING') throw new DomainException(503, 'PAYMENT_PROCESSING', 'Payment outcome is being reconciled; check its status');
     return result;
   }
@@ -107,7 +114,8 @@ export class P2pService {
         } catch (error) {
           // Do not compensate a possibly captured transfer with an unrelated credit.
           // A release distinguishes a captured hold from an uncaptured one.
-          payment = await tx.payment.update({ where: { id }, data: { workflow: 'RELEASING' } });
+          const expired = error instanceof DomainException && ['HOLD_EXPIRED', 'HOLD_NOT_CAPTURABLE'].includes(error.code);
+          payment = await tx.payment.update({ where: { id }, data: { workflow: 'RELEASING', failureReason: expired ? 'HOLD_EXPIRED' : 'CAPTURE_FAILED' } });
         }
         if (payment.workflow === 'CONFIRMING') return finish(tx, payment, 'SUCCESS');
       }
@@ -121,7 +129,7 @@ export class P2pService {
           }
           return payment; // Durable worker retries after Wallet recovers.
         }
-        return finish(tx, payment, 'FAILED', 'CAPTURE_FAILED');
+        return finish(tx, payment, payment.failureReason === 'HOLD_EXPIRED' ? 'EXPIRED' : 'FAILED', payment.failureReason || 'CAPTURE_FAILED');
       }
       return payment;
     }, transactionOptions);
@@ -140,7 +148,7 @@ export class P2pService {
   }
 
   async recover() {
-    const pending = await prisma.payment.findMany({ where: { status: 'PENDING', destinationUserId: { not: null },
+    const pending = await prisma.payment.findMany({ where: { status: 'PENDING', type: 'WALLET_TRANSFER', destinationUserId: { not: null },
       OR: [{ workflow: { not: 'IDLE' } }, { holdExpiresAt: { lt: new Date() } }] }, take: 50, orderBy: { updatedAt: 'asc' } });
     for (const payment of pending) {
       try {

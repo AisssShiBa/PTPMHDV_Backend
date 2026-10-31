@@ -281,7 +281,6 @@ services:
       - internal_net
     environment:
       - PORT=3005
-      - AUTH_TXN_PUBLIC_KEY_FILE=/run/secrets/auth_txn_public_key
       - NODE_ENV=production
       - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/payment_service
@@ -289,6 +288,7 @@ services:
       - WALLET_SERVICE_URL=http://wallet-service:3004
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
       - RABBITMQ_URL=${RABBITMQ_URL:-amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672}
+      - AUTH_TXN_PUBLIC_KEY_FILE=/run/secrets/auth_txn_public_key
       - VNP_TMN_CODE=${VNP_TMN_CODE:-}
       - VNP_HASH_SECRET=${VNP_HASH_SECRET:-}
       - VNP_URL=${VNP_URL:-}
@@ -296,9 +296,9 @@ services:
       - VNP_IPN_URL=${VNP_IPN_URL:-}
     secrets:
       - vnp_hash_secret
-      - auth_txn_public_key
       - gateway_public_key
       - internal_key
+      - auth_txn_public_key
     depends_on:
       postgres:
         condition: service_healthy

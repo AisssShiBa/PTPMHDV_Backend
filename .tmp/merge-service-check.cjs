@@ -1,0 +1,10 @@
+const { execFileSync } = require('node:child_process');
+const { readdirSync } = require('node:fs');
+const service = process.argv[2];
+if (service === 'wallet') delete process.env.RABBITMQ_URL;
+process.env.DATABASE_URL += '?schema=merge_verification';
+process.env.PAYMENT_OUTBOX_TEST_DATABASE_URL = process.env.DATABASE_URL;
+execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], { stdio: 'inherit' });
+const tests = readdirSync('tests').filter(name => name.endsWith('.test.ts')).map(name => 'tests/' + name);
+execFileSync(process.execPath, ['--import', 'tsx', '--test', ...tests], { stdio: 'inherit' });
+console.log(service + ' merge verification passed in isolated schema');
