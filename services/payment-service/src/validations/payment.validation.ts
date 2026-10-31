@@ -8,8 +8,7 @@ export const checkoutSchema = z.object({
       .refine((val) => !isNaN(Number(val)) && isFinite(Number(val)), {
         message: "amount phải là một số hợp lệ"
       })
-      .transform(Number)
-      .refine((val) => val > 0, {
+      .refine((val) => Number(val) > 0, {
         message: "amount phải lớn hơn 0"
       })
       .refine((val) => {
@@ -22,8 +21,8 @@ export const checkoutSchema = z.object({
     referenceId: z.string().optional(),
     destinationUserId: z.string().uuid({ message: "destinationUserId phải là UUID hợp lệ" }).optional(),
     destinationOwnerType: z.enum(['USER', 'MERCHANT', 'SYSTEM']).optional().default('USER'),
-    callbackTopic: z.string(),
-    idempotencyKey: z.string(),
+    callbackTopic: z.string().max(100).optional().default('finvault.events'),
+    idempotencyKey: z.string().min(1).max(255).optional(),
   }),
 });
 

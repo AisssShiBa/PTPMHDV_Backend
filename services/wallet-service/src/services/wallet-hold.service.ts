@@ -32,17 +32,19 @@ export class WalletHoldService {
 
     return await prisma.$transaction(async (tx) => {
       // 1. Lock Wallets: Lock Wallet first to avoid deadlock
-      const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
-      const destWallet = destUserId
-        ? await this.ledgerService.findWalletTx(tx, destUserId, destOwnerType)
-        : null;
+      const ids = await this.ledgerService.getWalletIds(tx, [
+        { userId, ownerType }, ...(destUserId ? [{ userId: destUserId, ownerType: destOwnerType }] : [])
+      ]);
+      if (ids[0] === ids[1]) throw conflict('SAME_WALLET_TRANSFER', 'Wallets must differ');
+      const wallets = await this.ledgerService.lockAndFetchWalletsTx(tx, ids);
+      const wallet = wallets[ids[0]], destWallet = destUserId ? wallets[ids[1]] : null;
 
       const existing = await tx.walletHold.findUnique({
         where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
       });
 
       if (existing) {
-        if (!existing.amount.equals(amount)) {
+        if (!existing.amount.equals(amount) || existing.destinationWalletId !== (destWallet?.id ?? null)) {
           throw conflict("REFERENCE_ID_REUSED", "referenceId was used with a different amount");
         }
         return { hold: existing, replayed: true };
@@ -98,7 +100,18 @@ export class WalletHoldService {
     ownerType: OwnerType = OwnerType.USER,
   ) {
     const result = await prisma.$transaction(async (tx) => {
-      const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
+      const source = await tx.wallet.findUnique({ where: { userId_ownerType: { userId, ownerType } } });
+      if (!source) throw new DomainException(404, 'WALLET_NOT_FOUND', 'Wallet not found');
+      const candidate = await tx.walletHold.findUnique({ where: { sourceWalletId_referenceId: { sourceWalletId: source.id, referenceId } } });
+      if (!candidate) throw new DomainException(404, 'HOLD_NOT_FOUND', 'Hold not found');
+      const ids = [source.id];
+      if (candidate.destinationWalletId) ids.push(candidate.destinationWalletId);
+      else {
+        const system = await tx.wallet.findUniqueOrThrow({ where: { systemCode: 'MAIN' } });
+        ids.push(system.id);
+      }
+      const wallets = await this.ledgerService.lockAndFetchWalletsTx(tx, ids);
+      const wallet = wallets[source.id];
       const hold = await tx.walletHold.findUnique({
         where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
       });
@@ -176,13 +189,11 @@ export class WalletHoldService {
         transactionId: movement.transactionId,
         replayed: movement.replayed,
       };
-    });
-    if (!result.expired) {
-      void drainOutbox().catch(error => {
-        console.error("[Wallet Outbox] Post-commit drain failed", error instanceof Error ? error.message : "unknown error");
-      });
-    }
+    }, { maxWait: 15000, timeout: 25000 });
     if (result.expired) throw conflict("HOLD_EXPIRED", "Hold has expired and was released");
+    void drainOutbox().catch(error => {
+      console.error('[Wallet Outbox] Post-commit drain failed', error instanceof Error ? error.message : 'unknown error');
+    });
     return result;
   }
 

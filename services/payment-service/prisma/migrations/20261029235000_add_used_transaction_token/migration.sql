@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "UsedTransactionToken" (
+CREATE TABLE IF NOT EXISTS "UsedTransactionToken" (
     "jti" VARCHAR(100) NOT NULL,
     "paymentId" UUID NOT NULL,
     "userId" VARCHAR(50) NOT NULL,

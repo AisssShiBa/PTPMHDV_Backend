@@ -317,6 +317,8 @@ services:
       - internal_net
     environment:
       - PORT=3001
+      - RABBITMQ_URL=${RABBITMQ_URL:?run node scripts/init-secrets.js}
+      - EVENT_EXCHANGE=finvault.events
       - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/auth_service
       - ACCESS_TOKEN_SECRET_FILE=/run/secrets/access_token_secret
@@ -327,6 +329,8 @@ services:
       - INTERNAL_KEY_FILE=/run/secrets/internal_key
       - CLIENT_URL=${CLIENT_URL:-http://localhost:5173}
     depends_on:
+      broker-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
 

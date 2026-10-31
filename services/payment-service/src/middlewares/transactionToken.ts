@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
 import fs from 'node:fs';
 import path from 'node:path';
+import { verifyPaymentToken } from '../utils/transaction-token';
+import { DomainException } from '../utils/domain.exception';
 
 export interface TransactionTokenPayload {
   iss: string;
@@ -51,7 +52,12 @@ export function getAuthTxnPublicKey(): string {
 }
 
 export const requireTransactionToken = (req: Request, res: Response, next: NextFunction) => {
-  const token = req.headers['x-transaction-token'];
+  const headerToken = req.headers['x-transaction-token'];
+  const bodyToken = req.body?.transactionToken;
+  if (headerToken && bodyToken && headerToken !== bodyToken) {
+    return res.status(403).json({ success: false, error: { code: 'TXN_TOKEN_MISMATCH', message: 'Header and body tokens differ' } });
+  }
+  const token = headerToken || bodyToken;
 
   if (!token || typeof token !== 'string') {
     return res.status(401).json({
@@ -78,11 +84,7 @@ export const requireTransactionToken = (req: Request, res: Response, next: NextF
   }
 
   try {
-    const claims = jwt.verify(token, publicKey, {
-      algorithms: ['ES256'],
-      issuer: 'finvault-auth-service',
-      audience: 'finvault-payment-service',
-    }) as TransactionTokenPayload;
+    const claims = verifyPaymentToken(token, publicKey);
 
     if (!claims.sub || !claims.paymentId || !claims.amount || !claims.jti) {
       return res.status(403).json({
@@ -94,9 +96,12 @@ export const requireTransactionToken = (req: Request, res: Response, next: NextF
       });
     }
 
-    req.transactionToken = claims;
+    req.transactionToken = { ...claims, iss: 'finvault-auth-service', aud: 'finvault-payment-service' };
     return next();
   } catch (error: any) {
+    if (error instanceof DomainException) {
+      return res.status(error.status).json({ success: false, error: { code: error.code, message: error.message } });
+    }
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({
         success: false,

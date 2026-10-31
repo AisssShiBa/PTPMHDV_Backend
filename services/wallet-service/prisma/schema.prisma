@@ -65,6 +65,12 @@ model Wallet {
   @@index([ownerType, status])
 }
 
+model WalletInbox {
+  eventId String @id
+  payloadHash String
+  processedAt DateTime @default(now())
+}
+
 model WalletOutboxEvent {
   id          String    @id @default(uuid()) @db.Uuid
   topic       String    @db.VarChar(100)

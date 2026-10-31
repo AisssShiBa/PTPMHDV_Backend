@@ -1,4 +1,4 @@
-import { createEventFromOutbox, createPublisher, type FinvaultEvent } from 'finvault-events'
+import { createEventFromOutbox, createPublisher, parseFinvaultEvent, type FinvaultEvent } from 'finvault-events'
 import type { OutboxEvent, Prisma } from '@prisma/client'
 
 type PaymentOutbox = Pick<OutboxEvent, 'id' | 'createdAt' | 'eventType' | 'aggregateId' | 'payload'>
@@ -29,6 +29,16 @@ function amountString(value: Prisma.JsonValue | undefined): string {
 export function buildPaymentFinvaultEvent(row: PaymentOutbox): FinvaultEvent | undefined {
   if (!isRecord(row.payload)) throw new TypeError('Payment outbox payload must be an object')
   const payload = row.payload
+  // Huu's durable P2P workflow already stores the complete event envelope.
+  // Keep its stable ID while using main's leased outbox and retry handling.
+  if (row.eventType.startsWith('payment.')) {
+    const event = parseFinvaultEvent(payload)
+    if (event.eventId !== row.id || event.eventType !== row.eventType ||
+        (event.data as Record<string, unknown>).paymentId !== row.aggregateId) {
+      throw new TypeError('Payment event envelope does not match its outbox row')
+    }
+    return event
+  }
   const senderId = requiredString(payload, 'userId')
   const paymentId = typeof payload.id === 'string' && payload.id.length > 0
     ? payload.id

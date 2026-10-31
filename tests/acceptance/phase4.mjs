@@ -1,11 +1,12 @@
 // One command, fresh Compose volumes, real HTTP/DB/broker/storage and explicit gaps.
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { prepare, command, docker, sql, root, pause } from './week2/runtime.mjs'
+import { prepare, command, docker, sql, root, pause, hostReady } from './week2/runtime.mjs'
 import { seed } from './seed.mjs'
 import { s11, s12, s13, k1, infrastructure, conservation, Blocked, pending } from './week2/scenarios.mjs'
 import { phase5Scenarios } from './week2/phase5-scenarios.mjs'
+import { executionFailure } from './week2/reporting.mjs'
 
 export async function runAcceptance(phase = 4) {
 const args = process.argv.slice(2)
@@ -16,6 +17,12 @@ if (args.some(arg => !['--keep', '--strict'].includes(arg))) {
 const ctx = await prepare()
 ctx.phase = phase
 const results = []
+function checkpoint() {
+  writeFileSync(resolve(ctx.directory, 'result.partial.json'), JSON.stringify({
+    phase, project: ctx.project, status: 'RUNNING', updatedAt: new Date().toISOString(),
+    automatedAcceptanceComplete: false, acceptanceComplete: false, results, requests: ctx.requests
+  }, null, 2))
+}
 let accounts
 console.log('Acceptance project: ' + ctx.project)
 console.log('Evidence: ' + ctx.directory)
@@ -29,10 +36,12 @@ async function check(id, label, fn, owner) {
   } catch (error) {
     // Never serialize child-process errors/stdout or response bodies containing credentials.
     const status = error instanceof Blocked ? 'BLOCKED' : 'FAIL'
-    const reason = error instanceof Blocked ? error.message : (error.code === 'ERR_ASSERTION' ? error.message.split('\n')[0] : 'Execution error; inspect the local run logs')
+    const reason = error instanceof Blocked ? error.message : (error.code === 'ERR_ASSERTION' ? error.message.split('\n')[0] : executionFailure(error))
     results.push({ id, label, owner, status, reason, durationMs: Date.now() - started })
     console.log(status + ' ' + id + ': ' + reason)
     return false
+  } finally {
+    checkpoint()
   }
 }
 async function regression(id, service, files) {
@@ -43,6 +52,9 @@ async function regression(id, service, files) {
       S3_PUBLIC_ENDPOINT: ctx.config.S3_PUBLIC_ENDPOINT } })
 }
 try {
+  await check('RUNNER-REGRESSION', 'Host readiness and credential-safe diagnostic regression', () =>
+    command(ctx, 'runner-regression', process.execPath, ['--test',
+      'tests/acceptance/week2/reporting.test.mjs', 'tests/acceptance/week2/host-ready.test.mjs']))
   await check('B2', 'Secret generation, file loading and source fallback regression', async () => {
     await command(ctx, 'b2', process.execPath, ['--test', 'tests/deployment/init-secrets.test.cjs',
       'packages/finvault-internal-auth/tests/secrets.test.cjs', 'tests/deployment/secret-policy.test.cjs'])
@@ -51,9 +63,11 @@ try {
   if (phase === 5) await check('WALLET-TIMEZONE', 'Wallet day/month boundaries use Vietnam time', () =>
     command(ctx, 'wallet-timezone', process.execPath, ['--import', 'tsx', '--test', 'tests/timezone.test.ts'],
       { cwd: resolve(root, 'services/wallet-service') }))
-  const started = await check('COMPOSE', 'Build and start a fresh isolated stack', () =>
-    command(ctx, 'compose-up', 'docker', [...ctx.composeArgs, 'up', '-d', '--build',
-      '--wait', '--wait-timeout', '240']))
+  const started = await check('COMPOSE', 'Build and start a fresh isolated stack with reachable host ports', async () => {
+    await command(ctx, 'compose-up', 'docker', [...ctx.composeArgs, 'up', '-d', '--build',
+      '--wait', '--wait-timeout', '480'])
+    await hostReady(ctx)
+  })
   if (started) {
     await check('B6-7', 'Compose, workers, broker, storage and API health', () => infrastructure(ctx))
     const seeded = await check('SEED', 'Demo accounts, KYC tiers, double-entry funding', async () => { accounts = await seed(ctx) })
@@ -89,6 +103,21 @@ try {
     if (migrated) {
       if (phase === 5) await check('AUTH-REGRESSION', 'Auth security, Gateway PIN aliases and independent rate limits',
         () => regression('auth-regression', 'auth', ['security', 'gateway', 'rateLimiter']))
+      await check('NOTIFICATION-REGRESSION', 'Notification inbox, socket, mapping, enrichment and retry tests', async () => {
+        sql(ctx, 'postgres', 'CREATE DATABASE notification_service_test')
+        const env = { ...ctx.env, NODE_ENV: 'test',
+          DATABASE_URL: 'postgresql://postgres:' + ctx.config.POSTGRES_PASSWORD_URLENCODED +
+            '@127.0.0.1:' + ctx.config.POSTGRES_HOST_PORT + '/notification_service_test',
+          RABBITMQ_URL: JSON.parse(readFileSync(resolve(ctx.directory, 'regression.json'), 'utf8')).rabbitmqUrl }
+        for (const key of ['GATEWAY_PUBLIC_KEY', 'GATEWAY_PUBLIC_KEY_FILE', 'INTERNAL_KEY_FILE', 'ACCESS_TOKEN_SECRET_FILE'])
+          delete env[key]
+        const cwd = resolve(root, 'services/notification-service')
+        await command(ctx, 'notification-migrate', process.execPath,
+          ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], { cwd, env })
+        const tests = readdirSync(resolve(cwd, 'tests')).filter(file => file.endsWith('.test.ts')).map(file => 'tests/' + file)
+        await command(ctx, 'notification-regression', process.execPath,
+          ['--import','tsx','--test','--test-concurrency=1', ...tests, 'scripts/financeEventsEnrichment.integration.ts'], { cwd, env })
+      })
       await check('B6-1', 'H1: auth negative cases and internal callers', async () => {
         await regression('b6-1', 'user', ['security', 'gateway'])
         await regression('b6-1', 'merchant', ['security'])
@@ -112,8 +141,8 @@ try {
     if (!results.some(row => row.id === id)) results.push({ id, owner, label, status: 'BLOCKED', reason: 'Earlier infrastructure/seed prerequisite failed' })
   results.push({ id: 'H9', status: 'DEFERRED', reason: 'Should deferred while K1/Wallet-Payment dependencies remain; merchant.status_updated is preserved and seed verifies publication' })
   if (phase === 5) results.push({ id: 'H10', status: 'DEFERRED', reason: 'Merchant portal depends on deferred H9; Phase 5 is frozen for new features' })
-  if (!args.includes('--keep')) await check('STOP', 'Stop this acceptance project; retain evidence and volumes', () =>
-    command(ctx, 'compose-stop', 'docker', [...ctx.composeArgs, 'stop']))
+  if (!args.includes('--keep')) await check('STOP', 'Remove this project containers/networks; retain evidence and volumes', () =>
+    command(ctx, 'compose-stop', 'docker', [...ctx.composeArgs, 'down', '--remove-orphans']))
   const report = { phase, project: ctx.project, completedAt: new Date().toISOString(),
     automatedAcceptanceComplete: results.filter(row => !['B6-8', 'H9', 'H10'].includes(row.id)).every(row => row.status === 'PASS'),
     acceptanceComplete: results.filter(row => !['H9', 'H10'].includes(row.id)).every(row => row.status === 'PASS'),

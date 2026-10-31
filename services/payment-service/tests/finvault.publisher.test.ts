@@ -10,6 +10,19 @@ const row = (eventType: string, payload: Record<string, unknown>) => ({
   payload
 })
 
+test('preserves durable P2P envelopes and rejects mismatched outbox identities', () => {
+  const envelope = {
+    eventId: '00000000-0000-4000-8000-000000000001',
+    eventType: 'payment.succeeded', eventVersion: 1,
+    occurredAt: '2026-10-30T12:00:00.000Z',
+    data: { paymentId: 'payment-1', senderId: 'sender', receiverId: 'receiver', amount: '50000' }
+  }
+  assert.deepEqual(buildPaymentFinvaultEvent(row(envelope.eventType, envelope)), envelope)
+  assert.throws(() => buildPaymentFinvaultEvent(row(envelope.eventType, {
+    ...envelope, eventId: '00000000-0000-4000-8000-000000000002'
+  })), /does not match/)
+})
+
 test('maps successful payment outbox rows to the versioned event envelope', () => {
   assert.deepEqual(buildPaymentFinvaultEvent(row('PAYMENT_SUCCESS', {
     id: 'payment-1',

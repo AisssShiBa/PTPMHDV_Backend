@@ -26,7 +26,7 @@ export class LedgerService {
     }
   }
 
-  private async getWalletIds(
+  async getWalletIds(
     tx: Prisma.TransactionClient, 
     specs: { userId?: string; ownerType: OwnerType; systemCode?: SystemWalletCode }[]
   ): Promise<number[]> {
@@ -50,7 +50,7 @@ export class LedgerService {
     return ids;
   }
 
-  private async lockAndFetchWalletsTx(tx: Prisma.TransactionClient, ids: number[]): Promise<Record<number, Wallet>> {
+  async lockAndFetchWalletsTx(tx: Prisma.TransactionClient, ids: number[]): Promise<Record<number, Wallet>> {
     const sortedIds = [...new Set(ids)].sort((a, b) => a - b);
     if (sortedIds.length > 0) {
       await tx.$queryRaw`SELECT id FROM "Wallet" WHERE id IN (${Prisma.join(sortedIds)}) ORDER BY id FOR UPDATE`;

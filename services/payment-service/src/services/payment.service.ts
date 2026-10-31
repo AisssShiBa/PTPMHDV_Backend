@@ -1,3 +1,4 @@
+import { P2pService } from './p2p.service';
 import { DomainException } from '../utils/domain.exception';
 import { PaymentStatus, OutboxEventStatus, PaymentType } from '../utils/enums';
 import { IdempotencyStatus, Prisma } from '@prisma/client';
@@ -31,6 +32,11 @@ export class PaymentService {
   async checkout(dto: CheckoutDto) {
     const destUserId = dto.destinationUserId || (dto.type === PaymentType.WALLET_TRANSFER ? dto.referenceId : undefined);
     const destOwnerType = dto.destinationOwnerType || (destUserId ? 'USER' : undefined);
+
+    if (dto.type === PaymentType.WALLET_TRANSFER) {
+      if (!destUserId) throw new DomainException(400, 'DESTINATION_REQUIRED', 'A destination wallet is required');
+      return new P2pService(this.walletClient).checkout({ ...dto, destinationUserId: destUserId, destinationOwnerType: destOwnerType });
+    }
 
     // Kiểm tra nghiệp vụ người nhận: khác người gửi, tồn tại, ví ACTIVE
     if (destUserId) {
@@ -131,7 +137,7 @@ export class PaymentService {
     // 2. Chạy nghiệp vụ Side-effect (Call sang Wallet Service)
     let holdSucceeded = false;
     try {
-      const destinationUserId = payment.destinationUserId || (dto.type === PaymentType.WALLET_TRANSFER ? dto.referenceId : undefined);
+      const destinationUserId = payment.destinationUserId || undefined;
       const destinationOwnerType = payment.destinationOwnerType || (destinationUserId ? 'USER' : undefined);
       await this.walletClient.createHold(dto.userId, dto.amount.toString(), payment.holdId!, payment.holdExpiresAt!.toISOString(), destinationUserId, destinationOwnerType);
       holdSucceeded = true;
@@ -161,6 +167,11 @@ export class PaymentService {
   async confirm(id: string, requesterUserId: string, tokenPayload: TransactionTokenPayload) {
     const payment = await prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+    if (payment.type === PaymentType.WALLET_TRANSFER && payment.status !== PaymentStatus.PROCESSING) {
+      const result = await new P2pService(this.walletClient).confirm(id, requesterUserId, tokenPayload);
+      triggerOutboxDrain();
+      return result;
+    }
 
     // 1. Kiểm tra quyền sở hữu (ownership)
     if (payment.userId !== requesterUserId || tokenPayload.sub !== requesterUserId) {
@@ -315,9 +326,6 @@ export class PaymentService {
       triggerOutboxDrain();
       return completed;
     } catch (captureError: any) {
-      if (captureError instanceof DomainException) {
-        throw captureError;
-      }
       console.error(`Confirm payment capture error for ${id}:`, captureError);
 
       // Nếu capture lỗi dứt khoát (Deterministic, e.g. 4xx từ wallet):
@@ -372,7 +380,7 @@ export class PaymentService {
         throw new DomainException(410, 'PAYMENT_EXPIRED', captureError.message || 'Giao dịch thanh toán đã hết hạn');
       }
 
-      if (captureError.isDeterministic) {
+      if (captureError.isDeterministic || (captureError instanceof DomainException && captureError.status < 500)) {
         if (payment.holdId) {
           await this.walletClient.releaseHold(payment.userId, payment.holdId);
         }
@@ -431,6 +439,9 @@ export class PaymentService {
   async internalConfirm(id: string) {
     const payment = await prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+    if (payment.type === PaymentType.WALLET_TRANSFER) {
+      throw new DomainException(403, 'TRANSACTION_TOKEN_REQUIRED', 'Wallet transfers require user PIN authorization');
+    }
 
     if (payment.status === PaymentStatus.SUCCESS) {
       throw new DomainException(409, 'PAYMENT_ALREADY_CONFIRMED', 'Payment has already been confirmed');
@@ -526,7 +537,6 @@ export class PaymentService {
       triggerOutboxDrain();
       return completed;
     } catch (captureError: any) {
-      if (captureError instanceof DomainException) throw captureError;
       console.error(`Internal confirm payment capture error for ${id}:`, captureError);
 
       const isHoldExpired =
@@ -577,7 +587,7 @@ export class PaymentService {
         throw new DomainException(410, 'PAYMENT_EXPIRED', captureError.message || 'Giao dịch thanh toán đã hết hạn');
       }
 
-      if (captureError.isDeterministic) {
+      if (captureError.isDeterministic || (captureError instanceof DomainException && captureError.status < 500)) {
         if (payment.holdId) {
           await this.walletClient.releaseHold(payment.userId, payment.holdId);
         }
@@ -635,6 +645,7 @@ export class PaymentService {
     const refunded = await prisma.$transaction(async (tx) => {
       const payment = await tx.payment.findUnique({ where: { id } });
       if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+      if (payment.destinationUserId) throw new DomainException(409, 'P2P_REFUND_UNSUPPORTED', 'P2P refunds require a reverse transfer');
       if (payment.status !== PaymentStatus.SUCCESS) {
         throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot refund.`);
       }
@@ -683,6 +694,11 @@ export class PaymentService {
   async cancel(id: string, requesterId: string, requesterRole?: string) {
     const payment = await prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+    if (payment.type === PaymentType.WALLET_TRANSFER) {
+      const result = await new P2pService(this.walletClient).cancel(id, requesterRole === 'ADMIN' ? undefined : requesterId);
+      triggerOutboxDrain();
+      return result;
+    }
     if (requesterRole !== 'ADMIN' && payment.userId !== requesterId) {
       throw new DomainException(403, 'FORBIDDEN', 'Payment belongs to another user');
     }
@@ -738,7 +754,7 @@ export class PaymentService {
   // Luồng này sẽ tạo payment với status PENDING và hold số tiền tương ứng
   // Sau đó user sẽ confirm payment để hoàn tất transaction
   // Hoặc user có thể cancel payment để hoàn tác transaction
-  // ** Luồng này dùng cho người dùng cuối user 
+  // ** Luồng này dùng cho người dùng cuối user
   async p2pQuote(senderId: string, destinationUserId: string, amountStr: string) {
     if (senderId === destinationUserId) {
       throw new DomainException(400, 'SELF_TRANSFER_NOT_ALLOWED', 'Không thể chuyển tiền cho chính mình');

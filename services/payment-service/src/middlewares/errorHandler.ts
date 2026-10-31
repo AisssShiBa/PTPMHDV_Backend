@@ -13,6 +13,7 @@ export const errorHandler = (
       error: {
         code: err.code,
         message: err.message,
+        ...(err.details === undefined ? {} : { details: err.details }),
       },
     });
   }

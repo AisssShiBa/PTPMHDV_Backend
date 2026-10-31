@@ -2,7 +2,10 @@ FROM node:20-alpine AS build
 RUN apk add --no-cache openssl
 WORKDIR /workspace/packages/finvault-internal-auth
 COPY packages/finvault-internal-auth/ ./
-RUN npm install && npm run build
+RUN npm ci && npm run build
+WORKDIR /workspace/packages/finvault-events
+COPY packages/finvault-events/ ./
+RUN npm ci && npm run build
 WORKDIR /workspace/services/auth-service
 COPY services/auth-service/package*.json ./
 COPY services/auth-service/prisma ./prisma

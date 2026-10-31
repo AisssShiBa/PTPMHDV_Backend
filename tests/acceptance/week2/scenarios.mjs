@@ -1,3 +1,4 @@
+import { transfer, checkout } from './p2p-scenarios.mjs'
 import assert from 'node:assert/strict'
 import { account, call, documents, sql, until, broker, pause, uuid, docker } from './runtime.mjs'
 
@@ -80,6 +81,7 @@ export async function k1(ctx, accounts) {
     body: { amount: '1250000', referenceId: 'k1-funding-' + uuid(), transferType: 'TOPUP' }
   })
   assert.equal((await call(ctx, '/users/me', { token: user.token })).data.kycTier, 0)
+  await checkout(ctx, user, accounts.binh, '1000000', uuid(), 422)
   await call(ctx, '/admin/kyc/' + user.profileId + '/documents', { token: accounts.admin.token })
   assert.equal((await review(ctx, accounts.admin, user, 'APPROVED')).data.kycTier, 1)
   await until(() => sql(ctx, 'user_service', "SELECT count(*) FROM user_outbox_events WHERE aggregate_id='" +
@@ -90,9 +92,7 @@ export async function k1(ctx, accounts) {
   await until(() => sql(ctx, 'wallet_service',
     `SELECT "kycTier" FROM "Wallet" WHERE "userId"='${user.id}' AND "ownerType"='USER'`) === '1',
     'K1: published KYC event did not update Wallet tier')
-  // Integrate the agreed Payment P2P/PIN contract here when Khoa/Dat deliver it.
-  // Direct Wallet transfer would bypass the acceptance requirement.
-  throw new Blocked('KYC approval, publication and real Wallet tier update passed; Payment P2P/PIN adapter still requires the agreed week-2 contract.')
+  await transfer(ctx, user, accounts.binh, '1000000')
 }
 export async function infrastructure(ctx) {
   for (const service of ['gateway', 'auth-service', 'user-service', 'merchant-service', 'admin-service',

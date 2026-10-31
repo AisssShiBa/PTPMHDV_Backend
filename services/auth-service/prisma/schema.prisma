@@ -54,6 +54,10 @@ model AuthOutboxEvent {
   publishedAt DateTime?    // Thời điểm bắn lên RabbitMQ thành công
   attempts    Int          @default(0) // Số lần thử phát lại nếu gặp sự cố
 
+  nextAttemptAt DateTime @default(now())
+  lockedUntil DateTime?
+  lockToken String?
+
   @@index([status, createdAt])
 }
 

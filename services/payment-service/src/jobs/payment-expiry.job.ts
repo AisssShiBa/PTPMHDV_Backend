@@ -1,3 +1,4 @@
+import { P2pService } from '../services/p2p.service';
 import cron from 'node-cron';
 import { OutboxEventStatus } from '../utils/enums';
 import { prisma } from '../utils/prisma';
@@ -7,12 +8,24 @@ import { drainOutbox } from './outbox.job';
 
 export const startPaymentExpiryJob = () => {
   const walletClient = new WalletClient();
+  const p2p = new P2pService(walletClient);
+  let recovering = false;
+  const recover = async () => {
+    if (recovering) return;
+    recovering = true;
+    try { await p2p.recover(); await drainOutbox(); }
+    catch { console.error('[Payment] Recovery will retry'); }
+    finally { recovering = false; }
+  };
+  setInterval(() => void recover(), 2000);
+  void recover();
 
   cron.schedule('*/30 * * * * *', async () => {
     try {
       const expiredPayments = await prisma.payment.findMany({
         where: {
           status: 'PENDING',
+          type: { not: 'WALLET_TRANSFER' },
           holdExpiresAt: { lt: new Date() }
         },
         take: 50,

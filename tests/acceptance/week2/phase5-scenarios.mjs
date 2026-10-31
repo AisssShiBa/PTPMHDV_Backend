@@ -1,7 +1,9 @@
+import { a4, a9, s4, s5, s6, s8, s15, s16, realtime, concurrentConfirm, ambiguousCapture } from './p2p-scenarios.mjs'
 import assert from 'node:assert/strict'
 import { account, call, sql, docker, command, uuid } from './runtime.mjs'
 import { s11, s12, s13, k1, conservation, Blocked } from './scenarios.mjs'
 import { walletA9, walletS6, s7, inlineExpiry, s10 } from './wallet-scenarios.mjs'
+import { realtimeUI } from './realtime-ui.mjs'
 
 const balance = async (ctx, user) => (await call(ctx, '/wallets/' + user.id + '/balance', { token: user.token })).data
 const ledgerCount = ctx => sql(ctx, 'wallet_service', 'SELECT count(*) FROM "LedgerEntry"')
@@ -110,75 +112,32 @@ async function s14(ctx, a) {
     }finally{a?.close();b?.close()}})().catch(()=>process.exit(1));`), 'ok')
 }
 
-async function capabilities(ctx) {
-  if (ctx.phase5Capabilities) return ctx.phase5Capabilities
-  const walletTier = sql(ctx, 'wallet_service', `SELECT count(*) FROM information_schema.columns
-    WHERE table_name='Wallet' AND column_name='kycTier'`) === '1'
-  const payment = JSON.parse(docker(ctx, 'exec', '-T', 'payment-service', 'node', '-e', `
-    const fs=require('fs');const routes=fs.readFileSync('src/routes/payment.routes.ts','utf8');
-    const service=fs.readFileSync('src/services/payment.service.ts','utf8');
-    const schema=fs.readFileSync('src/validations/payment.validation.ts','utf8');
-    console.log(JSON.stringify({internalConfirm:/confirm',\\s*requireInternalAuth/.test(routes),
-      tokenConsumption:/TXN_TOKEN_REUSED|usedTransactionToken|consumeTransactionToken/.test(service),
-      recipientField:/toUserId|recipientId|destinationUserId/.test(schema)}));`))
-  ctx.phase5Capabilities = { walletTier, ...payment }
-  return ctx.phase5Capabilities
-}
-async function requireTokens(ctx) {
-  const c = await capabilities(ctx)
-  if (c.internalConfirm || !c.tokenConsumption)
-    throw new Blocked('Payment confirm accepts INTERNAL_KEY only; USER transaction-token binding, replay storage and expiry handling are absent. Requires Dat/Khoa implementation and contract.')
-  throw new Blocked('Payment token contract changed; integrate the delivered owner scenario before accepting this case.')
-}
-async function requireLimits(ctx) {
-  const c = await capabilities(ctx)
-  if (!c.walletTier) throw new Blocked('Wallet schema has no kycTier or tier/day usage implementation. Cannot verify limit rejection, concurrent usage or usage restoration. Owner: Khoa/Dat.')
-  throw new Blocked('Wallet tier/limits are delivered and tested separately by WALLET-A9/WALLET-S6. End-user Payment checkout/PIN is still missing; component checks do not certify the full A9/S6 flow. Owner: Khoa/Dat.')
-}
-async function requireCheckout(ctx, a) {
-  const c = await capabilities(ctx)
-  if (!c.recipientField) {
-    if (!ctx.checkoutProbe) {
-      const result = await call(ctx, '/payments/checkout', { method: 'POST', token: a.an.token, expected: null,
-        headers: { 'Idempotency-Key': 'phase5-' + uuid() },
-        body: { amount: '50000', type: 'WALLET_TRANSFER', referenceId: a.binh.id,
-          callbackTopic: 'acceptance.payment', idempotencyKey: 'phase5-' + uuid() } })
-      ctx.checkoutProbe = { status: result.httpStatus, code: result.error?.code }
-    }
-    throw new Blocked('Checkout/Wallet hold contract lacks a recipient field; real checkout returned ' +
-      ctx.checkoutProbe.status + ' ' + ctx.checkoutProbe.code + '. No successful hold exists for this scenario. Owner: Khoa.')
-  }
-  throw new Blocked('Integrate the delivered P2P checkout/hold contract before replay/failure assertions.')
-}
-async function requireP2p(ctx, a) {
-  const c = await capabilities(ctx)
-  if (!c.recipientField || c.internalConfirm)
-    throw new Blocked('End-user P2P checkout/confirm is not implemented; cannot test transfer-triggered realtime popup or broker-off recovery without bypassing PIN/Payment. Owners: Khoa/Nguyen.')
-  await requireCheckout(ctx, a)
-}
 export const phase5Scenarios = [
   ['A3', 'Dat', 'Five wrong PINs, lock even with correct PIN, fake-clock unlock', a3],
-  ['A4', 'Dat/Khoa', 'Transaction token single-use and 65-second expiry', requireTokens],
-  ['A9', 'Khoa', 'Tier-0 transaction/day limits and unchanged rejected usage', requireLimits],
-  ['R1', 'Nguyen', 'P2P realtime popup within 3 seconds in at least 9/10 runs', requireP2p],
+  ['A4', 'Dat/Khoa', 'Transaction token single-use and 65-second expiry', a4],
+  ['A9', 'Khoa', 'Tier-0 transaction/day limits and unchanged rejected usage', a9],
+  ['R1', 'Nguyen', 'P2P HTTP confirm to recipient Socket.IO within 3 seconds in at least 9/10 runs', realtime],
   ['K1', 'Huu/Dat/Khoa', 'KYC upgrade through tier-aware P2P transfer', k1],
   ['S1', 'Dat', 'Direct USER transfer denied without ledger mutation', s1],
   ['S2', 'Dat', 'Direct USER hold/capture/release/credit/debit denied', s2],
   ['S3', 'Khoa', 'Payment ownership on read, cancel and list', s3],
-  ['S4', 'Khoa', 'Confirm another payment with own token rejected', requireTokens],
-  ['S5', 'Dat', 'Changed amount rejected by transaction token binding', requireTokens],
-  ['S6', 'Khoa', 'Ten concurrent checkouts do not exceed daily usage', requireLimits],
+  ['S4', 'Khoa', 'Confirm another payment with own token rejected', s4],
+  ['S5', 'Dat', 'Changed amount rejected by transaction token binding', s5],
+  ['S6', 'Khoa', 'Ten concurrent checkouts do not exceed daily usage', s6],
   ['S7', 'Khoa', 'Release/expired hold restores daily usage', s7],
-  ['S8', 'Khoa', 'Wallet capture failure releases hold without crediting sender', requireCheckout],
+  ['S8', 'Khoa', 'Wallet capture failure releases hold without crediting sender', s8],
   ['S9', 'Khoa', 'Two real Wallet instances, one wallet per systemCode', s9],
   ['S10', 'Dat', 'Duplicate KYC event updates Wallet once', s10],
   ['S11', 'Huu', 'KYC approve/reject, audit and confirmed events', s11],
   ['S12', 'Huu', 'Private two-face URLs and actual expiration', s12],
   ['S13', 'Huu', 'Exact masked lookup, uniform errors and rate limit', s13],
   ['S14', 'Nguyen', 'Reused socket ticket rejected; fresh ticket accepted', s14],
-  ['S15', 'Khoa', 'Idempotency-Key replay returns same payment and one hold', requireCheckout],
-  ['S16', 'Nguyen/Khoa', 'P2P succeeds with broker off and notification catches up', requireP2p],
+  ['S15', 'Khoa', 'Idempotency-Key replay returns same payment and one hold', s15],
+  ['S16', 'Nguyen/Khoa', 'P2P succeeds with broker off and notification catches up', s16],
+  ['P2P-CONCURRENT', 'Huu', 'Concurrent confirmation consumes one token and captures once', concurrentConfirm],
+  ['P2P-AMBIGUOUS', 'Huu', 'Lost capture response reconciles without a compensating credit', ambiguousCapture],
   ['WALLET-A9', 'Khoa', 'Wallet component: tier-0 transfer limits preserve rejected state', walletA9],
   ['WALLET-S6', 'Khoa', 'Wallet component: ten concurrent holds respect daily usage', walletS6],
-  ['WALLET-S7-INLINE', 'Khoa', 'Inline expired capture commits usage restoration before returning 409', inlineExpiry]
+  ['WALLET-S7-INLINE', 'Khoa', 'Inline expired capture commits usage restoration before returning 409', inlineExpiry],
+  ['R1-UI', 'Huu/Nguyen', 'Real browser recipient popup within 3 seconds in at least 9/10 transfers', realtimeUI]
 ]

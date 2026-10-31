@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
-import { createServer } from 'node:net'
+import { createServer, createConnection } from 'node:net'
 import { mkdirSync, copyFileSync, readFileSync, writeFileSync, openSync, closeSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,6 +38,12 @@ export async function prepare() {
   config.S3_PUBLIC_ENDPOINT = 'http://127.0.0.1:' + config.MINIO_HOST_PORT
   config.KYC_URL_TTL_SECONDS = '2'
   const brokerPort = await port()
+  // Persist the actual run's ports as well as its secrets. A later diagnostic
+  // compose command must target the same endpoints, not .env.example defaults.
+  const envPath = resolve(directory, '.env')
+  writeFileSync(envPath, readFileSync(envPath, 'utf8') + '\n' +
+    ['GATEWAY_PORT', 'POSTGRES_HOST_PORT', 'MINIO_HOST_PORT', 'S3_PUBLIC_ENDPOINT', 'KYC_URL_TTL_SECONDS']
+      .map(key => key + '=' + config[key]).join('\n') + '\n', { mode: 0o600 })
   // Every run gets a new project, credentials, ports and volumes. No down -v.
   const secrets = Object.fromEntries(Object.entries({
     internal_key: 'internal_key.txt', access_token_secret: 'access_token_secret.txt',
@@ -49,7 +55,8 @@ export async function prepare() {
   const override = {
     services: {
       postgres: { volumes: [resolve(directory, 'secrets/init-db.sql').replaceAll('\\', '/') + ':/docker-entrypoint-initdb.d/init-db.sql:ro'] },
-      rabbitmq: { ports: ['127.0.0.1:' + brokerPort + ':5672'] }
+      rabbitmq: { ports: ['127.0.0.1:' + brokerPort + ':5672'],
+        healthcheck: { start_period: '120s', timeout: '20s', retries: 20 } }
     }, secrets
   }
   writeFileSync(resolve(directory, 'compose.json'), JSON.stringify(override, null, 2))
@@ -62,15 +69,48 @@ export async function prepare() {
     internalKey: config.INTERNAL_KEY
   }
   writeFileSync(resolve(directory, 'regression.json'), JSON.stringify(testConfig), { mode: 0o600 })
-  const env = { ...process.env, ...config, COMPOSE_PROJECT_NAME: project }
+  const env = { ...process.env, ...config, COMPOSE_PROJECT_NAME: project, COMPOSE_PARALLEL_LIMIT: '2' }
   // Child services must only read the secrets belonging to this run.
   for (const key of ['INTERNAL_KEY_FILE', 'ACCESS_TOKEN_SECRET_FILE', 'DATABASE_URL', 'COMPOSE_FILE']) delete env[key]
   const composeArgs = ['compose', '--project-directory', root, '--env-file', resolve(directory, '.env'),
     '-p', project, '-f', resolve(root, 'docker-compose.yml'), '-f', resolve(directory, 'compose.json')]
-  const ctx = { project, directory, config, env, composeArgs, requests: [],
+  const ctx = { project, directory, config, env, composeArgs, brokerPort, requests: [],
     base: 'http://127.0.0.1:' + config.GATEWAY_PORT }
   writeFileSync(resolve(directory, 'run.json'), JSON.stringify({ project, gateway: ctx.base, createdAt: new Date().toISOString() }, null, 2))
   return ctx
+}
+
+function tcpReady(port) {
+  return new Promise(resolve => {
+    const socket = createConnection({ host: '127.0.0.1', port: Number(port) })
+    const finish = ready => { socket.destroy(); resolve(ready) }
+    socket.setTimeout(1500)
+    socket.once('connect', () => finish(true))
+    socket.once('error', () => finish(false))
+    socket.once('timeout', () => finish(false))
+  })
+}
+
+export async function hostReady(ctx, timeout = 90000) {
+  // Compose healthchecks execute inside containers. Docker Desktop's host
+  // forwarding can still be unavailable when those healthchecks turn green.
+  const endpoints = [
+    ['Gateway', () => fetch(ctx.base + '/health', { signal: AbortSignal.timeout(1500) }).then(r => r.ok)],
+    ['MinIO', () => fetch(ctx.config.S3_PUBLIC_ENDPOINT + '/minio/health/live', { signal: AbortSignal.timeout(1500) }).then(r => r.ok)],
+    ['PostgreSQL', () => tcpReady(ctx.config.POSTGRES_HOST_PORT)],
+    ['RabbitMQ', () => tcpReady(ctx.brokerPort)]
+  ]
+  const deadline = Date.now() + timeout
+  let unavailable
+  do {
+    const ready = await Promise.all(endpoints.map(async ([name, probe]) =>
+      await probe().catch(() => false) ? null : name))
+    unavailable = ready.filter(Boolean)
+    if (!unavailable.length) return
+    await delay(500)
+  } while (Date.now() < deadline)
+  assert.fail('Host port forwarding unavailable: ' + unavailable.join(', ') +
+    '; inspect Docker Desktop port mappings (container health alone is insufficient)')
 }
 export function docker(ctx, ...args) {
   return execFileSync('docker', [...ctx.composeArgs, ...args], {
@@ -142,7 +182,13 @@ export async function account(ctx, label, email = label + '-' + uuid() + '@examp
   if (role === 'ADMIN') sql(ctx, 'auth_service', 'UPDATE "User" SET role=\'ADMIN\' WHERE id=\'' + record.id + '\'')
   const login = await call(ctx, '/auth/signin', { method: 'POST', body: record })
   record.token = login.data.accessToken
-  record.profileId = (await call(ctx, '/users/me', { token: record.token })).data.id
+  await until(async () => {
+    const profile = await call(ctx, '/users/me', { token: record.token, expected: null })
+    if (profile.httpStatus === 200) record.profileId = profile.data.id
+    return Boolean(record.profileId)
+  }, 'Signup profile provisioning timed out')
+  await until(async () => (await call(ctx, '/wallets/' + record.id + '/balance',
+    { token: record.token, expected: null })).httpStatus === 200, 'Signup wallet provisioning timed out')
   return record
 }
 

@@ -8,85 +8,30 @@ export class WalletClient {
     this.baseUrl = process.env.WALLET_SERVICE_URL || 'http://wallet-service:3004';
   }
 
+  private async request(userId: string, action: string, body: unknown) {
+    let response: Response;
+    try {
+      response = await fetch(this.baseUrl + '/api/wallets/' + userId + '/' + action, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-internal-key': internalKey! },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(5000)
+      });
+    } catch { throw new DomainException(503, 'WALLET_UNAVAILABLE', 'Wallet temporarily unavailable'); }
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const { code, message, details, ...metadata } = json.error || {};
+      throw new DomainException(response.status, code || 'WALLET_ERROR', message || 'Wallet rejected operation',
+        details ?? (Object.keys(metadata).length ? metadata : undefined));
+    }
+    return json.data;
+  }
   async createHold(userId: string, amount: string, referenceId: string, expiresAt: string, destinationUserId?: string, destinationOwnerType?: string) {
-    const body: any = { amount, referenceId, expiresAt };
-    if (destinationUserId) {
-      body.destinationUserId = destinationUserId;
-    }
-    if (destinationOwnerType) {
-      body.destinationOwnerType = destinationOwnerType;
-    }
-    const response = await fetch(`${this.baseUrl}/api/wallets/${userId}/hold`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-internal-key': internalKey!
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      const errorData: any = await response.json().catch(() => ({}));
-      const errorMsg = errorData.error?.message || errorData.message || 'Failed to hold amount in wallet';
-      throw new DomainException(400, 'HOLD_FAILED', errorMsg);
-    }
+    return this.request(userId, 'hold', { amount, referenceId, expiresAt, destinationUserId, destinationOwnerType });
   }
-
   async captureHold(userId: string, referenceId: string) {
-    let response;
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      response = await fetch(`${this.baseUrl}/api/wallets/${userId}/capture`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-internal-key': internalKey
-        },
-        body: JSON.stringify({ referenceId }),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-    } catch (networkErr: any) {
-      const isAbort = networkErr.name === 'AbortError';
-      const err: any = new Error(isAbort ? 'Wallet capture timed out' : `Wallet connection failed: ${networkErr.message}`);
-      err.isDeterministic = false;
-      err.isTimeout = isAbort;
-      throw err;
-    }
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const errorMsg = errorData.error?.message || errorData.message || 'Capture failed';
-      const err: any = new Error(errorMsg);
-      err.status = response.status;
-      err.code = errorData.error?.code || errorData.code;
-      err.isDeterministic = response.status >= 400 && response.status < 500;
-      throw err;
-    }
-
-    return await response.json();
+    return this.request(userId, 'capture', { referenceId });
   }
-
-  async releaseHold(userId: string, holdId: string) {
-    try {
-      const response = await fetch(`${this.baseUrl}/api/wallets/${userId}/release`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-internal-key': internalKey!
-        },
-        body: JSON.stringify({ referenceId: holdId })
-      });
-
-      if (!response.ok) {
-        console.error(`[Wallet Release] Failed to release hold ${holdId} for user ${userId}. Wallet returned non-OK.`);
-      } else {
-        console.log(`[Wallet Release] Successfully released hold ${holdId} for user ${userId}.`);
-      }
-    } catch (error: any) {
-      console.error(`[Wallet Release] Network/System Error releasing hold ${holdId} for user ${userId}:`, error.message);
-    }
+  async releaseHold(userId: string, referenceId: string) {
+    return this.request(userId, 'release', { referenceId });
   }
 
   async refundCredit(userId: string, amount: string, referenceId: string) {
@@ -144,4 +89,3 @@ export class WalletClient {
     }
   }
 }
-
