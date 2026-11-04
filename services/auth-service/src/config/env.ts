@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import { getGatewayPublicKey, loadSecretEnvironment } from 'finvault-internal-auth'
 
-loadSecretEnvironment(['INTERNAL_KEY', 'ACCESS_TOKEN_SECRET'])
+loadSecretEnvironment(['INTERNAL_KEY', 'ACCESS_TOKEN_SECRET', 'REDIS_URL'])
 
 function required(key: string): string {
   const value = process.env[key]
@@ -29,5 +29,6 @@ export const env = {
   walletServiceUrl: process.env.WALLET_SERVICE_URL || 'http://localhost:3004',
   internalApiKey: internalKey,
   internalKey,
-  clientUrl: process.env.CLIENT_URL || 'http://localhost:5173'
+  clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
+  redisUrl: process.env.REDIS_URL || 'redis://localhost:6379'
 }
