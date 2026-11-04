@@ -31,6 +31,7 @@ router.get('/:userId/balance', validate(schemas.ownerIdParamSchema.merge(schemas
 router.post('/:userId/hold', requireInternalOrAdmin, validate(schemas.holdSchema), walletController.hold);
 router.post('/:userId/capture', requireInternalOrAdmin, validate(schemas.referenceSchema), walletController.capture);
 router.post('/:userId/release', requireInternalOrAdmin, validate(schemas.referenceSchema), walletController.release);
+router.post('/:userId/refund', requireInternalOrAdmin, validate(schemas.refundSchema), walletController.refund);
 router.post('/:userId/transfer', requireInternalOrAdmin, validate(schemas.transferSchema), walletController.transfer);
 
 // credit và debit chỉ dành cho internal service call hoặc ADMIN (không phải USER thông thường)

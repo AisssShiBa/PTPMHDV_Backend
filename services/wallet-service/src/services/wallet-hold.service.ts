@@ -1,6 +1,6 @@
 import { HoldStatus, OwnerType, Prisma, PrismaClient, SystemWalletCode, TransferType } from "@prisma/client";
 import { DomainException } from "../utils/domain.exception";
-import { assertWalletActive, conflict, insufficientBalance, money } from "../utils/wallet.helpers";
+import { assertWalletActive, conflict, decimalToString, insufficientBalance, money } from "../utils/wallet.helpers";
 import { LedgerService } from "./ledger.service";
 import { LimitService } from "./limit.service";
 import { getVnDay } from "../utils/timezone.helper";
@@ -298,5 +298,104 @@ export class WalletHoldService {
       }
     }
     return released;
+  }
+
+  async refundCapture(
+    userId: string,
+    input: {
+      referenceId: string;
+      originalReferenceId: string;
+      amount: string;
+    },
+    ownerType: OwnerType = OwnerType.USER,
+  ) {
+    const reqAmount = money(input.amount);
+
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Tìm ví nguồn (ví nhận lại tiền hoàn)
+      const source = await tx.wallet.findUnique({
+        where: { userId_ownerType: { userId, ownerType } },
+      });
+      if (!source) {
+        throw new DomainException(HttpStatus.NOT_FOUND, 'WALLET_NOT_FOUND', 'Wallet not found');
+      }
+
+      // 2. Tìm bút toán Hold/Capture gốc theo sourceWalletId và originalReferenceId
+      const hold = await tx.walletHold.findUnique({
+        where: {
+          sourceWalletId_referenceId: {
+            sourceWalletId: source.id,
+            referenceId: input.originalReferenceId,
+          },
+        },
+      });
+
+      if (!hold || (hold.status !== HoldStatus.CAPTURED && hold.status !== HoldStatus.REFUNDED)) {
+        throw new DomainException(HttpStatus.NOT_FOUND, 'CAPTURE_NOT_FOUND', 'Original capture not found');
+      }
+
+      // 3. Kiểm tra số tiền hoàn (chỉ hỗ trợ hoàn toàn phần)
+      if (!hold.amount.equals(reqAmount)) {
+        throw new DomainException(422, 'AMOUNT_MISMATCH', 'Refund amount does not match original capture amount', {
+          capturedAmount: hold.amount.toString(),
+          refundAmount: reqAmount.toString(),
+        });
+      }
+
+      // 4. Xác định ví đối ứng (ví bị trừ tiền hoàn):
+      //    P2P: ví đích ban đầu (destinationWalletId)
+      //    Non-P2P: ví hệ thống SETTLEMENT
+      let destWalletId: number;
+      if (hold.destinationWalletId) {
+        destWalletId = hold.destinationWalletId;
+      } else {
+        const system = await tx.wallet.findUniqueOrThrow({
+          where: { systemCode: SystemWalletCode.SETTLEMENT },
+        });
+        destWalletId = system.id;
+      }
+
+      // 5. Khóa cả hai ví theo thứ tự nhất quán để tránh deadlock
+      const ids = [source.id, destWalletId];
+      const wallets = await this.ledgerService.lockAndFetchWalletsTx(tx, ids);
+      const lockedSource = wallets[source.id];
+      const lockedFrom = wallets[destWalletId];
+
+      // 6. Thực hiện bút toán đảo chiều (Debit lockedFrom, Credit lockedSource)
+      const movement = await this.ledgerService.moveMoneyTxInternal(tx, {
+        fromWallet: lockedFrom,
+        toWallet: lockedSource,
+        amount: reqAmount,
+        referenceId: input.referenceId,
+        transferType: TransferType.REFUND,
+        note: `Refund for ${input.originalReferenceId}`,
+      });
+
+      // 7. Cập nhật trạng thái WalletHold thành REFUNDED
+      await tx.walletHold.update({
+        where: { id: hold.id },
+        data: {
+          status: HoldStatus.REFUNDED,
+          refundReferenceId: input.referenceId,
+          refundTransactionId: movement.transactionId,
+        },
+      });
+
+      return {
+        transactionId: movement.transactionId,
+        referenceId: input.referenceId,
+        status: 'COMPLETED',
+        amount: decimalToString(reqAmount),
+        originalReferenceId: input.originalReferenceId,
+        createdAt: new Date(),
+        replayed: movement.replayed,
+      };
+    }, { maxWait: 15000, timeout: 25000 });
+
+    void drainOutbox().catch(error => {
+      console.error('[Wallet Outbox] Post-commit drain failed', error instanceof Error ? error.message : 'unknown error');
+    });
+
+    return result;
   }
 }

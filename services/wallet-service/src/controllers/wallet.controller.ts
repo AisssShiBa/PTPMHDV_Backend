@@ -137,3 +137,14 @@ export const history = async (req: Request, res: Response) => {
     }
   });
 };
+
+export const refund = async (req: Request, res: Response) => {
+  const userId = req.params.userId as string;
+  const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
+  const { referenceId, originalReferenceId, amount } = req.body;
+  const result = await walletHoldService.refundCapture(userId, { referenceId, originalReferenceId, amount }, ownerType);
+  res.json({
+    success: true,
+    data: result,
+  });
+};

@@ -85,3 +85,11 @@ export const historyQuerySchema = ownerIdParamSchema.merge(z.object({
     ownerType: z.string().optional(),
   }),
 }));
+
+export const refundSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).merge(z.object({
+  body: z.object({
+    referenceId: z.string().min(1, 'referenceId is required'),
+    originalReferenceId: z.string().min(1, 'originalReferenceId is required'),
+    amount: amountSchema,
+  }),
+}));

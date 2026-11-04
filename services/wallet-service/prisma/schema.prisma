@@ -36,6 +36,7 @@ enum HoldStatus {
   CAPTURED
   RELEASED
   EXPIRED
+  REFUNDED
 }
 
 enum SystemWalletCode {
@@ -108,6 +109,8 @@ model WalletHold {
   referenceId         String     @db.VarChar(255)
   status              HoldStatus @default(PENDING)
   transactionId       String?    @db.Uuid
+  refundReferenceId   String?    @unique @db.VarChar(255)
+  refundTransactionId String?    @db.Uuid
   usageDay            String?    @db.VarChar(10)
   expiresAt           DateTime
   createdAt           DateTime   @default(now())
