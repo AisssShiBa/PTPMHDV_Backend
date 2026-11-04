@@ -47,158 +47,173 @@ export const PinService = {
   },
 
   /**
-   * 2. Xác thực mã PIN giao dịch và cấp transactionToken (Verify PIN - Nhiệm vụ Đ7 & Đ8)
+   * 2. Xác thực mã PIN giao dịch và cấp transactionToken (Verify PIN - Nhiệm vụ Đ7 & Đ8, Đ15a)
    * 
-   * Quy tắc nghiệp vụ:
-   * - Nếu tài khoản đang trong thời gian khóa (< 30 phút): Từ chối ngay với mã lỗi PIN_LOCKED
-   * - Nhập sai: Tăng failedAttempts. Nếu chạm mốc 5 lần: Khóa 30 phút
-   * - Nhập đúng: Reset số lần sai về 0, cấp transactionToken (ES256, 60s) gắn chặt paymentId và amount
+   * Đ15a: Khắc phục triệt để Race Condition bằng SELECT ... FOR UPDATE bên trong transaction.
+   * Khi nhiều request đồng thời thử PIN sai, các request sẽ xếp hàng tuần tự.
+   * Ngay khi chạm ngưỡng 5 lần sai, tài khoản bị khóa 30 phút và các request tiếp theo bị chặn lập tức.
    */
   verifyPin: async (userId: string, input: VerifyPinInput) => {
-    const userPin = await prisma.userPin.findUnique({
-      where: { userId }
-    })
+    return await prisma.$transaction(async (tx) => {
+      // 1. SELECT ... FOR UPDATE để khóa dòng UserPin của user này lại.
+      // Tất cả các request song song khác của cùng userId sẽ PHẢI xếp hàng chờ tuần tự!
+      const userPins = await tx.$queryRaw<Array<{
+        id: string
+        userId: string
+        pinHash: string
+        failedAttempts: number
+        lockedUntil: Date | null
+      }>>`SELECT id, "userId", "pinHash", "failedAttempts", "lockedUntil" FROM "UserPin" WHERE "userId" = ${userId} FOR UPDATE`
 
-    if (!userPin) {
-      throw new AppError(404, 'PIN_NOT_SETUP', 'Bạn chưa thiết lập mã PIN giao dịch. Vui lòng cài đặt mã PIN trước.')
-    }
+      const userPin = userPins[0]
+      if (!userPin) {
+        throw new AppError(404, 'PIN_NOT_SETUP', 'Bạn chưa thiết lập mã PIN giao dịch. Vui lòng cài đặt mã PIN trước.')
+      }
 
-    const now = new Date()
+      const now = new Date()
 
-    // Kiểm tra trạng thái khóa tài khoản
-    if (userPin.lockedUntil && userPin.lockedUntil > now) {
-      const remainingSeconds = Math.ceil((userPin.lockedUntil.getTime() - now.getTime()) / 1000)
-      throw new AppError(
-        423,
-        'PIN_LOCKED',
-        `Mã PIN đã bị khóa do nhập sai quá ${MAX_FAILED_ATTEMPTS} lần liên tiếp. Vui lòng thử lại sau ${Math.ceil(remainingSeconds / 60)} phút.`,
-        {
-          lockedUntil: userPin.lockedUntil,
-          remainingSeconds
-        }
-      )
-    }
-
-    // So khớp mã PIN người dùng gửi lên với pinHash trong database
-    const isMatch = await bcrypt.compare(input.pin, userPin.pinHash)
-
-    if (!isMatch) {
-      // Nếu đã hết hạn khóa trước đó thì tính lại từ 1, ngược lại tăng tiếp
-      const isLockExpired = userPin.lockedUntil && userPin.lockedUntil <= now
-      const currentAttempts = isLockExpired ? 0 : userPin.failedAttempts
-      const nextAttempts = currentAttempts + 1
-
-      if (nextAttempts >= MAX_FAILED_ATTEMPTS) {
-        // Chạm ngưỡng 5 lần: Tiến hành khóa 30 phút
-        const lockedUntil = new Date(now.getTime() + LOCKOUT_DURATION_MS)
-
-        await prisma.userPin.update({
-          where: { userId },
-          data: {
-            failedAttempts: nextAttempts,
-            lockedUntil
-          }
-        })
-
+      // Kiểm tra trạng thái khóa tài khoản
+      if (userPin.lockedUntil && userPin.lockedUntil > now) {
+        const remainingSeconds = Math.ceil((userPin.lockedUntil.getTime() - now.getTime()) / 1000)
         throw new AppError(
           423,
           'PIN_LOCKED',
-          `Bạn đã nhập sai mã PIN ${MAX_FAILED_ATTEMPTS} lần liên tiếp. Chức năng giao dịch bị tạm khóa 30 phút.`,
+          `Mã PIN đã bị khóa do nhập sai quá ${MAX_FAILED_ATTEMPTS} lần liên tiếp. Vui lòng thử lại sau ${Math.ceil(remainingSeconds / 60)} phút.`,
           {
-            lockedUntil,
-            remainingSeconds: 30 * 60
-          }
-        )
-      } else {
-        // Cập nhật số lần nhập sai
-        await prisma.userPin.update({
-          where: { userId },
-          data: {
-            failedAttempts: nextAttempts,
-            lockedUntil: null
-          }
-        })
-
-        const remainingAttempts = MAX_FAILED_ATTEMPTS - nextAttempts
-        throw new AppError(
-          400,
-          'INVALID_PIN',
-          `Mã PIN không chính xác. Bạn còn ${remainingAttempts} lần thử.`,
-          {
-            remainingAttempts
+            lockedUntil: userPin.lockedUntil,
+            remainingSeconds
           }
         )
       }
-    }
 
-    // NHẬP ĐÚNG MÃ PIN:
-    // Reset số lần sai và thời gian khóa nếu trước đó có ghi nhận
-    if (userPin.failedAttempts > 0 || userPin.lockedUntil !== null) {
-      await prisma.userPin.update({
-        where: { userId },
-        data: {
-          failedAttempts: 0,
-          lockedUntil: null
+      // So khớp mã PIN người dùng gửi lên với pinHash trong database
+      const isMatch = await bcrypt.compare(input.pin, userPin.pinHash)
+
+      if (!isMatch) {
+        // Nếu đã hết hạn khóa trước đó thì tính lại từ 1, ngược lại tăng tiếp
+        const isLockExpired = userPin.lockedUntil && userPin.lockedUntil <= now
+        const currentAttempts = isLockExpired ? 0 : userPin.failedAttempts
+        const nextAttempts = currentAttempts + 1
+
+        if (nextAttempts >= MAX_FAILED_ATTEMPTS) {
+          // Chạm ngưỡng 5 lần: Tiến hành khóa 30 phút
+          const lockedUntil = new Date(now.getTime() + LOCKOUT_DURATION_MS)
+
+          await tx.userPin.update({
+            where: { userId },
+            data: {
+              failedAttempts: nextAttempts,
+              lockedUntil
+            }
+          })
+
+          throw new AppError(
+            423,
+            'PIN_LOCKED',
+            `Bạn đã nhập sai mã PIN ${MAX_FAILED_ATTEMPTS} lần liên tiếp. Chức năng giao dịch bị tạm khóa 30 phút.`,
+            {
+              lockedUntil,
+              remainingSeconds: 30 * 60
+            }
+          )
+        } else {
+          // Cập nhật số lần nhập sai
+          await tx.userPin.update({
+            where: { userId },
+            data: {
+              failedAttempts: nextAttempts,
+              lockedUntil: null
+            }
+          })
+
+          const remainingAttempts = MAX_FAILED_ATTEMPTS - nextAttempts
+          throw new AppError(
+            400,
+            'INVALID_PIN',
+            `Mã PIN không chính xác. Bạn còn ${remainingAttempts} lần thử.`,
+            {
+              remainingAttempts
+            }
+          )
         }
-      })
-    }
+      }
 
-    // Sinh transactionToken có hiệu lực 60s ký bằng ES256
-    const transactionToken = signTransactionToken(userId, input.paymentId, input.amount)
+      // NHẬP ĐÚNG MÃ PIN:
+      // Reset số lần sai và thời gian khóa nếu trước đó có ghi nhận
+      if (userPin.failedAttempts > 0 || userPin.lockedUntil !== null) {
+        await tx.userPin.update({
+          where: { userId },
+          data: {
+            failedAttempts: 0,
+            lockedUntil: null
+          }
+        })
+      }
 
-    return {
-      transactionToken,
-      expiresIn: 60, // 60 giây
-      message: 'Xác thực mã PIN thành công'
-    }
+      // Sinh transactionToken có hiệu lực 60s ký bằng ES256
+      const transactionToken = signTransactionToken(userId, input.paymentId, input.amount)
+
+      return {
+        transactionToken,
+        expiresIn: 60, // 60 giây
+        message: 'Xác thực mã PIN thành công'
+      }
+    })
   },
 
   /**
    * 3. Đổi mã PIN giao dịch (Change PIN)
    */
   changePin: async (userId: string, input: ChangePinInput) => {
-    const userPin = await prisma.userPin.findUnique({
-      where: { userId }
-    })
+    return await prisma.$transaction(async (tx) => {
+      const userPins = await tx.$queryRaw<Array<{
+        id: string
+        userId: string
+        pinHash: string
+        failedAttempts: number
+        lockedUntil: Date | null
+      }>>`SELECT id, "userId", "pinHash", "failedAttempts", "lockedUntil" FROM "UserPin" WHERE "userId" = ${userId} FOR UPDATE`
 
-    if (!userPin) {
-      throw new AppError(404, 'PIN_NOT_SETUP', 'Tài khoản chưa thiết lập mã PIN giao dịch.')
-    }
+      const userPin = userPins[0]
+      if (!userPin) {
+        throw new AppError(404, 'PIN_NOT_SETUP', 'Tài khoản chưa thiết lập mã PIN giao dịch.')
+      }
 
-    const now = new Date()
+      const now = new Date()
 
-    // Nếu đang bị khóa thì không cho phép đổi PIN để tránh lách luật
-    if (userPin.lockedUntil && userPin.lockedUntil > now) {
-      const remainingSeconds = Math.ceil((userPin.lockedUntil.getTime() - now.getTime()) / 1000)
-      throw new AppError(
-        423,
-        'PIN_LOCKED',
-        'Tài khoản đang bị khóa mã PIN, không thể thực hiện đổi mã PIN lúc này.',
-        { remainingSeconds }
-      )
-    }
+      // Nếu đang bị khóa thì không cho phép đổi PIN để tránh lách luật
+      if (userPin.lockedUntil && userPin.lockedUntil > now) {
+        const remainingSeconds = Math.ceil((userPin.lockedUntil.getTime() - now.getTime()) / 1000)
+        throw new AppError(
+          423,
+          'PIN_LOCKED',
+          'Tài khoản đang bị khóa mã PIN, không thể thực hiện đổi mã PIN lúc này.',
+          { remainingSeconds }
+        )
+      }
 
-    // Kiểm tra mã PIN cũ
-    const isOldPinMatch = await bcrypt.compare(input.oldPin, userPin.pinHash)
-    if (!isOldPinMatch) {
-      throw new AppError(400, 'INVALID_OLD_PIN', 'Mã PIN hiện tại không chính xác')
-    }
+      // Kiểm tra mã PIN cũ
+      const isOldPinMatch = await bcrypt.compare(input.oldPin, userPin.pinHash)
+      if (!isOldPinMatch) {
+        throw new AppError(400, 'INVALID_OLD_PIN', 'Mã PIN hiện tại không chính xác')
+      }
 
-    // Băm mã PIN mới và cập nhật
-    const newPinHash = await bcrypt.hash(input.newPin, BCRYPT_SALT_ROUNDS)
+      // Băm mã PIN mới và cập nhật
+      const newPinHash = await bcrypt.hash(input.newPin, BCRYPT_SALT_ROUNDS)
 
-    await prisma.userPin.update({
-      where: { userId },
-      data: {
-        pinHash: newPinHash,
-        failedAttempts: 0,
-        lockedUntil: null
+      await tx.userPin.update({
+        where: { userId },
+        data: {
+          pinHash: newPinHash,
+          failedAttempts: 0,
+          lockedUntil: null
+        }
+      })
+
+      return {
+        message: 'Đổi mã PIN giao dịch thành công'
       }
     })
-
-    return {
-      message: 'Đổi mã PIN giao dịch thành công'
-    }
   },
 
   /**
