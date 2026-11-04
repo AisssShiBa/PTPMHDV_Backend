@@ -29,6 +29,9 @@ const PUBLIC_ROUTES: PublicRoute[] = [
     { method: 'POST', path: '/api/auth/signin' },
     { method: 'POST', path: '/api/auth/refresh' },
     { method: 'POST', path: '/api/auth/signout' },
+    // Route khởi tạo và polling kiểm tra trạng thái QR Login (Web chưa đăng nhập)
+    { method: 'POST', path: '/api/auth/qr-login/init' },
+    { method: 'GET', path: /^\/api\/auth\/qr-login\/[a-zA-Z0-9_-]+\/status$/ },
     { method: '*', path: '/health' },
     { method: '*', path: /^\/api\/payments\/topups\/vnpay\/.*/ },
     { method: '*', path: /^\/api\/funding(\/.*)?$/ }, // Whitelist webhook/IPN VNPAY
