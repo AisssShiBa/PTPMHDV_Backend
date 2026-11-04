@@ -17,12 +17,12 @@ export class LedgerService {
   getSystemWalletCode(transferType: TransferType): SystemWalletCode {
     switch (transferType) {
       case TransferType.TOPUP:
-        return SystemWalletCode.TOPUP_POOL;
+        return SystemWalletCode.CLEARING_TOPUP;
       case TransferType.PAYMENT:
       case TransferType.REFUND:
       case TransferType.ADJUSTMENT:
       default:
-        return SystemWalletCode.MAIN;
+        return SystemWalletCode.SETTLEMENT;
     }
   }
 
@@ -41,9 +41,9 @@ export class LedgerService {
         if (!w) throw new DomainException(HttpStatus.NOT_FOUND, "WALLET_NOT_FOUND", "Wallet was not found");
         ids.push(w.id);
       } else if (spec.ownerType === OwnerType.SYSTEM) {
-        // Fallback default system wallet: MAIN
-        const w = await tx.wallet.findUnique({ where: { systemCode: SystemWalletCode.MAIN }, select: { id: true } });
-        if (!w) throw new DomainException(HttpStatus.INTERNAL_SERVER_ERROR, "SYSTEM_WALLET_NOT_FOUND", "System wallet MAIN missing");
+        // Fallback default system wallet: SETTLEMENT
+        const w = await tx.wallet.findUnique({ where: { systemCode: SystemWalletCode.SETTLEMENT }, select: { id: true } });
+        if (!w) throw new DomainException(HttpStatus.INTERNAL_SERVER_ERROR, "SYSTEM_WALLET_NOT_FOUND", "System wallet SETTLEMENT missing");
         ids.push(w.id);
       }
     }
@@ -154,7 +154,7 @@ export class LedgerService {
     return result;
   }
 
-  async getSystemWalletTx(tx: Prisma.TransactionClient, systemCode: SystemWalletCode = SystemWalletCode.MAIN): Promise<Wallet> {
+  async getSystemWalletTx(tx: Prisma.TransactionClient, systemCode: SystemWalletCode = SystemWalletCode.SETTLEMENT): Promise<Wallet> {
     const ids = await this.getWalletIds(tx, [{ ownerType: OwnerType.SYSTEM, systemCode }]);
     const wallets = await this.lockAndFetchWalletsTx(tx, ids);
     return wallets[ids[0]];

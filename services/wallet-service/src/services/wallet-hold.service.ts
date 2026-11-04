@@ -1,4 +1,4 @@
-import { HoldStatus, OwnerType, Prisma, PrismaClient, TransferType } from "@prisma/client";
+import { HoldStatus, OwnerType, Prisma, PrismaClient, SystemWalletCode, TransferType } from "@prisma/client";
 import { DomainException } from "../utils/domain.exception";
 import { assertWalletActive, conflict, insufficientBalance, money } from "../utils/wallet.helpers";
 import { LedgerService } from "./ledger.service";
@@ -107,7 +107,7 @@ export class WalletHoldService {
       const ids = [source.id];
       if (candidate.destinationWalletId) ids.push(candidate.destinationWalletId);
       else {
-        const system = await tx.wallet.findUniqueOrThrow({ where: { systemCode: 'MAIN' } });
+        const system = await tx.wallet.findUniqueOrThrow({ where: { systemCode: SystemWalletCode.SETTLEMENT } });
         ids.push(system.id);
       }
       const wallets = await this.ledgerService.lockAndFetchWalletsTx(tx, ids);

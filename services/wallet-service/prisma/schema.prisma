@@ -39,9 +39,9 @@ enum HoldStatus {
 }
 
 enum SystemWalletCode {
-  MAIN
+  SETTLEMENT
   FEE
-  TOPUP_POOL
+  CLEARING_TOPUP
 }
 
 model Wallet {
