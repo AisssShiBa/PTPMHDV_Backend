@@ -4,6 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import paymentRoutes from './routes/payment.routes';
+import fundingVnpayRoutes from './funding/routes/vnpay.routes';
 import { errorHandler } from './middlewares/errorHandler';
 import { requireInternalAuth } from './middlewares/internalAuth';
 import { attachRequestId } from './middlewares/requestId';
@@ -27,6 +28,7 @@ app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'payment-ser
 app.post('/internal/payments/:id/confirm', requireInternalAuth, attachRequestId, validate(paramIdSchema), paymentController.internalConfirm);
 
 app.use('/api/payments', paymentRoutes);
+app.use('/api/funding/vnpay', fundingVnpayRoutes);
 
 app.use(errorHandler);
 
