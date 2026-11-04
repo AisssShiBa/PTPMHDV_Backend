@@ -3,6 +3,7 @@ import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import authRoute from './routes/authRoute'
 import pinRoute from './routes/pinRoute'
+import qrLoginRoute from './routes/qrLoginRoute'
 import { attachRequestId } from './middlewares/requestId'
 import { errorHandler } from './middlewares/errorHandler'
 import { env } from './config/env'
@@ -61,14 +62,17 @@ app.get('/api/auth/health', (_req, res) => {
   res.status(200).json({ status: 'ok', service: 'auth-service' })
 })
 
-// 4. Tuyến đường xác thực tài khoản thông thường (Public Auth)
+// 5. Tuyến đường xác thực tài khoản thông thường (Public Auth: signup, signin, refresh, signout)
 app.use('/api/auth', authRoute)
 
-// 5. Tuyến đường xác thực giao dịch cấp 2 (Auth-Txn: Mã PIN & transactionToken)
+// 6. Tuyến đường xác thực đăng nhập qua mã QR (QR Login: init, status, confirm)
+app.use('/api/auth/qr-login', qrLoginRoute)
+
+// 7. Tuyến đường xác thực giao dịch cấp 2 (Auth-Txn: Mã PIN & transactionToken)
 app.use('/api/auth-txn/pin', pinRoute)
 app.use('/api/auth/pin', pinRoute) // Hỗ trợ alias
 
-// 6. Xử lý Route không tồn tại (404)
+// 8. Xử lý Route không tồn tại (404)
 app.use((_req, res) => {
   res.status(404).json({
     success: false,
@@ -79,7 +83,7 @@ app.use((_req, res) => {
   })
 })
 
-// 7. Middleware bắt lỗi toàn cục
+// 9. Middleware bắt lỗi toàn cục
 app.use(errorHandler)
 
 export default app
