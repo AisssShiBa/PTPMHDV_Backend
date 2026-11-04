@@ -148,3 +148,15 @@ export const refund = async (req: Request, res: Response) => {
     data: result,
   });
 };
+
+export const lookupTransaction = async (req: Request, res: Response) => {
+  const referenceId = req.query.referenceId as string;
+  if (!referenceId) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_INPUT', message: 'referenceId query param is required' },
+    });
+  }
+  const result = await ledgerService.lookupByReferenceId(referenceId);
+  res.json({ success: true, data: result });
+};

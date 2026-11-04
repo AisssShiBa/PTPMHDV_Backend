@@ -320,7 +320,49 @@ export class WalletHoldService {
         throw new DomainException(HttpStatus.NOT_FOUND, 'WALLET_NOT_FOUND', 'Wallet not found');
       }
 
+      // Kiểm tra xem referenceId này đã được sử dụng ở hold nào khác chưa
+      const holdWithRef = await tx.walletHold.findFirst({
+        where: { refundReferenceId: input.referenceId },
+      });
+
       // 2. Tìm bút toán Hold/Capture gốc theo sourceWalletId và originalReferenceId
+      const candidate = await tx.walletHold.findUnique({
+        where: {
+          sourceWalletId_referenceId: {
+            sourceWalletId: source.id,
+            referenceId: input.originalReferenceId,
+          },
+        },
+      });
+
+      if (!candidate || (candidate.status !== HoldStatus.CAPTURED && candidate.status !== HoldStatus.REFUNDED)) {
+        throw new DomainException(HttpStatus.NOT_FOUND, 'CAPTURE_NOT_FOUND', 'Original capture not found');
+      }
+
+      if (holdWithRef && holdWithRef.id !== candidate.id) {
+        throw conflict('REFERENCE_ID_REUSED', 'referenceId was used with a different operation');
+      }
+
+      // 3. Xác định ví đối ứng (ví bị trừ tiền hoàn):
+      //    P2P: ví đích ban đầu (destinationWalletId)
+      //    Non-P2P: ví hệ thống SETTLEMENT
+      let destWalletId: number;
+      if (candidate.destinationWalletId) {
+        destWalletId = candidate.destinationWalletId;
+      } else {
+        const system = await tx.wallet.findUniqueOrThrow({
+          where: { systemCode: SystemWalletCode.SETTLEMENT },
+        });
+        destWalletId = system.id;
+      }
+
+      // 4. Khóa cả hai ví theo thứ tự nhất quán để tránh deadlock
+      const ids = [source.id, destWalletId];
+      const wallets = await this.ledgerService.lockAndFetchWalletsTx(tx, ids);
+      const lockedSource = wallets[source.id];
+      const lockedFrom = wallets[destWalletId];
+
+      // 5. Re-fetch hold sau khi có lock để chống race condition
       const hold = await tx.walletHold.findUnique({
         where: {
           sourceWalletId_referenceId: {
@@ -334,7 +376,27 @@ export class WalletHoldService {
         throw new DomainException(HttpStatus.NOT_FOUND, 'CAPTURE_NOT_FOUND', 'Original capture not found');
       }
 
-      // 3. Kiểm tra số tiền hoàn (chỉ hỗ trợ hoàn toàn phần)
+      // Lũy đẳng và Chống hoàn đôi
+      if (hold.status === HoldStatus.REFUNDED) {
+        if (hold.refundReferenceId === input.referenceId) {
+          if (!hold.amount.equals(reqAmount)) {
+            throw conflict('REFERENCE_ID_REUSED', 'referenceId was used with a different operation');
+          }
+          return {
+            transactionId: hold.refundTransactionId || '',
+            referenceId: input.referenceId,
+            status: 'COMPLETED',
+            amount: decimalToString(hold.amount),
+            originalReferenceId: input.originalReferenceId,
+            createdAt: new Date(),
+            replayed: true,
+          };
+        } else {
+          throw conflict('ALREADY_REFUNDED', 'Capture has already been refunded');
+        }
+      }
+
+      // 6. Kiểm tra số tiền hoàn (chỉ hỗ trợ hoàn toàn phần)
       if (!hold.amount.equals(reqAmount)) {
         throw new DomainException(422, 'AMOUNT_MISMATCH', 'Refund amount does not match original capture amount', {
           capturedAmount: hold.amount.toString(),
@@ -342,26 +404,7 @@ export class WalletHoldService {
         });
       }
 
-      // 4. Xác định ví đối ứng (ví bị trừ tiền hoàn):
-      //    P2P: ví đích ban đầu (destinationWalletId)
-      //    Non-P2P: ví hệ thống SETTLEMENT
-      let destWalletId: number;
-      if (hold.destinationWalletId) {
-        destWalletId = hold.destinationWalletId;
-      } else {
-        const system = await tx.wallet.findUniqueOrThrow({
-          where: { systemCode: SystemWalletCode.SETTLEMENT },
-        });
-        destWalletId = system.id;
-      }
-
-      // 5. Khóa cả hai ví theo thứ tự nhất quán để tránh deadlock
-      const ids = [source.id, destWalletId];
-      const wallets = await this.ledgerService.lockAndFetchWalletsTx(tx, ids);
-      const lockedSource = wallets[source.id];
-      const lockedFrom = wallets[destWalletId];
-
-      // Kiểm tra số dư ví bị trừ (INSUFFICIENT_FUNDS)
+      // 7. Kiểm tra số dư ví bị trừ (INSUFFICIENT_FUNDS)
       const available = lockedFrom.balance.sub(lockedFrom.heldBalance);
       if (lockedFrom.ownerType !== OwnerType.SYSTEM && available.lt(reqAmount)) {
         throw new DomainException(422, 'INSUFFICIENT_FUNDS', 'Insufficient available balance for refund', {
@@ -371,7 +414,7 @@ export class WalletHoldService {
         });
       }
 
-      // 6. Thực hiện bút toán đảo chiều (Debit lockedFrom, Credit lockedSource)
+      // 8. Thực hiện bút toán đảo chiều (Debit lockedFrom, Credit lockedSource)
       const movement = await this.ledgerService.moveMoneyTxInternal(tx, {
         fromWallet: lockedFrom,
         toWallet: lockedSource,
@@ -381,7 +424,7 @@ export class WalletHoldService {
         note: `Refund for ${input.originalReferenceId}`,
       });
 
-      // 7. Cập nhật trạng thái WalletHold thành REFUNDED
+      // 9. Cập nhật trạng thái WalletHold thành REFUNDED
       await tx.walletHold.update({
         where: { id: hold.id },
         data: {

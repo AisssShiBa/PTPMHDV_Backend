@@ -298,4 +298,22 @@ export class LedgerService {
       replayed: false,
     };
   }
+
+  async lookupByReferenceId(referenceId: string) {
+    const entry = await prisma.ledgerEntry.findFirst({
+      where: { referenceId },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!entry) {
+      return { exists: false };
+    }
+    return {
+      exists: true,
+      transactionId: entry.transactionId,
+      referenceId: entry.referenceId,
+      status: 'COMPLETED',
+      amount: decimalToString(entry.amount),
+      createdAt: entry.createdAt.toISOString(),
+    };
+  }
 }
