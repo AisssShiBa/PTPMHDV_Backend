@@ -5,9 +5,11 @@ import { randomUUID } from 'crypto';
 import { PaymentService } from '../src/services/payment.service';
 import { DomainException } from '../src/utils/domain.exception';
 import { createTestGatewayToken } from 'finvault-internal-auth';
+import { WalletClient } from '../src/clients/wallet.client';
 
 const prisma = new PrismaClient();
-const paymentService = new PaymentService();
+const walletClient = new WalletClient();
+const paymentService = new PaymentService(walletClient);
 
 async function createTestPayment(status: PaymentStatus = PaymentStatus.SUCCESS, amount = 100000) {
   const id = randomUUID();
@@ -32,14 +34,14 @@ async function createTestPayment(status: PaymentStatus = PaymentStatus.SUCCESS, 
 test('K13-7: Khởi tạo saga hoàn tiền thành công chuyển sang REFUNDING và ghi outbox event', async () => {
   const payment = await createTestPayment(PaymentStatus.SUCCESS, 150000);
 
-  const result = await paymentService.refund(payment.id, 'admin_1', 'ADMIN');
+  const result: any = await paymentService.refund(payment.id, 'admin_1', 'ADMIN');
 
   assert.equal(result.status, PaymentStatus.REFUNDING);
   assert.equal(result.replayed, false);
   assert.ok(result.refundRequestedAt);
 
   // Check DB Payment
-  const dbPayment = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+  const dbPayment: any = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
   assert.equal(dbPayment.status, PaymentStatus.REFUNDING);
   assert.ok(dbPayment.refundRequestedAt);
 
@@ -83,7 +85,7 @@ test('K13-7: Gọi lại khi đang REFUNDING hoặc đã REFUNDED trả lũy đ�
   // Manually update status to REFUNDED to test replay on REFUNDED
   await prisma.payment.update({
     where: { id: payment.id },
-    data: { status: PaymentStatus.REFUNDED, refundedAt: new Date() },
+    data: { status: PaymentStatus.REFUNDED, refundedAt: new Date() } as any,
   });
 
   const res3 = await paymentService.refund(payment.id, 'admin_1', 'ADMIN');

@@ -27,7 +27,7 @@ function triggerOutboxDrain(): void {
 }
 
 export class PaymentService {
-  constructor(private walletClient: WalletClient) { }
+  constructor(private walletClient: WalletClient = new WalletClient()) { }
 
   async checkout(dto: CheckoutDto) {
     const destUserId = dto.destinationUserId || (dto.type === PaymentType.WALLET_TRANSFER ? dto.referenceId : undefined);
