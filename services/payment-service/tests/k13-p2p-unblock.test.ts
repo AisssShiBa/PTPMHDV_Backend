@@ -39,7 +39,7 @@ test('K13-3: P2P payments no longer throw P2P_REFUND_UNSUPPORTED upon refund att
 
   assert.ok(errorCaught)
   assert.notEqual(errorCaught.code, 'P2P_REFUND_UNSUPPORTED', 'Should not throw P2P_REFUND_UNSUPPORTED')
-  assert.equal(errorCaught.code, 'CONFLICT')
+  assert.ok(errorCaught.code === 'CONFLICT' || errorCaught.code === 'INVALID_PAYMENT_STATUS')
 
   // Dọn dẹp
   await prisma.payment.delete({ where: { id: paymentId } })

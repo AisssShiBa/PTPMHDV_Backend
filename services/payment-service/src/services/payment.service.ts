@@ -641,49 +641,74 @@ export class PaymentService {
     }
   }
 
-  async refund(id: string) {
+  async refund(id: string, requesterId?: string, requesterRole?: string) {
     const refunded = await prisma.$transaction(async (tx) => {
-      const payment = await tx.payment.findUnique({ where: { id } });
-      if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+      const rows: any[] = await tx.$queryRaw`
+        SELECT "id", "status", "amount", "userId", "holdId", "destinationUserId", "refundRequestedAt", "refundedAt"
+        FROM "Payment"
+        WHERE "id" = ${id}::uuid
+        FOR UPDATE
+      `;
+
+      if (!rows || rows.length === 0) {
+        throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+      }
+      const payment = rows[0];
+
+      if (payment.status === PaymentStatus.REFUNDING || payment.status === PaymentStatus.REFUNDED) {
+        const current = await tx.payment.findUnique({ where: { id } });
+        return { ...current, replayed: true };
+      }
+
+      if (payment.status === PaymentStatus.REFUND_FAILED) {
+        throw new DomainException(409, 'REFUND_ALREADY_FAILED', 'Payment refund has failed and cannot be re-initiated');
+      }
       if (payment.status !== PaymentStatus.SUCCESS) {
-        throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot refund.`);
+        throw new DomainException(409, 'INVALID_PAYMENT_STATUS', `Payment is in ${payment.status} status. Cannot initiate refund.`);
       }
 
-      try {
-        await this.walletClient.refundCredit(payment.userId, payment.amount.toString(), `refund_${payment.id}`);
+      const requestedAt = new Date();
+      const referenceId = `refund_${id}`;
+      const initiator = requesterId || (requesterRole === 'ADMIN' ? 'ADMIN' : 'INTERNAL');
 
-        const updated = await tx.payment.update({
-          where: { id },
-          data: {
-            status: PaymentStatus.REFUNDED,
-            histories: {
-              create: {
-                id: randomUUID(),
-                fromStatus: PaymentStatus.SUCCESS,
-                toStatus: PaymentStatus.REFUNDED,
-                note: 'Refund successful',
-              }
-            }
-          }
-        });
+      const updated = await tx.payment.update({
+        where: { id },
+        data: {
+          status: PaymentStatus.REFUNDING,
+          refundRequestedAt: requestedAt,
+          histories: {
+            create: {
+              id: randomUUID(),
+              fromStatus: PaymentStatus.SUCCESS,
+              toStatus: PaymentStatus.REFUNDING,
+              note: `Refund saga initiated by ${initiator}`,
+            },
+          },
+        },
+      });
 
-        await tx.outboxEvent.create({
-          data: {
-            id: randomUUID(),
-            aggregateId: id,
-            eventType: 'PAYMENT_REFUNDED',
-            topic: payment.callbackTopic,
-            payload: JSON.parse(JSON.stringify(updated)),
-            status: OutboxEventStatus.PENDING,
-          }
-        });
+      await tx.outboxEvent.create({
+        data: {
+          id: randomUUID(),
+          aggregateId: id,
+          eventType: 'payment.refund_requested',
+          topic: 'payment.refund_requested',
+          payload: {
+            paymentId: id,
+            referenceId,
+            originalHoldId: payment.holdId ?? null,
+            userId: payment.userId,
+            destinationUserId: payment.destinationUserId ?? null,
+            amount: new Prisma.Decimal(payment.amount).toFixed(2),
+            requestedBy: initiator,
+            requestedAt: requestedAt.toISOString(),
+          },
+          status: OutboxEventStatus.PENDING,
+        },
+      });
 
-        return updated;
-      } catch (error: any) {
-        console.error(`Refund payment failed for ${id}:`, error);
-        throw new DomainException(500, 'INTERNAL_ERROR', 'Refund failed');
-      }
-    });
+      return { ...updated, replayed: false };
+    }, { maxWait: 10000, timeout: 25000 });
     triggerOutboxDrain();
     return refunded;
   }

@@ -32,6 +32,9 @@ export function buildPaymentFinvaultEvent(row: PaymentOutbox): FinvaultEvent | u
   // Huu's durable P2P workflow already stores the complete event envelope.
   // Keep its stable ID while using main's leased outbox and retry handling.
   if (row.eventType.startsWith('payment.')) {
+    if (row.eventType.startsWith('payment.refund')) {
+      return undefined;
+    }
     const event = parseFinvaultEvent(payload)
     if (event.eventId !== row.id || event.eventType !== row.eventType ||
         (event.data as Record<string, unknown>).paymentId !== row.aggregateId) {
