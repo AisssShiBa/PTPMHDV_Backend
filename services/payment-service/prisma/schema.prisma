@@ -13,6 +13,8 @@ enum PaymentType {
   MOVIE_TICKET
   TRAIN_TICKET
   WALLET_TRANSFER
+  PHONE_TOPUP
+  BILL_PAYMENT
 }
 
 enum PaymentStatus {
@@ -21,6 +23,8 @@ enum PaymentStatus {
   SUCCESS
   FAILED
   REFUNDED
+  REFUNDING
+  REFUND_FAILED
   CANCELLED
   EXPIRED
 }
