@@ -361,6 +361,16 @@ export class WalletHoldService {
       const lockedSource = wallets[source.id];
       const lockedFrom = wallets[destWalletId];
 
+      // Kiểm tra số dư ví bị trừ (INSUFFICIENT_FUNDS)
+      const available = lockedFrom.balance.sub(lockedFrom.heldBalance);
+      if (lockedFrom.ownerType !== OwnerType.SYSTEM && available.lt(reqAmount)) {
+        throw new DomainException(422, 'INSUFFICIENT_FUNDS', 'Insufficient available balance for refund', {
+          available: decimalToString(available),
+          required: decimalToString(reqAmount),
+          missing: decimalToString(reqAmount.sub(available)),
+        });
+      }
+
       // 6. Thực hiện bút toán đảo chiều (Debit lockedFrom, Credit lockedSource)
       const movement = await this.ledgerService.moveMoneyTxInternal(tx, {
         fromWallet: lockedFrom,
