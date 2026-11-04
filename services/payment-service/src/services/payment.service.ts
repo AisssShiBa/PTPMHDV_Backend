@@ -645,7 +645,6 @@ export class PaymentService {
     const refunded = await prisma.$transaction(async (tx) => {
       const payment = await tx.payment.findUnique({ where: { id } });
       if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
-      if (payment.destinationUserId) throw new DomainException(409, 'P2P_REFUND_UNSUPPORTED', 'P2P refunds require a reverse transfer');
       if (payment.status !== PaymentStatus.SUCCESS) {
         throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot refund.`);
       }
