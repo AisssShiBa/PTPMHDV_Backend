@@ -14,6 +14,7 @@ export interface ReleaseExpiredHoldsOptions {
   batchSize?: number;
   instanceId?: string;
   now?: Date;
+  walletId?: number;
 }
 
 export interface ReleaseExpiredHoldsResult {
@@ -138,7 +139,11 @@ export class WalletHoldService {
         return { expired: false as const, balance: wallet.balance, transactionId: hold.transactionId, replayed: true };
       }
 
-      if (hold.status === HoldStatus.RELEASED || hold.status === HoldStatus.EXPIRED) {
+      if (hold.status === HoldStatus.EXPIRED) {
+        throw conflict("HOLD_EXPIRED", "Hold has expired and was released");
+      }
+
+      if (hold.status === HoldStatus.RELEASED) {
         throw conflict("HOLD_NOT_CAPTURABLE", "Hold has already been released");
       }
 
@@ -222,6 +227,8 @@ export class WalletHoldService {
   ) {
     return await prisma.$transaction(async (tx) => {
       const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
+      // Khóa ví trước để đảm bảo thứ tự khóa nhất quán (Ví -> Hold)
+      await tx.$queryRaw`SELECT id FROM "Wallet" WHERE id = ${wallet.id} FOR UPDATE`;
       const hold = await tx.walletHold.findUnique({
         where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
       });
@@ -273,6 +280,7 @@ export class WalletHoldService {
     let batchSize = 100;
     let instanceId = process.env.INSTANCE_ID || process.env.HOSTNAME || randomUUID();
     let now = new Date();
+    let walletId: number | undefined;
 
     if (typeof optionsOrLimit === 'number') {
       batchSize = optionsOrLimit;
@@ -280,6 +288,7 @@ export class WalletHoldService {
       if (optionsOrLimit.batchSize !== undefined) batchSize = optionsOrLimit.batchSize;
       if (optionsOrLimit.instanceId !== undefined) instanceId = optionsOrLimit.instanceId;
       if (optionsOrLimit.now !== undefined) now = optionsOrLimit.now;
+      if (optionsOrLimit.walletId !== undefined) walletId = optionsOrLimit.walletId;
     } else {
       const envBatch = process.env.WALLET_HOLD_EXPIRY_BATCH_SIZE;
       if (envBatch) {
@@ -288,12 +297,17 @@ export class WalletHoldService {
       }
     }
 
+    const where: Prisma.WalletHoldWhereInput = {
+      status: HoldStatus.PENDING,
+      expiresAt: { lte: now }
+    };
+    if (walletId !== undefined) {
+      where.sourceWalletId = walletId;
+    }
+
     // 1. Quét danh sách ứng viên (candidate batch) không khóa theo thứ tự expiresAt ASC, id ASC
     const candidates = await prisma.walletHold.findMany({
-      where: {
-        status: HoldStatus.PENDING,
-        expiresAt: { lte: now }
-      },
+      where,
       select: {
         id: true,
         sourceWalletId: true

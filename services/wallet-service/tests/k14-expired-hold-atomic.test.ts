@@ -42,7 +42,7 @@ test('K14-2: Ví một hold hết hạn -> heldBalance về 0, balance gốc kh�
     data: { expiresAt: new Date(Date.now() - 5000) },
   });
 
-  const res = await holdService.releaseExpiredHolds({ instanceId: 'k14-2-single' });
+  const res = await holdService.releaseExpiredHolds({ instanceId: 'k14-2-single', walletId: user.wallet.id });
   assert.strictEqual(res.released >= 1, true);
 
   const wallet = await prisma.wallet.findUnique({
@@ -76,7 +76,7 @@ test('K14-2: Ví hai hold -> chỉ trừ đúng phần hold hết hạn, không 
   });
   assert.strictEqual(Number(walletBefore?.heldBalance), 250000);
 
-  const res = await holdService.releaseExpiredHolds({ instanceId: 'k14-2-dual' });
+  const res = await holdService.releaseExpiredHolds({ instanceId: 'k14-2-dual', walletId: user.wallet.id });
   assert.strictEqual(res.released >= 1, true);
 
   const walletAfter = await prisma.wallet.findUnique({
@@ -129,7 +129,7 @@ test('K14-2: Hoàn hạn mức đúng ngày khi hold tạo trước nửa đêm 
     },
   });
 
-  const res = await holdService.releaseExpiredHolds({ instanceId: 'k14-2-midnight' });
+  const res = await holdService.releaseExpiredHolds({ instanceId: 'k14-2-midnight', walletId: user.wallet.id });
   assert.strictEqual(res.released >= 1, true);
 
   // Kiểm tra spentDay của ngày hôm qua đã được trừ về 0
@@ -178,7 +178,7 @@ test('K14-2: Hold đã CAPTURED hoặc RELEASED không bị đụng', async () =
     ],
   });
 
-  await holdService.releaseExpiredHolds({ instanceId: 'k14-2-already-final' });
+  await holdService.releaseExpiredHolds({ instanceId: 'k14-2-already-final', walletId: user.wallet.id });
 
   const holdCap = await prisma.walletHold.findFirst({ where: { referenceId: refCap } });
   const holdRel = await prisma.walletHold.findFirst({ where: { referenceId: refRel } });
@@ -203,7 +203,7 @@ test('K14-2: LedgerEntry không đổi - hết hạn không sinh bút toán', as
     where: { walletId: user.wallet.id },
   });
 
-  await holdService.releaseExpiredHolds({ instanceId: 'k14-2-no-ledger' });
+  await holdService.releaseExpiredHolds({ instanceId: 'k14-2-no-ledger', walletId: user.wallet.id });
 
   const ledgerCountAfter = await prisma.ledgerEntry.count({
     where: { walletId: user.wallet.id },
@@ -235,7 +235,7 @@ test('K14-2: Lỗi giữa chừng rollback cả ba thay đổi (nguyên tử)', 
     data: { spentDay: 50000 },
   });
 
-  const res = await holdService.releaseExpiredHolds({ instanceId: 'k14-2-atomic-rollback' });
+  const res = await holdService.releaseExpiredHolds({ instanceId: 'k14-2-atomic-rollback', walletId: user.wallet.id });
   assert.strictEqual(res.errors >= 1, true);
 
   // Kiểm tra cả 3 thay đổi đều bị rollback:
