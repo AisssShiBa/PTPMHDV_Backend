@@ -148,6 +148,9 @@ test('K14-1: Hold lỗi không chặn hold khác (lỗi được log và đi ti�
   // refFail bị rollback nên vẫn PENDING
   const holdFail = await prisma.walletHold.findFirst({ where: { referenceId: refFail } });
   assert.strictEqual(holdFail?.status, HoldStatus.PENDING);
+
+  // Dọn dẹp hold lỗi để không ảnh hưởng test khác
+  await prisma.walletHold.deleteMany({ where: { referenceId: { in: [refFail, refOk] } } });
 });
 
 test('K14-1: Cuối mỗi lượt log đúng cấu trúc và số liệu', async () => {
@@ -199,4 +202,6 @@ test('K14-1: Cuối mỗi lượt log đúng cấu trúc và số liệu', async
   assert.strictEqual(parsed.skipped, result.skipped);
   assert.strictEqual(parsed.errors, result.errors);
   assert.strictEqual(parsed.durationMs, result.durationMs);
+
+  await prisma.walletHold.deleteMany({ where: { referenceId: ref } });
 });

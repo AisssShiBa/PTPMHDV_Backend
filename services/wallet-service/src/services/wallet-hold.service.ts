@@ -151,15 +151,17 @@ export class WalletHoldService {
 
         if (updated.count === 1) {
           const currentHeld = wallet.heldBalance;
-          const decrementAmount = currentHeld.gt(0)
-            ? (currentHeld.lt(hold.amount) ? currentHeld : hold.amount)
-            : new Prisma.Decimal(0);
-          if (decrementAmount.gt(0)) {
-            await tx.wallet.update({
-              where: { id: wallet.id },
-              data: { heldBalance: { decrement: decrementAmount } }
-            });
+          if (currentHeld.lt(hold.amount)) {
+            throw new DomainException(
+              HttpStatus.BAD_REQUEST,
+              'NEGATIVE_HELD_BALANCE',
+              `heldBalance (${currentHeld.toString()}) would become negative if hold amount (${hold.amount.toString()}) is deducted`
+            );
           }
+          await tx.wallet.update({
+            where: { id: wallet.id },
+            data: { heldBalance: { decrement: hold.amount } }
+          });
 
           // Hoàn hạn mức đúng row usageDay
           const usageDay = hold.usageDay || getVnDay(hold.createdAt);
@@ -240,15 +242,17 @@ export class WalletHoldService {
 
       if (updated.count === 1) {
         const currentHeld = wallet.heldBalance;
-        const decrementAmount = currentHeld.gt(0)
-          ? (currentHeld.lt(hold.amount) ? currentHeld : hold.amount)
-          : new Prisma.Decimal(0);
-        if (decrementAmount.gt(0)) {
-          await tx.wallet.update({
-            where: { id: wallet.id },
-            data: { heldBalance: { decrement: decrementAmount } }
-          });
+        if (currentHeld.lt(hold.amount)) {
+          throw new DomainException(
+            HttpStatus.BAD_REQUEST,
+            'NEGATIVE_HELD_BALANCE',
+            `heldBalance (${currentHeld.toString()}) would become negative if hold amount (${hold.amount.toString()}) is deducted`
+          );
         }
+        await tx.wallet.update({
+          where: { id: wallet.id },
+          data: { heldBalance: { decrement: hold.amount } }
+        });
 
         // Hoàn lại hạn mức đúng row usageDay
         const usageDay = hold.usageDay || getVnDay(hold.createdAt);
@@ -403,13 +407,9 @@ export class WalletHoldService {
             data: { heldBalance: { decrement: holdAmount } }
           });
 
-          // Hoàn hạn mức đúng row usageDay (trừ trực tiếp không clamp GREATEST)
+          // Hoàn hạn mức đúng row usageDay (trừ trực tiếp không clamp GREATEST, kiểm tra không để âm)
           if (wallet.userId && wallet.ownerType === OwnerType.USER) {
-            await tx.$executeRaw`
-              UPDATE "UserDailyUsage"
-              SET "spentDay" = "spentDay" - ${holdAmount}, "updatedAt" = NOW()
-              WHERE "userId" = ${wallet.userId} AND "day" = ${usageDay}
-            `;
+            await this.limitService.refundUsage(tx, wallet.userId, holdAmount, usageDay);
           }
 
           released++;
