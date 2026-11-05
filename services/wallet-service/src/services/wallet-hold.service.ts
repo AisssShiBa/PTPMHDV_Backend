@@ -1,4 +1,5 @@
 import { HoldStatus, OwnerType, Prisma, PrismaClient, SystemWalletCode, TransferType } from "@prisma/client";
+import { randomUUID } from "crypto";
 import { DomainException } from "../utils/domain.exception";
 import { assertWalletActive, conflict, decimalToString, insufficientBalance, money } from "../utils/wallet.helpers";
 import { LedgerService } from "./ledger.service";
@@ -8,6 +9,21 @@ import { drainOutbox } from "../jobs/outbox.scheduler";
 
 const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, CONFLICT: 409 };
 const prisma = new PrismaClient();
+
+export interface ReleaseExpiredHoldsOptions {
+  batchSize?: number;
+  instanceId?: string;
+  now?: Date;
+}
+
+export interface ReleaseExpiredHoldsResult {
+  instanceId: string;
+  scanned: number;
+  released: number;
+  skipped: number;
+  errors: number;
+  durationMs: number;
+}
 
 export class WalletHoldService {
   constructor(
@@ -246,58 +262,192 @@ export class WalletHoldService {
     });
   }
 
-  async releaseExpiredHolds(limit = 100) {
-    const holds = await prisma.walletHold.findMany({
+  async releaseExpiredHolds(
+    optionsOrLimit?: number | ReleaseExpiredHoldsOptions
+  ): Promise<ReleaseExpiredHoldsResult & { valueOf(): number }> {
+    const startTime = Date.now();
+    let batchSize = 100;
+    let instanceId = process.env.INSTANCE_ID || process.env.HOSTNAME || randomUUID();
+    let now = new Date();
+
+    if (typeof optionsOrLimit === 'number') {
+      batchSize = optionsOrLimit;
+    } else if (optionsOrLimit && typeof optionsOrLimit === 'object') {
+      if (optionsOrLimit.batchSize !== undefined) batchSize = optionsOrLimit.batchSize;
+      if (optionsOrLimit.instanceId !== undefined) instanceId = optionsOrLimit.instanceId;
+      if (optionsOrLimit.now !== undefined) now = optionsOrLimit.now;
+    } else {
+      const envBatch = process.env.WALLET_HOLD_EXPIRY_BATCH_SIZE;
+      if (envBatch) {
+        const parsed = parseInt(envBatch, 10);
+        if (!isNaN(parsed) && parsed > 0) batchSize = parsed;
+      }
+    }
+
+    // 1. Quét danh sách ứng viên (candidate batch) không khóa theo thứ tự expiresAt ASC, id ASC
+    const candidates = await prisma.walletHold.findMany({
       where: {
         status: HoldStatus.PENDING,
-        expiresAt: { lt: new Date() }
+        expiresAt: { lte: now }
       },
-      include: { sourceWallet: true },
-      take: limit
+      select: {
+        id: true,
+        sourceWalletId: true
+      },
+      orderBy: [
+        { expiresAt: 'asc' },
+        { id: 'asc' }
+      ],
+      take: batchSize
     });
 
+    const scanned = candidates.length;
     let released = 0;
-    for (const hold of holds) {
+    let skipped = 0;
+    let errors = 0;
+
+    for (const candidate of candidates) {
       try {
         await prisma.$transaction(async (tx) => {
-          // Lock wallet first to prevent deadlock and race conditions
-          await tx.$queryRaw`SELECT id FROM "Wallet" WHERE id = ${hold.sourceWalletId} FOR UPDATE`;
+          // Khóa Ví trước để nhất quán thứ tự Ví -> Hold
+          const walletRows = await tx.$queryRaw<Array<{
+            id: number;
+            heldBalance: Prisma.Decimal;
+            userId: string | null;
+            ownerType: OwnerType;
+          }>>`
+            SELECT id, "heldBalance", "userId", "ownerType"
+            FROM "Wallet"
+            WHERE id = ${candidate.sourceWalletId}
+            FOR UPDATE
+          `;
 
-          // Optimistic update: only update if it's still PENDING
+          if (!walletRows || walletRows.length === 0) {
+            skipped++;
+            return;
+          }
+          const wallet = walletRows[0];
+
+          // Khóa Hold với SKIP LOCKED
+          const holdRows = await tx.$queryRaw<Array<{
+            id: string;
+            amount: Prisma.Decimal;
+            usageDay: string | null;
+            createdAt: Date;
+            status: HoldStatus;
+            expiresAt: Date;
+          }>>`
+            SELECT id, amount, "usageDay", "createdAt", status, "expiresAt"
+            FROM "WalletHold"
+            WHERE id = ${candidate.id}::uuid
+              AND status = ${HoldStatus.PENDING}::"HoldStatus"
+              AND "expiresAt" <= ${now}
+            FOR UPDATE SKIP LOCKED
+          `;
+
+          if (!holdRows || holdRows.length === 0) {
+            // Đang bị instance khác khóa hoặc trạng thái đã đổi / chưa hết hạn
+            skipped++;
+            return;
+          }
+
+          const hold = holdRows[0];
+          const holdAmount = new Prisma.Decimal(hold.amount);
+          const currentHeld = new Prisma.Decimal(wallet.heldBalance);
+
+          // Kiểm tra không để heldBalance âm - nếu sắp âm thì rollback transaction đó, không clamp im lặng
+          if (currentHeld.lt(holdAmount)) {
+            throw new DomainException(
+              HttpStatus.BAD_REQUEST,
+              'NEGATIVE_HELD_BALANCE',
+              `heldBalance (${currentHeld.toString()}) would become negative if hold amount (${holdAmount.toString()}) is deducted`
+            );
+          }
+
+          const usageDay = hold.usageDay || getVnDay(hold.createdAt);
+
+          // Kiểm tra không để spentDay âm (nếu là USER wallet)
+          if (wallet.userId && wallet.ownerType === OwnerType.USER) {
+            const usageRows = await tx.$queryRaw<Array<{ spentDay: Prisma.Decimal }>>`
+              SELECT "spentDay"
+              FROM "UserDailyUsage"
+              WHERE "userId" = ${wallet.userId} AND "day" = ${usageDay}
+              FOR UPDATE
+            `;
+            if (usageRows && usageRows.length > 0) {
+              const currentSpent = new Prisma.Decimal(usageRows[0].spentDay);
+              if (currentSpent.lt(holdAmount)) {
+                throw new DomainException(
+                  HttpStatus.BAD_REQUEST,
+                  'NEGATIVE_SPENT_DAY',
+                  `spentDay (${currentSpent.toString()}) would become negative if hold amount (${holdAmount.toString()}) is refunded`
+                );
+              }
+            }
+          }
+
+          // Cập nhật WalletHold PENDING -> EXPIRED có điều kiện
           const updated = await tx.walletHold.updateMany({
             where: { id: hold.id, status: HoldStatus.PENDING },
             data: { status: HoldStatus.EXPIRED }
           });
 
-          if (updated.count === 1) {
-            const w = await tx.wallet.findUnique({
-              where: { id: hold.sourceWalletId },
-              select: { heldBalance: true }
-            });
-            const currentHeld = w?.heldBalance || new Prisma.Decimal(0);
-            const decrementAmount = currentHeld.gt(0)
-              ? (currentHeld.lt(hold.amount) ? currentHeld : hold.amount)
-              : new Prisma.Decimal(0);
-            if (decrementAmount.gt(0)) {
-              await tx.wallet.update({
-                where: { id: hold.sourceWalletId },
-                data: { heldBalance: { decrement: decrementAmount } }
-              });
-            }
-
-            // Hoàn hạn mức đúng row usageDay
-            const usageDay = hold.usageDay || getVnDay(hold.createdAt);
-            if (hold.sourceWallet.userId && hold.sourceWallet.ownerType === OwnerType.USER) {
-              await this.limitService.refundUsage(tx, hold.sourceWallet.userId, hold.amount, usageDay);
-            }
-            released++;
+          if (updated.count !== 1) {
+            skipped++;
+            return;
           }
+
+          // Trừ đúng amount của hold đó trên heldBalance
+          await tx.wallet.update({
+            where: { id: wallet.id },
+            data: { heldBalance: { decrement: holdAmount } }
+          });
+
+          // Hoàn hạn mức đúng row usageDay (trừ trực tiếp không clamp GREATEST)
+          if (wallet.userId && wallet.ownerType === OwnerType.USER) {
+            await tx.$executeRaw`
+              UPDATE "UserDailyUsage"
+              SET "spentDay" = "spentDay" - ${holdAmount}, "updatedAt" = NOW()
+              WHERE "userId" = ${wallet.userId} AND "day" = ${usageDay}
+            `;
+          }
+
+          released++;
         });
-      } catch (e) {
-        console.error('Failed to release hold', hold.id, e);
+      } catch (e: any) {
+        errors++;
+        console.error(JSON.stringify({
+          event: 'HOLD_RELEASE_ERROR',
+          instanceId,
+          holdId: candidate.id,
+          walletId: candidate.sourceWalletId,
+          code: e?.code || 'UNKNOWN_ERROR',
+          message: e?.message || String(e)
+        }));
       }
     }
-    return released;
+
+    const durationMs = Date.now() - startTime;
+    const summary = {
+      instanceId,
+      scanned,
+      released,
+      skipped,
+      errors,
+      durationMs,
+      valueOf() { return this.released; }
+    };
+
+    console.log(JSON.stringify({
+      instanceId,
+      scanned,
+      released,
+      skipped,
+      errors,
+      durationMs
+    }));
+
+    return summary;
   }
 
   async refundCapture(
