@@ -70,6 +70,7 @@ export function buildPaymentFinvaultEvent(row: PaymentOutbox): FinvaultEvent | u
       return createEventFromOutbox(row, 'payment.failed', { paymentId, senderId, reason })
     }
     case 'PAYMENT_EXPIRED':
+    case 'payment.expired':
       return createEventFromOutbox(row, 'payment.expired', { paymentId, senderId })
     default:
       return undefined
