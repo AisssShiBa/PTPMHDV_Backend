@@ -118,11 +118,12 @@ test('K14-4: OutboxEvent được ghi đúng schema finvault-events', async () =
   });
 
   const payload: any = event.payload;
-  assert.strictEqual(payload.paymentId, payment.id);
-  assert.strictEqual(payload.senderId, payment.userId);
+  const data: any = payload.data || payload;
+  assert.strictEqual(data.paymentId, payment.id);
+  assert.strictEqual(data.senderId, payment.userId);
 
   // Validate bằng schema chuẩn của FinVault Events
-  const parseResult = paymentExpiredSchema.safeParse(payload);
+  const parseResult = paymentExpiredSchema.safeParse(data);
   assert.strictEqual(parseResult.success, true, `Schema validation failed: ${JSON.stringify(parseResult.error)}`);
 
   // Dọn dẹp

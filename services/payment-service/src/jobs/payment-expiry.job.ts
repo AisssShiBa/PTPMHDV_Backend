@@ -99,13 +99,6 @@ export async function sweepExpiredPayments(
                 eventType: 'payment.expired',
                 eventVersion: 1,
                 occurredAt: new Date().toISOString(),
-                paymentId: payment.id,
-                senderId: payment.userId,
-                id: payment.id,
-                userId: payment.userId,
-                status: PaymentStatus.EXPIRED,
-                type: payment.type,
-                amount: payment.amount.toString(),
                 data: {
                   paymentId: payment.id,
                   senderId: payment.userId
