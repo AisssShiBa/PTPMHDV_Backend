@@ -1,0 +1,118 @@
+# N13 - API doi soat vi trong admin-service
+Environment: Windows, Node v24.21.0, Docker Docker version 29.8.0, build 88096ef
+Task: N13 (run/reports/adjust + ReconciliationRunLog + AnomalyAdjustment)
+SHA_CODE (feat(N13)): 3a00d40d600082e3a33956582e13bc2be224fe01
+SHA_BASE (origin/main): d6ac0a65c311ccbf9f09f64a3dd434b9ecd0b391
+Date: 2026-11-06 13:41:01 +07:00
+Test database: PostgreSQL that, container notification-postgres-test -> 127.0.0.1:5434, database admin_test
+DATABASE_URL: postgresql://notification_test:notification_test@127.0.0.1:5434/admin_test
+Commands: npm ci -> npx prisma migrate deploy -> npx tsc --noEmit -> npm test
+Test scope: integration test voi PostgreSQL THAT + FAKE WALLET HTTP SERVER.
+  KHONG goi wallet-service that. W2/W3/W4 chua ton tai tren main; W1 chua tra anomalies.
+  KHONG tuyen bo dat RC1 (isBalanced=true, 0 anomaly) vi chua chay tren cum that.
+--- npm ci ---
+
+added 399 packages in 24s
+node.exe : npm warn install-scripts 6 packages have install scripts not yet covered by allowScripts:
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn instal...y allowScripts::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+npm warn install-scripts   finvault-internal-auth@1.0.0 (prepare: npm run build)
+npm warn install-scripts   @prisma/client@6.19.3 (postinstall: node scripts/postinstall.js)
+npm warn install-scripts   @prisma/engines@6.19.3 (postinstall: node scripts/postinstall.js)
+npm warn install-scripts   bcrypt@6.0.0 (install: node-gyp-build)
+npm warn install-scripts   esbuild@0.28.2 (postinstall: node install.js)
+npm warn install-scripts   prisma@6.19.3 (preinstall: node scripts/preinstall-entry.js)
+npm warn install-scripts
+npm warn install-scripts Run `npm install-scripts ls` to review, or `npm install-scripts approve <pkg>` to allow.
+
+--- npx prisma generate ---
+Prisma schema loaded from prisma\schema.prisma
+
+Γ£ö Generated Prisma Client (v6.19.3) to .\node_modules\@prisma\client in 68ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Tip: Interested in query caching in just a few lines of code? Try Accelerate today! https://pris.ly/tip-3-accelerate
+
+
+--- npx prisma migrate deploy ---
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": PostgreSQL database "admin_test", schema "public" at "127.0.0.1:5434"
+
+2 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+
+--- npx tsc --noEmit ---
+
+--- npm test ---
+
+> admin-service@1.0.0 test
+> tsx --test tests/*.test.ts
+
+Γ£ö missing internal key fails startup instead of using a fallback in admin-service (B3) (616.8841ms)
+Γùç injected env (0) from .env // tip: Γîÿ suppress logs { quiet: true }
+Γ£ö run defaults to quick, forwards the Gateway token and writes PENDING audit before the wallet call (202.3465ms)
+Γ£ö run with mode=full sends isFull=true (49.6548ms)
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/run?mode=abc -> [INVALID_MODE] 400: mode must be 'quick' or 'full'
+Γ£ö run with an unknown mode is rejected without calling the wallet (29.7147ms)
+Γ£ö a wallet 5xx returns 502, leaves the audit UNKNOWN and never logs the token (43.4819ms)
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/run -> [FORBIDDEN] 403: Wallet service denied the request
+Γ£ö a wallet 403 is returned as a generic 403 without leaking wallet details (46.5423ms)
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/run?mode=quick -> [RECONCILIATION_IN_PROGRESS] 409: A reconciliation run for this mode is already in progress
+Γ£ö two concurrent runs for the same mode allow only one wallet call (115.0746ms)
+Γ£ö reconciliation routes require a Gateway token and the ADMIN role (21.7437ms)
+Γ£ö reports pagination clamps limit to 100 and forwards page (16.6313ms)
+Γ¥î [Lß╗ûI] GET /api/admin/reconciliation/reports/abc -> [INVALID_REPORT_ID] 400: report id must be a positive integer
+Γ¥î [Lß╗ûI] GET /api/admin/reconciliation/reports/999 -> [NOT_FOUND] 404: Reconciliation report not found
+Γ£ö a non-numeric report id is a 400 and a missing report is a 404 (21.2658ms)
+Γ£ö a valid report id proxies the wallet report (16.7649ms)
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [REASON_REQUIRED] 400: reason is required
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [REASON_REQUIRED] 400: reason is required
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [REASON_REQUIRED] 400: reason is required
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [REASON_REQUIRED] 400: reason must contain 5 to 500 characters
+Γ£ö adjust rejects a missing, blank or too-short reason before calling the wallet (65.4525ms)
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [INVALID_AMOUNT] 400: amount must be a positive integer string
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [INVALID_AMOUNT] 400: amount must be a positive integer string
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [INVALID_AMOUNT] 400: amount must be a positive integer string
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [INVALID_AMOUNT] 400: amount must be a positive integer string
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [INVALID_DIRECTION] 400: direction must be 'CREDIT' or 'DEBIT'
+Γ£ö adjust rejects an invalid amount or direction without calling the wallet (39.7843ms)
+Γ£ö a successful adjust persists SUCCEEDED, the fixed referenceId and the wallet transaction (61.4985ms)
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [ALREADY_ADJUSTED] 409: This anomaly has already been adjusted
+Γ£ö adjusting the same anomaly twice returns ALREADY_ADJUSTED and calls the wallet once (53.4823ms)
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [ADJUSTMENT_IN_PROGRESS] 409: An adjustment for this anomaly is in progress
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [ADJUSTMENT_IN_PROGRESS] 409: An adjustment for this anomaly is in progress
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [ADJUSTMENT_IN_PROGRESS] 409: An adjustment for this anomaly is in progress
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [ADJUSTMENT_IN_PROGRESS] 409: An adjustment for this anomaly is in progress
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [ADJUSTMENT_IN_PROGRESS] 409: An adjustment for this anomaly is in progress
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [ADJUSTMENT_IN_PROGRESS] 409: An adjustment for this anomaly is in progress
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [ADJUSTMENT_IN_PROGRESS] 409: An adjustment for this anomaly is in progress
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [ADJUSTMENT_IN_PROGRESS] 409: An adjustment for this anomaly is in progress
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [ADJUSTMENT_IN_PROGRESS] 409: An adjustment for this anomaly is in progress
+Γ£ö ten concurrent adjustments for one anomaly call the wallet exactly once (109.5508ms)
+Γ¥î [Lß╗ûI] POST /api/admin/reconciliation/anomalies/123/adjust -> [AUDIT_UNAVAILABLE] 503: Cannot record the admin action; retry later
+Γ£ö adjust returns AUDIT_UNAVAILABLE and never calls the wallet when the audit cannot be written (36.3794ms)
+Γ£ö a wallet 5xx leaves the adjustment UNKNOWN, returns 503 and does not retry automatically (44.9711ms)
+Γä╣ tests 18
+Γä╣ suites 0
+Γä╣ pass 18
+Γä╣ fail 0
+Γä╣ cancelled 0
+Γä╣ skipped 0
+Γä╣ todo 0
+Γä╣ duration_ms 2183.1932
+
+
+GHI CHU:
+- 17 test moi cua N13 + 1 test env san co; tat ca pass, 0 fail.
+- Toan bo test N13 chay voi fake wallet HTTP server (tests/walletFake.ts), khong goi wallet-service that.
+- Chua tich hop voi wallet that: W1 (GET /api/wallets/admin/reconciliation) tren main khong kem anomalies; W2 (list reports), W3 (get report), W4 (adjust theo anomaly) chua co. Client da viet theo hop dong W1-W4 trong src/services/walletReconciliationClient.ts de doi khi Khoa xac nhan.
+- Khong sua wallet-service/payment/gateway/packages/kycActions/AdminAuditLog/migration cu.
+- AdminAuditLog PENDING duoc ghi TRUOC khi goi wallet; test bat console xac nhan gateway token khong xuat hien trong log.
+- Concurrency: partial unique index tren reconciliation_run_logs(mode) WHERE status='RUNNING' va claim AnomalyAdjustment theo anomalyId.
