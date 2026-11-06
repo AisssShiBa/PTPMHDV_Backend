@@ -5,12 +5,17 @@ project. Every result below was answered by the stack in that run (real
 Gateway → payment-service → wallet-service → PostgreSQL). Nothing is inferred
 from reading code.
 
-- Commit: `f3217d1`
-- Compose project: `finvault-acceptance-052e547d79d3` (random free host ports)
-- Started: 2026-11-04T06:52:15Z · Completed: 2026-11-04T06:57:18Z
+- Commit: `c7ab3f5` (re-run after the K12 SYSTEM-wallet rename)
+- Compose project: `finvault-acceptance-06c23428207b` (random free host ports)
+- Started: 2026-11-06T05:41:48Z · Completed: 2026-11-06T05:49:13Z
 - Command: `node tests/acceptance/week3/phase-week3.mjs`
 - Full machine-readable evidence (logs, `result.json`, `report.md`):
-  `.cache/acceptance-week2/finvault-acceptance-052e547d79d3/` — git-ignored.
+  `.cache/acceptance-week2/finvault-acceptance-06c23428207b/` — git-ignored.
+
+The matrix was first recorded at `f3217d1` / `finvault-acceptance-052e547d79d3`;
+it was re-run from scratch after K12 renamed the top-up counterparty from
+`TOPUP_POOL` to `CLEARING_TOPUP` and added the `SETTLEMENT` wallet, because a
+counterparty rename invalidates every earlier ledger assertion.
 
 The VNPAY callbacks are locally signed with a synthetic terminal
 (`SYNTH_TMN_CODE`) and a test hash secret; no VNPAY sandbox is contacted. These
@@ -24,7 +29,7 @@ round-trip (plan risk R11 stays MEDIUM).
 | COMPOSE | PASS | – | – | fresh isolated stack, host ports reachable |
 | B6-7 | PASS | – | – | workers, broker, storage, API health |
 | SEED | PASS | – | – | acceptance account created once |
-| V01 | PASS | 200 | 00 | `APPROVED`; user +100000, `TOPUP_POOL` −100000, one `transactionId` |
+| V01 | PASS | 200 | 00 | `APPROVED`; user +100000, `CLEARING_TOPUP` −100000, one `transactionId` |
 | V02 (A6) | PASS | 200 | 00 then 02 | two sequential IPNs → exactly one credit |
 | V03 | PASS | 200 | 00 then 99×19 | 20 concurrent IPNs → exactly one credit |
 | V04 | PASS | 200 | 97 | forged checksum: row unchanged, zero ledger rows |
@@ -41,14 +46,29 @@ round-trip (plan risk R11 stays MEDIUM).
 
 `PASS=17, FAIL=0, BLOCKED=1`.
 
+## K12 SYSTEM wallets as observed in this run
+
+Both K12 migrations applied to the freshly created database during this run.
+Queried against that same stack while it was up:
+
+```
+enum_range(NULL::"SystemWalletCode") -> MAIN, FEE, CLEARING_TOPUP, SETTLEMENT
+Wallet WHERE ownerType='SYSTEM'      -> CLEARING_TOPUP 0.00, FEE 0.00, MAIN 0.00, SETTLEMENT 0.00
+LedgerEntry JOIN Wallet (SYSTEM side) -> every row DEBIT:CLEARING_TOPUP
+```
+
+So the top-up counterparty really moved (enum value renamed in place, wallet row
+preserved) rather than a second wallet being seeded alongside the old one, and
+`checkSystemConservation` still sums to zero afterwards.
+
 ## A6-R evidence (the money-safety case)
 
 payment-service log for the scenario, from `a6r-payment.log`:
 
 ```
-[Topup] Wallet credit outcome unknown { topupId: 'b36fd05f-…', code: 'NAP158C3ED6',
+[Topup] Wallet credit outcome unknown { topupId: '406e669d-…', code: 'NAP56F69ADE',
                                         walletStatus: null, walletCode: null }
-GET /api/funding/vnpay/ipn?… 200 76.252 ms - 42        <- RspCode 99, row stays PROCESSING
+GET /api/funding/vnpay/ipn?… 200 85.022 ms - 42        <- RspCode 99, row stays PROCESSING
 [Job:recoverTopups] approved=1 retried=0               <- wallet back up, recovery approves
 ```
 

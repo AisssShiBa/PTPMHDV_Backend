@@ -90,7 +90,7 @@ await call('/api/users/' + profile.id + '/kyc/document', { token: admin.token, e
 for (let i = 0; i < 2; i++) {
   const urls = (await call(path + '/documents', { token: admin.token })).data
   for (const url of [urls.frontUrl, urls.backUrl]) {
-    assert.equal(new URL(url).searchParams.get('X-Amz-Expires'), '300')
+    assert.equal(new URL(url).searchParams.get('X-Amz-Expires'), '900')
     assert.equal((await fetch(url)).status, 200)
     const unsigned = new URL(url); unsigned.search = ''
     assert.equal((await fetch(unsigned)).status, 403)
@@ -101,7 +101,7 @@ broker(`await ch.assertExchange('finvault.events','topic',{durable:true});await 
 try {
   assert.equal((await call(path + '/review', { method: 'POST', token: admin.token, body: { status: 'APPROVED' } })).data.kycTier, 1)
   assert.equal((await call(path + '/tier', { method: 'PATCH', token: admin.token, body: { tier: 2, reason: 'Synthetic bank link' } })).data.kycTier, 2)
-  assert.equal((await call(path + '/review', { method: 'POST', token: admin.token, body: { status: 'REJECTED' } })).data.kycTier, 0)
+  assert.equal((await call(path + '/review', { method: 'POST', token: admin.token, body: { status: 'REJECTED', detail: 'Synthetic smoke rejection' } })).data.kycTier, 0)
   let published = false
   for (let i = 0; i < 40; i++) {
     published = sql('user_service', `SELECT count(*) FROM user_outbox_events WHERE aggregate_id='${profile.id}' AND status='PUBLISHED'`) === '3'

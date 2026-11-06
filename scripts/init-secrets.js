@@ -38,6 +38,8 @@ function initialize(root = path.resolve(__dirname, '..')) {
   ensure('RABBITMQ_USER', 'finvault')
   secret('ACCESS_TOKEN_SECRET', 'access_token_secret.txt', random())
   secret('INTERNAL_KEY', 'internal_key.txt', random())
+  // Dedicated system secret for outlet QR HMAC; never a merchant API key.
+  secret('MERCHANT_QR_SECRET', 'merchant_qr_secret.txt', random())
   ensure('MINIO_ROOT_USER', 'finvault-admin')
   ensure('MINIO_ROOT_PASSWORD', random())
   ensure('S3_ACCESS_KEY_ID', 'finvault-kyc')

@@ -7,7 +7,14 @@ import { executionFailure } from '../week2/reporting.mjs'
 // Section 10.4 report fields, but never credentials, cookies, PINs or response
 // bodies: scenario callbacks return only status codes, record ids and invariant
 // results, and failures are scrubbed by executionFailure().
-export class Blocked extends Error {}
+// A blocked row may still have observed §10.4 evidence before it stopped; the
+// reason explains why the row cannot be PASS, the detail records what was seen.
+export class Blocked extends Error {
+  constructor(message, detail) {
+    super(message)
+    this.detail = detail
+  }
+}
 
 function cell(value) {
   return String(value ?? '-').replaceAll('|', '\\|').replaceAll('\n', ' ')
@@ -40,6 +47,7 @@ export function createRecorder(ctx) {
         : executionFailure(error)
       results.push({ id, owner, scenario, commit, environment: ctx.project,
         startedAt: began, result: blocked ? 'BLOCKED' : 'FAIL', reason,
+        ...(blocked && error.detail ? error.detail : {}),
         durationMs: Date.now() - start })
       console.log((blocked ? 'BLOCKED ' : 'FAIL ') + id + ': ' + reason)
       return false
@@ -58,7 +66,7 @@ export function createRecorder(ctx) {
     const rows = results.map(row => '| ' + row.id + ' | ' + row.result + ' | ' +
       cell(row.evidencePath || row.reason) + ' | ' + cell(row.notes) + ' |')
     writeFileSync(resolve(ctx.directory, 'report.md'),
-      '# Week 3 — H11 VNPAY acceptance\n\n' +
+      (ctx.title || '# Week 3 acceptance') + '\n\n' +
       '- Project: `' + ctx.project + '`\n' +
       '- Commit: `' + (commit || 'unknown') + '`\n' +
       '- Started: ' + startedAt + '\n' +

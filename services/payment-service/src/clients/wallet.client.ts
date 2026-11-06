@@ -32,6 +32,9 @@ export class WalletClient {
   async createHold(userId: string, amount: string, referenceId: string, expiresAt: string, destinationUserId?: string, destinationOwnerType?: string) {
     return this.request(userId, 'hold', { amount, referenceId, expiresAt, destinationUserId, destinationOwnerType });
   }
+  async extendHold(userId: string, referenceId: string, expiresAt: string) {
+    return this.request(userId, 'hold/extend', { referenceId, expiresAt });
+  }
   async captureHold(userId: string, referenceId: string) {
     return this.request(userId, 'capture', { referenceId });
   }

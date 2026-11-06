@@ -75,7 +75,7 @@ export async function getKycDocument(req: RequestWithContext, res: Response) {
 export async function updateKycStatus(req: RequestWithContext, res: Response) {
   requireAdmin(req)
   const profile = await resolveProfileByIdOrAuthUserId(String(req.params.id))
-  return res.json({ success: true, message: 'Success', data: userResponse(await setKycStatus(profile, req.body.kycStatus)) })
+  return res.json({ success: true, message: 'Success', data: userResponse(await setKycStatus(profile, req.body.kycStatus, req.body.reason)) })
 }
 export async function changeKycTier(req: RequestWithContext, res: Response) {
   requireAdmin(req)
@@ -113,7 +113,8 @@ export async function getMe(req: RequestWithContext, res: Response) {
 export async function getMyKyc(req: RequestWithContext, res: Response) {
   const profile = await currentProfile(req)
   return res.json({ success: true, message: 'Success', data: {
-    kycStatus: profile.kycStatus, kycTier: profile.kycTier, hasKycDocument: Boolean(profile.kycObjectKey)
+    kycStatus: profile.kycStatus, kycTier: profile.kycTier, hasKycDocument: Boolean(profile.kycObjectKey),
+    ...(profile.kycStatus === 'REJECTED' && profile.kycRejectReason ? { kycRejectReason: profile.kycRejectReason } : {})
   } })
 }
 export async function authorizeMyKyc(req: RequestWithContext, res: Response, next: import('express').NextFunction) {

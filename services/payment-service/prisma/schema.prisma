@@ -155,3 +155,73 @@ model UsedTransactionToken {
   @@index([usedAt])
   @@index([paymentId])
 }
+
+enum CashOutStatus {
+  REQUESTED
+  HOLDING
+  PAYOUT_PENDING
+  SUCCEEDED
+  FAILED
+}
+
+// workflow is the crash-safe step marker, status is the money-visible state.
+// workflow: IDLE | HOLDING | PAYOUT | CAPTURING | RELEASING
+model CashOut {
+  id                  String        @id @default(uuid()) @db.Uuid
+  userId              String        @db.VarChar(50)
+  amount              Decimal       @db.Decimal(20, 2)
+  destination         String?       @db.VarChar(255)
+  idempotencyKey      String        @db.VarChar(255)
+  requestHash         String        @db.VarChar(64)
+  status              CashOutStatus @default(REQUESTED)
+  workflow            String        @default("IDLE") @db.VarChar(20)
+  tokenJti            String?       @unique @db.VarChar(100)
+  holdRef             String        @unique @db.VarChar(255)
+  providerRef         String?       @unique @db.VarChar(255)
+  walletTransactionId String?       @db.Uuid
+  failureReason       String?       @db.Text
+  nextRetryAt         DateTime?     @db.Timestamp(3)
+  retryCount          Int           @default(0)
+  leaseToken          String?       @db.Uuid
+  leaseUntil          DateTime?     @db.Timestamp(3)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  logs                CashOutStatusLog[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([status, nextRetryAt])
+  @@index([userId, createdAt])
+}
+
+model CashOutStatusLog {
+  id         String         @id @default(uuid()) @db.Uuid
+  cashOutId  String         @db.Uuid
+  fromStatus CashOutStatus?
+  toStatus   CashOutStatus
+  note       String?        @db.Text
+  changedAt  DateTime       @default(now())
+  cashOut    CashOut        @relation(fields: [cashOutId], references: [id], onDelete: Cascade)
+
+  @@index([cashOutId])
+}
+
+enum MockPayoutResult {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+// Durable stand-in for the Payout Bank. Keyed by providerRef so a retried
+// payout can never move money twice and a timeout can be resolved by query.
+model MockPayout {
+  providerRef     String           @id @db.VarChar(255)
+  amount          Decimal          @db.Decimal(20, 2)
+  result          MockPayoutResult @default(PENDING)
+  timeoutResponse Boolean          @default(false)
+  bankTransactionId String?        @db.VarChar(100)
+  failureCode     String?          @db.VarChar(50)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([result])
+}

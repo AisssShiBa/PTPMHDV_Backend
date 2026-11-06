@@ -13,7 +13,7 @@ import { Blocked } from './reporting.mjs'
 
 export const TMN = 'SYNTH_TMN_CODE'
 const AMOUNT = 100000
-const TOPUP_POOL = 'TOPUP_POOL'
+const CLEARING_TOPUP = 'CLEARING_TOPUP'
 
 export function signVnpay(params, secret) {
   const sorted = {}
@@ -85,7 +85,7 @@ async function waitFor(check, message, timeout = 300000, interval = 3000) {
 export async function v01(ctx, state) {
   const user = state.user
   const before = userBalance(ctx, user.id)
-  const systemBefore = systemBalance(ctx, TOPUP_POOL)
+  const systemBefore = systemBalance(ctx, CLEARING_TOPUP)
   const topup = await create(ctx, user)
   assert.ok(topup.paymentUrl.includes('vnp_TxnRef=' + topup.code))
 
@@ -97,12 +97,12 @@ export async function v01(ctx, state) {
   assert.equal(row.status, 'APPROVED')
   assert.match(String(row.walletTransactionId), /^[0-9a-f-]{36}$/)
   assert.equal(userBalance(ctx, user.id), before + AMOUNT)
-  assert.equal(systemBalance(ctx, TOPUP_POOL), systemBefore - AMOUNT)
+  assert.equal(systemBalance(ctx, CLEARING_TOPUP), systemBefore - AMOUNT)
   assert.deepEqual(ledgerShape(ctx, topup.code), { rows: 2, transactions: 1 })
-  assert.equal(counterparty(ctx, topup.code), 'DEBIT:' + TOPUP_POOL)
+  assert.equal(counterparty(ctx, topup.code), 'DEBIT:' + CLEARING_TOPUP)
 
   return { httpStatus: response.httpStatus, errorCode: response.RspCode,
-    walletReferenceId: topup.code, ledgerInvariant: 'user +100000, TOPUP_POOL -100000, one transactionId' }
+    walletReferenceId: topup.code, ledgerInvariant: 'user +100000, CLEARING_TOPUP -100000, one transactionId' }
 }
 
 // V02 = A6: a sequential replay is idempotent.

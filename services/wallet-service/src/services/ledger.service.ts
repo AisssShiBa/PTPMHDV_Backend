@@ -17,7 +17,7 @@ export class LedgerService {
   getSystemWalletCode(transferType: TransferType): SystemWalletCode {
     switch (transferType) {
       case TransferType.TOPUP:
-        return SystemWalletCode.TOPUP_POOL;
+        return SystemWalletCode.CLEARING_TOPUP;
       case TransferType.PAYMENT:
       case TransferType.REFUND:
       case TransferType.ADJUSTMENT:

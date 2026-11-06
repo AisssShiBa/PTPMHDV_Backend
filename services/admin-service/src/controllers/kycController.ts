@@ -20,7 +20,7 @@ export async function reviewKyc(req: Request, res: Response) {
   const { status, detail } = req.body || {}
   if (status !== 'APPROVED' && status !== 'REJECTED')
     throw createError(400, 'INVALID_STATUS', 'Only APPROVED or REJECTED is accepted')
-  return res.json(await KycActions.review(userId, status, reason(detail, false), adminId, requestId))
+  return res.json(await KycActions.review(userId, status, reason(detail, status === 'REJECTED'), adminId, requestId))
 }
 export async function changeKycTier(req: Request, res: Response) {
   const { userId, adminId, requestId } = context(req)

@@ -47,6 +47,7 @@ export async function prepare() {
   // Every run gets a new project, credentials, ports and volumes. No down -v.
   const secrets = Object.fromEntries(Object.entries({
     internal_key: 'internal_key.txt', access_token_secret: 'access_token_secret.txt',
+    merchant_qr_secret: 'merchant_qr_secret.txt',
     postgres_password: 'postgres_password.txt', rabbitmq_pass: 'rabbitmq_pass.txt',
     gateway_private_key: 'gateway_private.pem', gateway_public_key: 'gateway_public.pem',
     vnp_hash_secret: 'vnp_hash_secret.txt',

@@ -1,12 +1,13 @@
 import { getGatewayPublicKey, loadSecretEnvironment } from 'finvault-internal-auth'
 import 'dotenv/config'
 import { z } from 'zod'
-loadSecretEnvironment(['INTERNAL_KEY'])
+loadSecretEnvironment(['INTERNAL_KEY', 'MERCHANT_QR_SECRET'])
 
 const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3003),
   DATABASE_URL: z.string().min(1),
   INTERNAL_KEY: z.string().min(32),
+  MERCHANT_QR_SECRET: z.string().min(32),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   CLIENT_URL: z.string().url().default('http://localhost:5173'),
   RABBITMQ_URL: z.string().url().optional(),
@@ -30,6 +31,7 @@ const config = parsed.data
 export const env = {
   port: config.PORT, databaseUrl: config.DATABASE_URL,
   internalKey: config.INTERNAL_KEY,
+  merchantQrSecret: config.MERCHANT_QR_SECRET,
   nodeEnv: config.NODE_ENV, clientUrl: config.CLIENT_URL,
   rabbitmqUrl: config.RABBITMQ_URL, eventExchange: config.EVENT_EXCHANGE,
   eventMaxRetries: config.EVENT_MAX_RETRIES, eventRetryMs: config.EVENT_RETRY_MS,

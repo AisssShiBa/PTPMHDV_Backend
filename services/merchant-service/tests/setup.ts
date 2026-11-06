@@ -1,5 +1,6 @@
 process.env.NODE_ENV = 'test'
 process.env.INTERNAL_KEY = 'test-internal-key-01234567890123456789'
+process.env.MERCHANT_QR_SECRET = 'test-merchant-qr-secret-0123456789abcdef'
 process.env.DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:25432/finvault_test?schema=merchant_test'
 process.env.RABBITMQ_URL = 'amqp://guest:guest@127.0.0.1:5673'
 process.env.EVENT_EXCHANGE = 'finvault.tests.merchant'
