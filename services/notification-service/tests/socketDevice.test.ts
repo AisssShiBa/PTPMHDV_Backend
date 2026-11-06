@@ -125,6 +125,18 @@ test('a socket ticket for a revoked device is rejected with DEVICE_REVOKED', asy
   assert.equal((await response.json()).error.code, 'DEVICE_REVOKED')
 })
 
+test('a ticket issued while active cannot connect after the device is revoked', async () => {
+  const userId = newUser()
+  const device = await register(userId, 'device-revoked-late')
+  const ticketResponse = await getTicket(userId, device.deviceId)
+  assert.equal(ticketResponse.status, 200)
+  const { ticket } = (await ticketResponse.json()).data
+
+  await revoke(userId, device.id)
+
+  await assert.rejects(() => openSocket(ticket), /DEVICE_REVOKED/)
+})
+
 test('a socket ticket without deviceId keeps the previous connection behavior', async () => {
   const userId = newUser()
   const ticketResponse = await getTicket(userId)

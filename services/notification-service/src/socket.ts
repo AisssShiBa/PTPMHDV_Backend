@@ -4,7 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { Server as SocketIOServer } from 'socket.io'
 import { verifyGatewayToken } from 'finvault-internal-auth'
 import { env } from './config/env'
-import { touchDevice } from './services/deviceService'
+import { touchDevice, findActiveDevice } from './services/deviceService'
 
 export let notificationIO: Server | null = null
 const usedTickets = new Map<string, number>()
@@ -107,11 +107,22 @@ export const createSocketServer = (
   })
   const maxAgeMs = options.maxAgeMs ?? env.socketMaxAgeMs
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const ticket = socket.handshake.auth?.ticket
     if (typeof ticket === 'string' && ticket.length > 0) {
       const auth = consumeSocketTicket(ticket)
       if (!auth) return next(new Error('INVALID_GATEWAY_TOKEN'))
+      if (auth.deviceId !== undefined) {
+        // The ticket was issued while the device was active; it may have been
+        // revoked before the socket connects. Never join a revoked device room.
+        let device
+        try {
+          device = await findActiveDevice(auth.userId, auth.deviceId)
+        } catch {
+          return next(new Error('DEVICE_LOOKUP_FAILED'))
+        }
+        if (!device) return next(new Error('DEVICE_REVOKED'))
+      }
       socket.data.userId = auth.userId
       if (auth.deviceId !== undefined) socket.data.deviceId = auth.deviceId
       return next()
