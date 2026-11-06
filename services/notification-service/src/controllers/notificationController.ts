@@ -7,6 +7,7 @@ import {
   NotificationIngestError
 } from '../services/notificationService'
 import { issueSocketTicket, SocketTicketRateLimitError } from '../socket'
+import { DEVICE_ID_PATTERN, findDevice } from '../services/deviceService'
 
 export const getSocketTicket = async (req: Request, res: Response) => {
   const userId = req.auth?.userId
@@ -17,9 +18,35 @@ export const getSocketTicket = async (req: Request, res: Response) => {
     })
   }
 
+  const rawDeviceId = req.query.deviceId
+  let deviceId: string | undefined
+  if (rawDeviceId !== undefined) {
+    if (typeof rawDeviceId !== 'string' || rawDeviceId.length > 128 ||
+        !DEVICE_ID_PATTERN.test(rawDeviceId)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'deviceId không hợp lệ.' }
+      })
+    }
+    deviceId = rawDeviceId
+    const device = await findDevice(userId, deviceId)
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Không tìm thấy thiết bị.' }
+      })
+    }
+    if (device.revokedAt !== null) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'DEVICE_REVOKED', message: 'Thiết bị đã bị thu hồi.' }
+      })
+    }
+  }
+
   let ticket: ReturnType<typeof issueSocketTicket>
   try {
-    ticket = issueSocketTicket(userId)
+    ticket = issueSocketTicket(userId, deviceId)
   } catch (error) {
     if (error instanceof SocketTicketRateLimitError) {
       return res.status(429).json({

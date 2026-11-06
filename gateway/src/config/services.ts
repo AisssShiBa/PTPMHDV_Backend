@@ -37,6 +37,7 @@ export const env = {
         payment: process.env.PAYMENT_SERVICE_URL || 'http://localhost:3005',
         notification: process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3006',
         admin: process.env.ADMIN_SERVICE_URL || 'http://localhost:3007',
+        utilities: process.env.UTILITIES_SERVICE_URL || 'http://localhost:3008',
     }
 }
 

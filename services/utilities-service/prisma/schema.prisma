@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UtilityType {
+  TELCO_TOPUP
+  BILL_PAY
+}
+
+enum UtilityOrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PROVIDER_PENDING
+  SUCCESS
+  FAILED
+  REFUND_REQUESTED
+  REFUNDED
+  REFUND_FAILED
+}
+
+model UtilityOrder {
+  id             String             @id @default(uuid())
+  userId         String             @map("user_id")
+  type           UtilityType
+  status         UtilityOrderStatus @default(PENDING_PAYMENT)
+  amount         Decimal            @db.Decimal(20, 2)
+  discountAmount Decimal            @default(0) @map("discount_amount") @db.Decimal(20, 2)
+  // Normalised phone number or the customer code for bill payments.
+  target         String
+  providerCode   String?            @map("provider_code")
+  providerRef    String?            @map("provider_ref")
+  paymentId      String?            @unique @map("payment_id")
+  idempotencyKey String             @map("idempotency_key")
+  // Stable hash of the user-supplied request; used to reject key reuse.
+  payloadHash    String             @map("payload_hash")
+  failureReason  String?            @map("failure_reason")
+  refundAttempts Int                @default(0) @map("refund_attempts")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+  history        UtilityOrderHistory[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([status])
+  @@map("utility_orders")
+}
+
+// Append-only state history. This service never updates or deletes a row.
+model UtilityOrderHistory {
+  id         String              @id @default(uuid())
+  orderId    String              @map("order_id")
+  fromStatus UtilityOrderStatus? @map("from_status")
+  toStatus   UtilityOrderStatus  @map("to_status")
+  note       String?
+  at         DateTime            @default(now())
+  order      UtilityOrder       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, at])
+  @@map("utility_order_history")
+}
+
+model UtilityInbox {
+  eventId     String   @id @map("event_id")
+  eventType   String   @map("event_type")
+  payloadHash String   @map("payload_hash")
+  receivedAt  DateTime @default(now()) @map("received_at")
+
+  @@map("utility_inbox")
+}

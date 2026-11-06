@@ -90,6 +90,22 @@ REVOKE CONNECT ON DATABASE wallet_service FROM notification_user, auth_user, use
 REVOKE CONNECT ON DATABASE auth_service FROM notification_user, wallet_user, payment_user;
 
 -- ==============================================================================
+-- PHẦN 5: UTILITIES SERVICE (N12) - CHỈ THÊM, KHÔNG SỬA CÁC DÒNG PHÍA TRÊN
+-- ==============================================================================
+SELECT 'CREATE DATABASE utilities_service'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'utilities_service')\gexec
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'utilities_user') THEN
+    CREATE ROLE utilities_user WITH LOGIN PASSWORD '{{DB_ROLE_PASSWORD}}';
+  END IF;
+END
+$$;
+
+GRANT CONNECT ON DATABASE utilities_service TO utilities_user;
+
+-- ==============================================================================
 -- PHẦN 4: THIẾT LẬP AN TOÀN CHO WALLET_SERVICE & SỔ CÁI BẤT BIẾN (IMMUTABLE LEDGER)
 -- ==============================================================================
 \c wallet_service

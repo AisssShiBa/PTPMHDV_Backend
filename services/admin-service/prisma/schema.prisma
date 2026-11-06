@@ -18,3 +18,61 @@ model AdminAuditLog {
   @@index([adminId])
   @@index([targetId])
 }
+
+enum ReconciliationMode {
+  QUICK
+  FULL
+}
+
+enum ReconciliationRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  UNKNOWN
+}
+
+enum AnomalyAdjustmentDirection {
+  CREDIT
+  DEBIT
+}
+
+enum AnomalyAdjustmentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  UNKNOWN
+}
+
+model ReconciliationRunLog {
+  id             String                  @id @default(uuid())
+  walletReportId String?                 @map("wallet_report_id")
+  mode           ReconciliationMode
+  adminId        String                  @map("admin_id")
+  status         ReconciliationRunStatus @default(RUNNING)
+  isBalanced     Boolean?                @map("is_balanced")
+  anomaliesFound Int?                    @map("anomalies_found")
+  runAt          DateTime                @default(now()) @map("run_at")
+  requestId      String?                 @map("request_id")
+
+  @@index([mode, status, runAt])
+  @@index([runAt])
+  @@map("reconciliation_run_logs")
+}
+
+model AnomalyAdjustment {
+  id                  String                    @id @default(uuid())
+  anomalyId           String                    @unique @map("anomaly_id")
+  adminId             String                    @map("admin_id")
+  direction           AnomalyAdjustmentDirection
+  amount              Decimal                   @db.Decimal(20, 2)
+  reason              String
+  status              AnomalyAdjustmentStatus   @default(PENDING)
+  referenceId         String                    @unique @map("reference_id")
+  walletTransactionId String?                   @map("wallet_transaction_id")
+  failureReason       String?                   @map("failure_reason")
+  createdAt           DateTime                  @default(now()) @map("created_at")
+  updatedAt           DateTime                  @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@map("anomaly_adjustments")
+}

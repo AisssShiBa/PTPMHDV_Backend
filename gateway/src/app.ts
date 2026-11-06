@@ -87,6 +87,7 @@ app.use(createServiceProxy('/api/funding', env.services.payment)) // Whitelist W
 app.use(createServiceProxy('/api/notifications', env.services.notification))
 app.use(createServiceProxy('/socket.io', env.services.notification, true)) // Proxy WebSocket sang notification-service
 app.use(createServiceProxy('/api/admin', env.services.admin))
+app.use(createServiceProxy('/api/utilities', env.services.utilities))
 
 // 8. Bắt các Route không tồn tại (404)
 app.use((_req, res) => {

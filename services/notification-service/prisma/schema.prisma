@@ -7,6 +7,26 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum DevicePlatform {
+  IOS
+  ANDROID
+  WEB
+}
+
+model UserDevice {
+  id         String         @id @default(uuid())
+  userId     String
+  deviceId   String
+  platform   DevicePlatform
+  pushToken  String?
+  lastSeenAt DateTime       @default(now())
+  revokedAt  DateTime?
+  createdAt  DateTime       @default(now())
+
+  @@unique([userId, deviceId])
+  @@index([userId])
+}
+
 enum NotificationType {
   PAYMENT_SUCCESS
   PAYMENT_FAILED
@@ -20,6 +40,12 @@ enum NotificationType {
   KYC_TIER_CHANGED
   MERCHANT_APPROVED
   MERCHANT_REJECTED
+  TOPUP_SUCCEEDED
+  CASHOUT_SUCCEEDED
+  CASHOUT_FAILED
+  UTILITY_SUCCEEDED
+  UTILITY_FAILED
+  UTILITY_REFUNDED
 }
 
 model Notification {

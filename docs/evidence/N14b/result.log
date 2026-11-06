@@ -1,0 +1,73 @@
+# N14b - Noi su kien moi vao consumer va do do tre
+
+Environment: Windows, Node v24.21.0, Docker Docker version 29.8.0, build 88096ef
+Task: N14b (them binding/handler cho su kien moi + do do tre publish -> socket <= 3000ms)
+Status: BLOCKED - KHONG the bat dau
+SHA_HEAD (nguyen): a1c3794fb8c262565c123bc8f3f90b0dac691a63
+SHA_BASE (origin/main): d6ac0a65c311ccbf9f09f64a3dd434b9ecd0b391
+Date: 2026-11-06 13:58:46 +07:00
+
+Ly do BLOCKED:
+  Dieu kien bat dau cua N14b la packages/finvault-events/src/schemas.ts tren main
+  phai dang ky schema cho tung loai su kien se bind. Tren origin/main hien tai
+  KHONG co bat ky schema nao cho funding.*, payment.refunded, utility.* hay
+  user.kyc_reviewed. Neu bind, consumer se nhan event khong hop le va day
+  message vao dead-letter. Vi vay KHONG them binding/handler nao.
+
+Khong co thay doi code cho N14b. Commit nay chi chua log minh chung BLOCKED.
+--- registry dang ky tren origin/main (packages/finvault-events/src/schemas.ts) ---
+
+> export const eventSchemaRegistry = {
+    'user.registered': { 1: userRegisteredSchema },
+    'user.kyc_updated': { 1: userKycUpdatedSchema },
+    'merchant.status_updated': { 1: merchantStatusUpdatedSchema },
+    'payment.succeeded': { 1: paymentSucceededSchema },
+    'payment.failed': { 1: paymentFailedSchema },
+    'payment.expired': { 1: paymentExpiredSchema },
+    'wallet.limit_exceeded': { 1: walletLimitExceededSchema }
+  } as const
+
+
+
+--- git grep event moi trong schemas.ts (mong doi: khong co dong nao) ---
+grep_exit=1
+
+--- git grep event moi trong financeEventsConsumer.ts (mong doi: khong co dong nao) ---
+grep_exit=1
+
+--- financeEventBindings hien tai (van la 6 event cu) ---
+export const financeEventBindings = [
+  'user.registered',
+  'user.kyc_updated',
+  'merchant.status_updated',
+  'payment.succeeded',
+  'payment.failed',
+  'payment.expired'
+] as const
+
+--- git diff --stat truoc khi ghi log (mong doi: rong) ---
+git_diff_exit=0
+
+--- danh sach event bi bo qua ---
+Cac loai su kien N14b se bind NHUNG BI BO QUA vi chua dang ky schema:
+  - funding.topup_succeeded
+  - funding.cashout_completed
+  - funding.cashout_failed
+  - payment.refunded
+  - utility.order_succeeded
+  - utility.order_failed
+  - utility.order_refunded
+  - user.kyc_reviewed
+--- do do tre ---
+KHONG DO do tre. KHONG chay 'npm run measure:latency'.
+Khong co so p50/p95/max nao trong log nay.
+Khong tuyen bo dat yeu cau <= 3000 ms.
+Can RabbitMQ + PostgreSQL that va schema su kien da len main truoc khi do.
+--- ket luan ---
+KET LUAN: N14b BLOCKED.
+- Chua sua packages/*, chua them binding/handler, chua doi ten queue notification.finvault.events.
+- Chua chay npm run typecheck / npm test / npm run test:integration / npm run measure:latency cho N14b
+  vi khong co thay doi code va khong co schema de bind.
+- Khong co so lieu do tre nao duoc ghi nhan.
+- Viec mo khoa: can mot commit tren main bo sung schema cho tung event trong
+  packages/finvault-events/src/schemas.ts (kem test), sau do moi lam lai N14b.

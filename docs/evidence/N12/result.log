@@ -1,0 +1,152 @@
+# N12 - utilities-service: nap dien thoai va thanh toan hoa don
+Environment: Windows, Node v24.21.0, Docker Docker version 29.8.0, build 88096ef
+Task: N12 (services/utilities-service moi + compose + init-db + gateway)
+SHA_CODE_SERVICE (feat(N12) utilities-service/compose/init-db): 3301484ed98418a36de7f8b8075b05630e59fa49
+SHA_CODE_GATEWAY (feat(N12) proxy /api/utilities): 7302ed35aa7e7e50b468bd5d82189ede77b431e6
+SHA_BASE (origin/main): d6ac0a65c311ccbf9f09f64a3dd434b9ecd0b391
+Date: 2026-11-06 13:01:35 +07:00
+Test database: docker compose -f services/notification-service/docker-compose.test.yml up -d --wait
+  PostgreSQL notification-postgres-test -> localhost:5434 (database utilities_test, tao rieng cho N12)
+  RabbitMQ notification-rabbitmq-test -> localhost:5674 (khong dung trong unit test nay)
+DATABASE_URL: postgresql://notification_test:notification_test@localhost:5434/utilities_test
+Commands: npm ci -> npx prisma migrate deploy -> npm run build -> npm run typecheck -> npm test
+Test scope: unit/integration test voi PostgreSQL THAT; PaymentClient va ProviderClient la FAKE trong bo test.
+  KHONG chay T1/T2 that, KHONG goi payment-service/wallet-service/K13 that.
+--- npm ci ---
+
+> utilities-service@1.0.0 postinstall
+> prisma generate
+
+Prisma schema loaded from prisma\schema.prisma
+
+Γ£ö Generated Prisma Client (v6.19.3) to .\node_modules\@prisma\client in 59ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Tip: Need your database queries to be 1000x faster? Accelerate offers you that and more: https://pris.ly/tip-2-accelerate
+
+
+added 149 packages in 12s
+node.exe : npm warn install-scripts 6 packages have install scripts not yet covered by allowScripts:
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn instal...y allowScripts::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+npm warn install-scripts   finvault-events@1.0.0 (prepare: npm run build)
+npm warn install-scripts   finvault-internal-auth@1.0.0 (prepare: npm run build)
+npm warn install-scripts   @prisma/client@6.19.3 (postinstall: node scripts/postinstall.js)
+npm warn install-scripts   @prisma/engines@6.19.3 (postinstall: node scripts/postinstall.js)
+npm warn install-scripts   esbuild@0.28.2 (postinstall: node install.js)
+npm warn install-scripts   prisma@6.19.3 (preinstall: node scripts/preinstall-entry.js)
+npm warn install-scripts
+npm warn install-scripts Run `npm install-scripts ls` to review, or `npm install-scripts approve <pkg>` to allow.
+
+--- npx prisma migrate deploy ---
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": PostgreSQL database "utilities_test", schema "public" at "localhost:5434"
+
+1 migration found in prisma/migrations
+
+
+No pending migrations to apply.
+
+--- npm run build ---
+
+> utilities-service@1.0.0 prebuild
+> prisma generate
+
+Prisma schema loaded from prisma\schema.prisma
+
+Γ£ö Generated Prisma Client (v6.19.3) to .\node_modules\@prisma\client in 78ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Tip: Need your database queries to be 1000x faster? Accelerate offers you that and more: https://pris.ly/tip-2-accelerate
+
+
+> utilities-service@1.0.0 build
+> tsc
+
+
+--- npm run typecheck ---
+
+> utilities-service@1.0.0 typecheck
+> tsc --noEmit
+
+
+--- npm test ---
+
+> utilities-service@1.0.0 test
+> tsx --test --test-concurrency=1 tests/*.test.ts
+
+Γ£ö bill lookup is deterministic and derives the amount from the last two digits (89.0559ms)
+{"requestId":"ba1d3fd6-fbf8-4b05-9866-24d47c175411","method":"GET","code":"PROVIDER_TIMEOUT","status":504}
+Γ£ö bill lookup surfaces the provider error for codes ending in 11 and 22 (14.1996ms)
+Γ£ö paying a bill with the wrong amount is rejected with BILL_AMOUNT_MISMATCH and creates no order (28.385ms)
+Γ£ö paying a bill with the matching amount creates a BILL_PAY order (34.6075ms)
+Γ£ö payment.succeeded fulfils the order once and stores the provider reference (63.2696ms)
+Γ£ö a duplicate event with the same eventId calls the provider only once (32.2886ms)
+Γ£ö two events with different eventIds for one payment still fulfil once (32.117ms)
+Γ£ö a payment that belongs to no utilities order is acknowledged without side effects (12.2815ms)
+Γ£ö payment.failed marks the order FAILED without requesting a refund (14.7279ms)
+Γ£ö payment.expired marks the order FAILED without requesting a refund (14.4871ms)
+Γ£ö a provider timeout keeps PROVIDER_PENDING and never refunds (41.6751ms)
+Γ£ö a definite provider failure requests one refund and stores REFUNDED (34.5767ms)
+Γ£ö a definite refund rejection stores REFUND_FAILED and is not retried forever (40.1053ms)
+Γ£ö the recovery job finishes an order that stopped after PAID (34.4733ms)
+Γ£ö the recovery job fails an abandoned checkout with no payment after two minutes (21.409ms)
+Γ£ö refund retries stop at five attempts (15.8903ms)
+Γ£ö the mock provider returns the same result for the same orderId and counts one delivery (41.0262ms)
+Γ£ö a phone ending in 11 is rejected and ending in 22 reveals SUCCESS on the first status query (5.4638ms)
+Γ£ö the mock route rejects missing or wrong internal credentials with 401 (74.9158ms)
+Γ£ö the mock route does not exist when MOCK_PROVIDER_ENABLED is false (15.2087ms)
+Γ£ö the mock route is idempotent per orderId and returns deterministic outcomes (28.4815ms)
+Γ£ö the mock status route reveals SUCCESS for a timed-out order (15.8112ms)
+Γ£ö a new order stores the 3% discount as an integer and never moves money itself (107.9233ms)
+Γ£ö discount uses floor(amount * 3 / 100) for every denomination (120.0996ms)
+Γ£ö the same key with the same payload replays the existing order (32.0112ms)
+Γ£ö the same key with a different payload is rejected with 422 (26.7548ms)
+Γ£ö twenty concurrent requests with one key create one order and one payment (78.2817ms)
+{"requestId":"df26fdfd-ea85-4c56-a8a9-60e024e71876","method":"POST","code":"UPSTREAM_UNAVAILABLE","status":502}
+Γ£ö a 5xx checkout keeps PENDING_PAYMENT and a retry resumes the same order (31.366ms)
+Γ£ö a definite 4xx checkout marks the order FAILED and forwards the payment code (23.3316ms)
+Γ£ö checkout forwards the caller Gateway token and never the internal key (52.0382ms)
+Γ£ö a missing Idempotency-Key is rejected with 400 (84.329ms)
+Γ£ö an over-long Idempotency-Key is rejected with 400 (10.8442ms)
+Γ£ö amounts outside the fixed denomination list are rejected with 400 (22.2116ms)
+Γ£ö a phone number outside the Vietnamese mobile pattern is rejected with 400 (19.1068ms)
+Γ£ö a +84 phone number is normalised to the local 0 form (30.8168ms)
+Γ£ö a userId in the body is ignored and ownership comes from the Gateway token (31.738ms)
+Γ£ö the utilities routes require a Gateway token (8.4593ms)
+Γä╣ tests 37
+Γä╣ suites 0
+Γä╣ pass 37
+Γä╣ fail 0
+Γä╣ cancelled 0
+Γä╣ skipped 0
+Γä╣ todo 0
+Γä╣ duration_ms 4515.2903
+
+--- git diff --numstat init-db.sql (mong doi so dong xoa = 0) ---
+16	0	init-db.sql
+
+--- docker compose config --quiet (RAW - loi co san tren main) ---
+docker.exe : go-yaml load error in scanner (while scanning a quoted scalar) at L56.C27-C62: found unknown escape 
+character
+At line:35 char:71
++ ... loi co san tren main)' ((& docker compose config --quiet 2>&1 | Out-S ...
++                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (go-yaml load er...scape character:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+--- docker compose -f compose-check.tmp.yml config --quiet (ban sao chi sua loi escape redis co san, de kiem tra them khoi N12) ---
+
+
+GHI CHU:
+- docker compose config --quiet tren file that FAIL vi dong redis co san tu main (docker-compose.yml L56, escape \$ khong hop le). Khong sua khoi redis vi ngoai pham vi N12; ban sao tam thoi chi sua dong do cho thay khoi utilities hop le (exit 0).
+- Chua chay docker compose up -d --build --wait; chua chay kich ban T1/T2.
+- Chua tich hop voi K13/wallet that: refund dung stub qua PaymentClient fake trong test; payment-service tren main chua co PHONE_TOPUP/BILL_PAYMENT.
+- Khong publish utility.* (schema chua dang ky trong packages/finvault-events).

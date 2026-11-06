@@ -1,0 +1,107 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "FinVault utilities service",
+    "version": "1.0.0",
+    "description": "Phone top-up and bill payment. All /api/utilities routes require x-gateway-token from the API Gateway."
+  },
+  "paths": {
+    "/api/utilities/topup": {
+      "post": {
+        "summary": "Create a phone top-up order",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "maxLength": 255 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["phone", "amount"],
+                "properties": {
+                  "phone": { "type": "string", "example": "0912345678" },
+                  "amount": {
+                    "type": "string",
+                    "enum": ["10000", "20000", "50000", "100000", "200000", "500000"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Order created; paymentId points at the pending payment" },
+          "200": { "description": "Idempotent replay of an existing order" },
+          "400": { "description": "IDEMPOTENCY_KEY_REQUIRED, INVALID_PHONE or INVALID_AMOUNT" },
+          "422": { "description": "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD" },
+          "502": { "description": "UPSTREAM_UNAVAILABLE" }
+        }
+      }
+    },
+    "/api/utilities/orders/{id}": {
+      "get": {
+        "summary": "Read one of the caller's orders",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Order view" },
+          "404": { "description": "Order not found for this user" }
+        }
+      }
+    },
+    "/api/utilities/bills/lookup": {
+      "get": {
+        "summary": "Deterministic sandbox bill lookup",
+        "parameters": [
+          { "name": "provider", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "customerCode", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Bill amount derived from the last two digits of customerCode" },
+          "422": { "description": "BILL_NOT_FOUND" },
+          "504": { "description": "PROVIDER_TIMEOUT" }
+        }
+      }
+    },
+    "/api/utilities/bills/pay": {
+      "post": {
+        "summary": "Create a bill payment order",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "maxLength": 255 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["provider", "customerCode", "amount"],
+                "properties": {
+                  "provider": { "type": "string", "example": "EVN" },
+                  "customerCode": { "type": "string", "example": "KH1234" },
+                  "amount": { "type": "string", "example": "44000" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "BILL_PAY order created" },
+          "409": { "description": "BILL_AMOUNT_MISMATCH" }
+        }
+      }
+    }
+  }
+}
