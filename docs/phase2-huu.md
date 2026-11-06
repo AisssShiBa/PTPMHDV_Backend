@@ -66,7 +66,7 @@ cũ của các phần khác trong phase 4–5. Không coi toàn repository đã 
 Migration thêm `kycBackObjectKey`; `idNumber` đã tồn tại nên không tạo cột trùng.
 `GET /api/admin/kyc/:userId/documents` trả envelope
 `{success:true,data:{frontUrl,backUrl,expiresAt},auditLog}` và `Cache-Control: no-store`.
-TTL mặc định 300 giây, cấu hình `KYC_URL_TTL_SECONDS`. Chỉ ADMIN; mọi lần gọi
+TTL mặc định 900 giây, cấu hình `KYC_URL_TTL_SECONDS` (tối đa 3600). Chỉ ADMIN; mọi lần gọi
 đã qua validation đều có audit `VIEW_KYC_DOCUMENTS`, không lưu URL đã ký vào audit.
 Hồ sơ thiếu một mặt trả 404 `KYC_DOCUMENTS_INCOMPLETE`. Job cleanup bảo vệ cả hai
 object key; API profile không lộ key mặt sau.

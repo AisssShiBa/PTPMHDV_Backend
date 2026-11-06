@@ -82,9 +82,10 @@ curl.exe -X POST "http://localhost:3000/api/users/kyc/documents" -H "Authorizati
 ```
 
 - Mỗi mặt chỉ nhận PNG/JPEG tối đa 5 MiB, giới hạn 25 triệu pixel; giải mã thật và ghi lại thành JPEG, bỏ metadata gốc. Không dùng filename từ client làm object key. Thiếu mặt trả 400 `KYC_DOCUMENTS_REQUIRED`; `kycFileSize` là tổng kích thước hai ảnh JPEG sau chuẩn hóa.
-- Kiểm tra quyền trước khi buffer file. URL đọc có hiệu lực 300 giây (KYC_URL_TTL_SECONDS); response dùng `Cache-Control: no-store`.
+- Kiểm tra quyền trước khi buffer file. URL đọc có hiệu lực 900 giây (KYC_URL_TTL_SECONDS, tối đa 3600); response dùng `Cache-Control: no-store`.
 - Nộp mới/từ chối/nộp lại khi đang chờ: chuyển thành `PENDING`. `APPROVED` phải bị từ chối trước khi nộp lại.
 - Duyệt: `PENDING → APPROVED/REJECTED`; thu hồi: `APPROVED → REJECTED`. Gửi lại cùng trạng thái là no-op. Chưa có tài liệu upload hợp lệ thì không thể duyệt.
+- `REJECTED` bắt buộc `reason` đã trim, 1–500 ký tự; Admin Service là nơi xác thực đầu tiên và User Service kiểm lại lần nữa. Lý do được lưu ở `kyc_reject_reason` trong cùng transaction với status, chỉ trả cho chủ tài khoản qua `GET /api/users/me/kyc` khi trạng thái là `REJECTED`; duyệt và nộp lại xóa lý do cũ.
 - Optimistic version chặn cập nhật KYC trên snapshot cũ (409 `CONCURRENT_UPDATE`).
 - Intent dọn tệp được lưu trước upload. Tệp mới bị bỏ dở được dọn sau 24 giờ; tệp thay thế cũ được đưa vào hàng đợi ngay. Job chạy mỗi 60 giây khi API đang chạy, thử lại sau một giờ nếu storage lỗi và luôn kiểm tra tham chiếu trước khi xóa.
 - Nếu API dừng, cleanup tiếp tục khi khởi động lại; dữ liệu công việc nằm trong PostgreSQL.

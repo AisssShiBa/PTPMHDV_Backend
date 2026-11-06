@@ -22,11 +22,12 @@ async function runTestS9() {
   const walletService2 = new WalletService();
   console.log('  -> Khởi tạo thành công 2 instance WalletService.');
 
-  // Đảm bảo 3 ví hệ thống tồn tại (nếu chạy test môi trường độc lập chưa migrate)
+  // Đảm bảo 4 ví hệ thống tồn tại (nếu chạy test môi trường độc lập chưa migrate)
   const systemWallets = [
     { systemCode: SystemWalletCode.MAIN, balance: 0 },
     { systemCode: SystemWalletCode.FEE, balance: 0 },
-    { systemCode: SystemWalletCode.TOPUP_POOL, balance: 0 },
+    { systemCode: SystemWalletCode.CLEARING_TOPUP, balance: 0 },
+    { systemCode: SystemWalletCode.SETTLEMENT, balance: 0 },
   ];
 
   for (const sw of systemWallets) {
@@ -49,13 +50,16 @@ async function runTestS9() {
   // Đếm số lượng ví hệ thống cho mỗi mã
   const mainWallets = await prisma.wallet.findMany({ where: { systemCode: SystemWalletCode.MAIN } });
   const feeWallets = await prisma.wallet.findMany({ where: { systemCode: SystemWalletCode.FEE } });
-  const topupWallets = await prisma.wallet.findMany({ where: { systemCode: SystemWalletCode.TOPUP_POOL } });
+  const topupWallets = await prisma.wallet.findMany({ where: { systemCode: SystemWalletCode.CLEARING_TOPUP } });
+  const settlementWallets = await prisma.wallet.findMany({ where: { systemCode: SystemWalletCode.SETTLEMENT } });
 
   console.log(`  -> Số lượng ví MAIN: ${mainWallets.length} (Kỳ vọng: 1)`);
   console.log(`  -> Số lượng ví FEE: ${feeWallets.length} (Kỳ vọng: 1)`);
-  console.log(`  -> Số lượng ví TOPUP_POOL: ${topupWallets.length} (Kỳ vọng: 1)`);
+  console.log(`  -> Số lượng ví CLEARING_TOPUP: ${topupWallets.length} (Kỳ vọng: 1)`);
+  console.log(`  -> Số lượng ví SETTLEMENT: ${settlementWallets.length} (Kỳ vọng: 1)`);
 
-  if (mainWallets.length !== 1 || feeWallets.length !== 1 || topupWallets.length !== 1) {
+  if (mainWallets.length !== 1 || feeWallets.length !== 1
+    || topupWallets.length !== 1 || settlementWallets.length !== 1) {
     throw new Error('❌ FAIL: Mỗi loại ví hệ thống phải có ĐÚNG 1 bản ghi duy nhất!');
   }
   console.log('✅ PASS [1]: Mỗi mã ví hệ thống có duy nhất 1 bản ghi!');
@@ -89,7 +93,7 @@ async function runTestS9() {
 
   // --------------------------------------------------------------------------
   // BƯỚC 3: Kiểm tra định tuyến transferType trong getWalletIds
-  // Yêu cầu: TOPUP đối ứng ví TOPUP_POOL, PAYMENT đối ứng ví MAIN (hoặc merchant).
+  // Yêu cầu: TOPUP đối ứng ví CLEARING_TOPUP, PAYMENT đối ứng ví MAIN (hoặc merchant).
   // --------------------------------------------------------------------------
   console.log('\n[3] Kiểm tra giao dịch và định tuyến ví...');
   const topupAmount = '1000000.00';
@@ -103,11 +107,11 @@ async function runTestS9() {
     transferType: TransferType.TOPUP,
   }, OwnerType.USER);
 
-  // Kiểm tra số dư ví TOPUP_POOL và User
-  const topupPoolWallet = await prisma.wallet.findUnique({ where: { systemCode: SystemWalletCode.TOPUP_POOL } });
+  // Kiểm tra số dư ví CLEARING_TOPUP và User
+  const clearingTopupWallet = await prisma.wallet.findUnique({ where: { systemCode: SystemWalletCode.CLEARING_TOPUP } });
   const updatedUserWallet = await prisma.wallet.findUnique({ where: { id: userWallet.wallet.id } });
 
-  console.log(`  -> Số dư ví TOPUP_POOL: ${topupPoolWallet?.balance}đ`);
+  console.log(`  -> Số dư ví CLEARING_TOPUP: ${clearingTopupWallet?.balance}đ`);
   console.log(`  -> Số dư ví User: ${updatedUserWallet?.balance}đ`);
 
   // Thanh toán 200.000đ từ ví User sang ví Merchant

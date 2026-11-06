@@ -3,6 +3,8 @@ export {
   eventPayloadHash,
   eventSchemaRegistry,
   finvaultEventEnvelopeSchema,
+  fundingCashoutCompletedSchema,
+  fundingCashoutFailedSchema,
   merchantStatusUpdatedSchema,
   parseFinvaultEvent,
   paymentExpiredSchema,

@@ -41,6 +41,8 @@ function initialize(root = path.resolve(__dirname, '..')) {
   secret('REDIS_PASSWORD', 'redis_password.txt', random())
   ensure('REDIS_HOST', 'redis')
   ensure('REDIS_PORT', '6379')
+  // Dedicated system secret for outlet QR HMAC; never a merchant API key.
+  secret('MERCHANT_QR_SECRET', 'merchant_qr_secret.txt', random())
   ensure('MINIO_ROOT_USER', 'finvault-admin')
   ensure('MINIO_ROOT_PASSWORD', random())
   ensure('S3_ACCESS_KEY_ID', 'finvault-kyc')

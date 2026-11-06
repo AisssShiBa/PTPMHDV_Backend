@@ -26,7 +26,8 @@ async function findProfile(where: Prisma.UserWhereInput): Promise<UserProfile> {
 }
 
 export function userResponse(profile: UserProfile) {
-  const { kycObjectKey, kycBackObjectKey, idImageUrl, ...data } = profile
+  // The rejection reason is only ever shown to the owner through /me/kyc.
+  const { kycObjectKey, kycBackObjectKey, idImageUrl, kycRejectReason, ...data } = profile
   return { ...data, hasKycDocument: Boolean(kycObjectKey) }
 }
 export async function provisionProfile(tx: Prisma.TransactionClient, authUserId: string, email: string) {
@@ -39,7 +40,7 @@ export async function provisionProfile(tx: Prisma.TransactionClient, authUserId:
   if (duplicate) throw new HttpError(409, 'PROFILE_CONFLICT', 'Email belongs to another profile')
   return tx.user.create({ data: { authUserId, email } })
 }
-export async function setKycStatus(profile: UserProfile, status: UserProfile['kycStatus']) {
+export async function setKycStatus(profile: UserProfile, status: UserProfile['kycStatus'], reason?: string) {
   if (profile.kycStatus === status) return profile
   const transitions: Record<UserProfile['kycStatus'], UserProfile['kycStatus'][]> = {
     NONE: [], PENDING: ['APPROVED', 'REJECTED'], APPROVED: ['REJECTED'], REJECTED: []
@@ -52,6 +53,7 @@ export async function setKycStatus(profile: UserProfile, status: UserProfile['ky
     const result = await tx.user.updateMany({
       where: { id: profileId, version: profile.version, deletedAt: null },
       data: { kycStatus: status, kycTier: status === 'APPROVED' ? 1 : status === 'REJECTED' ? 0 : profile.kycTier,
+        kycRejectReason: status === 'REJECTED' ? reason : null,
         version: { increment: 1 } }
     })
     if (result.count !== 1) throw new HttpError(409, 'CONCURRENT_UPDATE', 'Profile changed; reload and retry')

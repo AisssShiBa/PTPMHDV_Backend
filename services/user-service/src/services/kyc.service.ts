@@ -40,7 +40,8 @@ export async function submitDocuments(profile: UserProfile, idNumber: string, fr
       const result = await tx.user.updateMany({
         where: { id: profileId, deletedAt: null, version: profile.version },
         data: { idNumber, idImageUrl: null, kycObjectKey: keys[0], kycBackObjectKey: keys[1], kycMimeType: 'image/jpeg',
-          kycFileSize: images.reduce((total, image) => total + image.length, 0), kycStatus: 'PENDING', version: { increment: 1 } }
+          kycFileSize: images.reduce((total, image) => total + image.length, 0), kycStatus: 'PENDING',
+          kycRejectReason: null, version: { increment: 1 } }
       })
       if (result.count !== 1) throw new HttpError(409, 'CONCURRENT_UPDATE', 'Profile changed; reload and retry')
       await tx.storageCleanup.deleteMany({ where: { objectKey: { in: keys } } })

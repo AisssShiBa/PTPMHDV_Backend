@@ -5,6 +5,8 @@ import { startPaymentExpiryJob } from './jobs/payment-expiry.job';
 import { startOutboxJob } from './jobs/outbox.job';
 import { startTopupExpiryJob } from './jobs/expireTopups.job';
 import { startTokenCleanupJob } from './jobs/cleanup-tokens.job';
+import { startRecoverTopupsJob } from './funding/jobs/recoverTopups.job';
+import { startRecoverCashoutsJob } from './funding/jobs/recoverCashouts.job';
 import { closeRabbitMQ } from './utils/rabbitmq.publisher';
 import { closeFinvaultOutboxPublisher } from './jobs/outbox.job';
 
@@ -17,6 +19,8 @@ const server = app.listen(port, () => {
   startOutboxJob();
   startTopupExpiryJob();
   startTokenCleanupJob();
+  startRecoverTopupsJob();
+  startRecoverCashoutsJob();
 });
 
 async function shutdown(signal: string) {

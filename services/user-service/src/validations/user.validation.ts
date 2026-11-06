@@ -21,8 +21,12 @@ export type ListUsersQuery = z.infer<typeof listUsersQuery>
 export const listUsersSchema = z.object({ query: listUsersQuery })
 export const kycBody = z.object({ idNumber: z.string().trim().min(1).max(50) }).strict()
 export const updateKycStatusSchema = z.object({ params: idParams, body: z.object({
-  kycStatus: z.enum(['NONE', 'PENDING', 'APPROVED', 'REJECTED'])
-}).strict() })
+  kycStatus: z.enum(['NONE', 'PENDING', 'APPROVED', 'REJECTED']),
+  reason: z.string().trim().min(1).max(500).optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.kycStatus === 'REJECTED' && value.reason === undefined)
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'], message: 'A rejection reason is required' })
+}) })
 export const updateKycTierSchema = z.object({ params: idParams, body: z.object({
   tier: z.union([z.literal(1), z.literal(2)]), reason: z.string().trim().min(1).max(500)
 }).strict() })

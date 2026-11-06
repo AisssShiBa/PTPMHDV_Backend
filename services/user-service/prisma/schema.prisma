@@ -18,6 +18,7 @@ model User {
   address     String?
   kycStatus   KycStatus @default(NONE) @map("kyc_status")
   kycTier     Int       @default(0) @map("kyc_tier")
+  kycRejectReason String? @map("kyc_reject_reason")
   idNumber    String?   @map("id_number")
   idImageUrl  String?   @map("id_image_url")
   kycObjectKey String? @map("kyc_object_key")

@@ -6,7 +6,9 @@ process.env.EVENT_EXCHANGE = 'finvault.tests.user'
 process.env.EVENT_RETRY_MS = '100'
 process.env.EVENT_MAX_RETRIES = '2'
 process.env.OUTBOX_POLL_MS = '100'
-process.env.KYC_URL_TTL_SECONDS = '300'
+// KYC_URL_TTL_SECONDS is deliberately unset so tests exercise the 900s default.
+// gateway.test.ts loads the merchant app, whose env requires the H13 QR signing key.
+process.env.MERCHANT_QR_SECRET = 'test-merchant-qr-secret-0123456789abcdef'
 process.env.S3_ENDPOINT = 'http://127.0.0.1:19000'
 process.env.S3_BUCKET = 'finvault-kyc-test'
 process.env.S3_ACCESS_KEY_ID = 'finvault_test'
