@@ -1,0 +1,4 @@
+-- AlterEnum SystemWalletCode
+ALTER TYPE "SystemWalletCode" RENAME VALUE 'TOPUP_POOL' TO 'CLEARING_TOPUP';
+ALTER TYPE "SystemWalletCode" RENAME VALUE 'MAIN' TO 'SETTLEMENT';
+

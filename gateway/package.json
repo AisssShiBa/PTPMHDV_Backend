@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon --exec tsx src/server.ts",
     "start": "npx tsx src/server.ts",
-    "test": "tsx test-gateway.ts"
+    "test": "tsx test-gateway.ts && tsx --test test-k15-gateway-wallet.ts"
   },
   "keywords": [],
   "author": "",

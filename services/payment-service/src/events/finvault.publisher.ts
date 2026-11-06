@@ -32,6 +32,9 @@ export function buildPaymentFinvaultEvent(row: PaymentOutbox): FinvaultEvent | u
   // Huu's durable P2P workflow already stores the complete event envelope.
   // Keep its stable ID while using main's leased outbox and retry handling.
   if (row.eventType.startsWith('payment.') || row.eventType.startsWith('funding.cashout_')) {
+    if (row.eventType.startsWith('payment.refund')) {
+      return undefined;
+    }
     const event = parseFinvaultEvent(payload)
     const data = event.data as Record<string, unknown>
     // Cash-out events aggregate on CashOut.id and name it cashOutId.
@@ -70,6 +73,7 @@ export function buildPaymentFinvaultEvent(row: PaymentOutbox): FinvaultEvent | u
       return createEventFromOutbox(row, 'payment.failed', { paymentId, senderId, reason })
     }
     case 'PAYMENT_EXPIRED':
+    case 'payment.expired':
       return createEventFromOutbox(row, 'payment.expired', { paymentId, senderId })
     default:
       return undefined

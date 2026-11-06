@@ -1,6 +1,8 @@
 import { OwnerType, Prisma, PrismaClient, SystemWalletCode, WalletStatus } from "@prisma/client";
 import { DomainException } from "../utils/domain.exception";
 import { CreateWalletDto, HistoryQueryDto, ListWalletsDto } from "../dtos/wallet.dto";
+import { decimalToString } from "../utils/wallet.helpers";
+import { decodeCursor, encodeCursor, KeysetCursor } from "../utils/cursor.helper";
 
 const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, INTERNAL_SERVER_ERROR: 500 };
 const prisma = new PrismaClient();
@@ -106,6 +108,69 @@ export class WalletService {
     ]);
 
     return { wallets, total, page, limit };
+  }
+
+  async getMeLedger(userId: string, options: { cursor?: string; limit?: number }) {
+    const wallet = await prisma.wallet.findFirst({
+      where: { userId, ownerType: OwnerType.USER },
+    });
+    if (!wallet) {
+      throw new DomainException(HttpStatus.NOT_FOUND, "WALLET_NOT_FOUND", "Wallet was not found");
+    }
+
+    let parsedCursor: KeysetCursor | undefined;
+    if (options.cursor) {
+      parsedCursor = decodeCursor(options.cursor);
+    }
+
+    const limit = options.limit ?? 20;
+
+    const where: Prisma.LedgerEntryWhereInput = {
+      walletId: wallet.id,
+      ...(parsedCursor
+        ? {
+            OR: [
+              { createdAt: { lt: parsedCursor.createdAt } },
+              {
+                AND: [
+                  { createdAt: parsedCursor.createdAt },
+                  { id: { lt: parsedCursor.id } },
+                ],
+              },
+            ],
+          }
+        : {}),
+    };
+
+    const entries = await prisma.ledgerEntry.findMany({
+      where,
+      orderBy: [
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
+      take: limit + 1,
+    });
+
+    const hasNextPage = entries.length > limit;
+    const items = hasNextPage ? entries.slice(0, limit) : entries;
+    const nextCursor = hasNextPage && items.length > 0
+      ? encodeCursor(items[items.length - 1])
+      : null;
+
+    return {
+      items: items.map((entry) => ({
+        id: entry.id.toString(),
+        transactionId: entry.transactionId,
+        direction: entry.direction,
+        amount: decimalToString(entry.amount),
+        balanceAfter: decimalToString(entry.balanceAfter),
+        referenceId: entry.referenceId,
+        transferType: entry.transferType,
+        note: entry.note,
+        createdAt: entry.createdAt.toISOString(),
+      })),
+      nextCursor,
+    };
   }
 
 }

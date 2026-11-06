@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { requireGateway } from 'finvault-internal-auth';
 import { requireInternalAuth } from '../middlewares/internalAuth';
+import { requireGatewayOrInternalKey } from '../middlewares/gatewayOrInternalAuth';
+import { requireInternalOrAdmin } from '../middlewares/requireInternalOrAdmin';
 import { requireTransactionToken } from '../middlewares/transactionToken';
 import { attachRequestId } from '../middlewares/requestId';
 import { validate } from '../middlewares/validate';
@@ -28,7 +30,7 @@ router.post('/:id/confirm',  requireGateway, requireTransactionToken, attachRequ
 // Bản nội bộ đổi sang /internal/payments/:id/confirm (P0-2)
 router.post('/internal/:id/confirm', requireInternalAuth, attachRequestId, validate(schemas.paramIdSchema), paymentController.internalConfirm);
 
-// refund chỉ dành cho service nội bộ
-router.post('/:id/refund',   requireInternalAuth, validate(schemas.paramIdSchema), paymentController.refund);
+// refund chỉ dành cho service nội bộ hoặc ADMIN (user thường 403)
+router.post('/:id/refund', requireGatewayOrInternalKey, requireInternalOrAdmin, attachRequestId, validate(schemas.paramIdSchema), paymentController.refund);
 
 export default router;

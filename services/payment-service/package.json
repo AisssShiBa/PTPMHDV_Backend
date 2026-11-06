@@ -8,7 +8,8 @@
     "start": "tsx src/server.ts",
     "build": "tsc -p tsconfig.json",
     "test": "tsx --test tests/*.test.ts",
-    "test:integration": "tsx --test tests/*.integration.test.ts"
+    "test:integration": "tsx --test tests/*.integration.test.ts",
+    "guard:transactions": "node ../../scripts/guard-p2p-transactions.cjs"
   },
   "keywords": [],
   "author": "",

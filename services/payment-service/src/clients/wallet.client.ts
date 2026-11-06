@@ -42,6 +42,30 @@ export class WalletClient {
     return this.request(userId, 'release', { referenceId });
   }
 
+  async refundCapture(userId: string, originalReferenceId: string, referenceId: string, amount: string) {
+    return this.request(userId, 'refund', { originalReferenceId, referenceId, amount });
+  }
+
+  async lookupTransaction(referenceId: string) {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/api/wallets/transactions/lookup?referenceId=${encodeURIComponent(referenceId)}`, {
+        method: 'GET',
+        headers: { 'x-internal-key': internalKey! },
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch {
+      throw new DomainException(503, 'WALLET_UNAVAILABLE', 'Wallet temporarily unavailable');
+    }
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const { code, message, details, ...metadata } = json.error || {};
+      throw new DomainException(response.status, code || 'WALLET_ERROR', message || 'Wallet rejected operation',
+        details ?? (Object.keys(metadata).length ? metadata : undefined));
+    }
+    return json.data;
+  }
+
   async refundCredit(userId: string, amount: string, referenceId: string) {
     const response = await fetch(`${this.baseUrl}/api/wallets/${userId}/credit`, {
       method: 'POST',

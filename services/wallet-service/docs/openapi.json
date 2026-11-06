@@ -1,0 +1,553 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "FinVault Wallet API",
+    "version": "1.0.0",
+    "description": "API dịch vụ ví FinVault. Hỗ trợ tra cứu số dư cá nhân và lịch sử biến động số dư qua phân trang Keyset Cursor. Mọi truy vấn người dùng đi qua API Gateway với Bearer Access Token hoặc kiểm thực trực tiếp bằng Gateway Token ES256."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000/api",
+      "description": "API Gateway"
+    },
+    {
+      "url": "http://localhost:3004/api",
+      "description": "Dịch vụ Wallet trực tiếp (Mạng nội bộ)"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/wallets/me": {
+      "get": {
+        "operationId": "getMyWalletBalance",
+        "summary": "Tra cứu số dư ví của chính người dùng hiện tại",
+        "description": "Xác định danh tính người dùng duy nhất thông qua Gateway token đã được ký và xác thực. Bỏ qua mọi tham số userId truyền qua query hay body.",
+        "responses": {
+          "200": {
+            "description": "Lấy thông tin ví và số dư thành công",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBalanceResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": 101,
+                    "userId": "11111111-2222-3333-4444-555555555555",
+                    "balance": "500000.00",
+                    "heldBalance": "0.00",
+                    "availableBalance": "500000.00",
+                    "currency": "VND",
+                    "status": "ACTIVE",
+                    "createdAt": "2026-11-01T00:00:00.000Z",
+                    "updatedAt": "2026-11-06T12:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Chưa xác thực hoặc token không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Missing authentication context"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Không có quyền truy cập",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You are not authorized to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Người dùng chưa được khởi tạo ví",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "WALLET_NOT_FOUND",
+                    "message": "Wallet was not found"
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt quá tần suất gọi API cho phép",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "RATE_LIMIT_EXCEEDED",
+                    "message": "Quá nhiều yêu cầu, vui lòng thử lại sau"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Lỗi máy chủ nội bộ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Internal server error"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/wallets/me/ledger": {
+      "get": {
+        "operationId": "getMyLedgerEntries",
+        "summary": "Lịch sử sổ cái biến động số dư phân trang cursor của chính người dùng",
+        "description": "Phân trang theo cơ chế Keyset Cursor sắp xếp theo (createdAt DESC, id DESC), ổn định khi có bút toán mới chèn vào giữa chừng. Không lộ walletId hay userId của các bên đối ứng.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Số bản ghi tối đa trên một trang (mặc định 20, trần 100)",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor dạng chuỗi base64url đại diện cho mốc bản ghi cuối của trang trước",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Truy vấn lịch sử sổ cái thành công",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletLedgerResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "items": [
+                      {
+                        "id": "1002",
+                        "transactionId": "b1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+                        "direction": "CREDIT",
+                        "amount": "100000.00",
+                        "balanceAfter": "500000.00",
+                        "referenceId": "topup_vnpay_ref_123",
+                        "transferType": "TOPUP",
+                        "note": "Nạp tiền vào ví",
+                        "createdAt": "2026-11-06T12:00:00.000Z"
+                      }
+                    ],
+                    "nextCursor": "eyJjcmVhdGVkQXQiOiIyMDI2LTExLTA2VDEyOjAwOjAwLjAwMFoiLCJpZCI6IjEwMDIifQ"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cursor không hợp lệ hoặc tham số limit sai",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INVALID_CURSOR",
+                    "message": "Cursor phân trang không hợp lệ"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Chưa xác thực hoặc token không hợp lệ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Missing authentication context"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Không có quyền truy cập",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You are not authorized to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Người dùng chưa có ví",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "WALLET_NOT_FOUND",
+                    "message": "Wallet was not found"
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Vượt quá tần suất gọi API cho phép",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "RATE_LIMIT_EXCEEDED",
+                    "message": "Quá nhiều yêu cầu, vui lòng thử lại sau"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Lỗi máy chủ nội bộ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "Internal server error"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Access Token do Auth Service phát hành, gửi tới API Gateway."
+      },
+      "gatewayToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-gateway-token",
+        "description": "Gateway Token ký bằng ES256, chuyển tiếp nội bộ tới Microservice."
+      }
+    },
+    "schemas": {
+      "WalletBalance": {
+        "type": "object",
+        "required": [
+          "id",
+          "userId",
+          "balance",
+          "heldBalance",
+          "availableBalance",
+          "currency",
+          "status",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "ID số của ví"
+          },
+          "userId": {
+            "type": "string",
+            "description": "Mã UUID của chủ sở hữu ví"
+          },
+          "balance": {
+            "type": "string",
+            "example": "500000.00",
+            "description": "Tổng số dư tài khoản (chuỗi 2 chữ số thập phân)"
+          },
+          "heldBalance": {
+            "type": "string",
+            "example": "0.00",
+            "description": "Số tiền đang bị tạm giữ (hold)"
+          },
+          "availableBalance": {
+            "type": "string",
+            "example": "500000.00",
+            "description": "Số dư khả dụng = balance - heldBalance"
+          },
+          "currency": {
+            "type": "string",
+            "example": "VND",
+            "description": "Đơn vị tiền tệ"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "LOCKED"
+            ],
+            "description": "Trạng thái hoạt động của ví"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WalletBalanceResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/WalletBalance"
+          }
+        }
+      },
+      "LedgerEntryItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "transactionId",
+          "direction",
+          "amount",
+          "balanceAfter",
+          "referenceId",
+          "transferType",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "ID duy nhất của bút toán (string đại diện bigint)"
+          },
+          "transactionId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Mã giao dịch kép"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "DEBIT",
+              "CREDIT"
+            ],
+            "description": "Chiều biến động số dư (Ghi nợ DEBIT / Ghi có CREDIT)"
+          },
+          "amount": {
+            "type": "string",
+            "example": "50000.00",
+            "description": "Số tiền biến động (chuỗi 2 chữ số thập phân)"
+          },
+          "balanceAfter": {
+            "type": "string",
+            "example": "450000.00",
+            "description": "Số dư tức thời sau khi bút toán được áp dụng"
+          },
+          "referenceId": {
+            "type": "string",
+            "description": "Mã tham chiếu nghiệp vụ chống trùng lặp"
+          },
+          "transferType": {
+            "type": "string",
+            "enum": [
+              "TOPUP",
+              "PAYMENT",
+              "REFUND",
+              "P2P_TRANSFER",
+              "ADJUSTMENT"
+            ],
+            "description": "Loại nghiệp vụ chuyển tiền"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true,
+            "description": "Ghi chú giao dịch"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Thời điểm ghi sổ cái"
+          }
+        }
+      },
+      "WalletLedgerData": {
+        "type": "object",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntryItem"
+            },
+            "description": "Danh sách các bút toán theo thứ tự giảm dần thời gian"
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true,
+            "description": "Cursor để lấy trang tiếp theo, null nếu đã là trang cuối"
+          }
+        }
+      },
+      "WalletLedgerResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/WalletLedgerData"
+          }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Mã định danh lỗi máy đọc"
+          },
+          "message": {
+            "type": "string",
+            "description": "Thông điệp mô tả lỗi"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Thông tin phụ trợ chi tiết về lỗi"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "ID truy vết yêu cầu"
+          }
+        }
+      }
+    }
+  }
+}
+

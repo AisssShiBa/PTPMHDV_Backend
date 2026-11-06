@@ -20,6 +20,7 @@ export async function claimPaymentOutboxEvents(
           ("status" = 'PENDING' AND ("nextRetryAt" IS NULL OR "nextRetryAt" <= ${now}))
           OR ("status" = 'PROCESSING' AND "lockedUntil" <= ${now})
         )
+          AND "eventType" != 'payment.refund_requested'
           AND (${aggregateIdPrefix ?? null}::text IS NULL OR "aggregateId" LIKE ${aggregateIdPrefix ? `${aggregateIdPrefix}%` : ''})
         ORDER BY "createdAt" ASC
         LIMIT ${PAYMENT_OUTBOX_BATCH_SIZE}

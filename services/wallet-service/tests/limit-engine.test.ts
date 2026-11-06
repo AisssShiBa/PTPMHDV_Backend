@@ -124,18 +124,17 @@ async function runAllTests() {
     const today = new Date();
     const monthKey = getVnMonthKey(today);
 
-    // Giả lập 4 ngày trước trong tháng, mỗi ngày đã chi 450.000 (tổng = 1.800.000đ)
-    for (let dayOffset = 1; dayOffset <= 4; dayOffset++) {
-      const pastDay = `${monthKey}-${String(dayOffset).padStart(2, '0')}`;
-      await prisma.userDailyUsage.create({
-        data: {
-          userId: sender.userId,
-          day: pastDay,
-          monthKey,
-          spentDay: 450000,
-        },
-      });
-    }
+    // Giả lập ngày khác trong tháng đã chi 1.800.000đ (tránh trùng ngày hôm nay)
+    const todayStr = getVnDay(today);
+    const pastDay = todayStr === `${monthKey}-01` ? `${monthKey}-02` : `${monthKey}-01`;
+    await prisma.userDailyUsage.create({
+      data: {
+        userId: sender.userId,
+        day: pastDay,
+        monthKey,
+        spentDay: 1800000,
+      },
+    });
 
     const expiry = new Date(Date.now() + 60000).toISOString();
 
