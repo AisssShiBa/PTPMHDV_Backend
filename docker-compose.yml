@@ -323,6 +323,58 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  utilities-migrate:
+    build:
+      context: .
+      dockerfile: services/utilities-service/Dockerfile
+    image: finvault-utilities-service:local
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/utilities_service
+    command: ["npx", "prisma", "migrate", "deploy"]
+    networks: [internal_net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  utilities-service:
+    healthcheck: *http-health
+    build:
+      context: .
+      dockerfile: services/utilities-service/Dockerfile
+    image: finvault-utilities-service:local
+    restart: unless-stopped
+    init: true
+    secrets: [gateway_public_key, internal_key]
+    expose:
+      - "3008"
+    networks:
+      - internal_net
+    environment:
+      - PORT=3008
+      - NODE_ENV=production
+      - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/utilities_service
+      - INTERNAL_KEY_FILE=/run/secrets/internal_key
+      - RABBITMQ_URL=${RABBITMQ_URL:-amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672}
+      - PAYMENT_SERVICE_URL=http://payment-service:3005
+      # Sandbox only: deterministic fake top-ups, no real money.
+      - MOCK_PROVIDER_ENABLED=true
+      - PROVIDER_BASE_URL=http://utilities-service:3008
+      - PROVIDER_TIMEOUT_MS=10000
+      - RECOVERY_ENABLED=true
+      - RECOVERY_INTERVAL_MS=30000
+      - RECOVERY_STALE_MS=60000
+    depends_on:
+      utilities-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+
   auth-service:
     healthcheck: *http-health
     build:
@@ -405,6 +457,7 @@ services:
       - PAYMENT_SERVICE_URL=http://payment-service:3005
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
       - ADMIN_SERVICE_URL=http://admin-service:3007
+      - UTILITIES_SERVICE_URL=http://utilities-service:3008
       - REDIS_URL_FILE=/run/secrets/redis_url
     depends_on:
       redis:
@@ -422,6 +475,8 @@ services:
       wallet-service:
         condition: service_healthy
       payment-service:
+        condition: service_healthy
+      utilities-service:
         condition: service_healthy
 
 volumes:
