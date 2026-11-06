@@ -14,6 +14,47 @@ export const create = async (req: Request, res: Response) => {
   res.status(result.created ? 201 : 200).json({ success: true, data: { ...walletView(result.wallet), created: result.created } });
 };
 
+export const getMe = async (req: Request, res: Response) => {
+  const auth = (req as any).auth;
+  if (!auth?.userId) {
+    console.warn(JSON.stringify({
+      route: '/me',
+      errorCode: 'UNAUTHORIZED',
+      message: 'Missing authentication context',
+    }));
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'Missing authentication context' },
+    });
+  }
+
+  try {
+    const wallet = await walletService.getBalance(auth.userId, OwnerType.USER);
+    return res.json({
+      success: true,
+      data: {
+        id: wallet.id,
+        userId: wallet.userId,
+        balance: decimalToString(wallet.balance),
+        heldBalance: decimalToString(wallet.heldBalance),
+        availableBalance: decimalToString(wallet.balance.sub(wallet.heldBalance)),
+        currency: wallet.currency,
+        status: wallet.status,
+        createdAt: wallet.createdAt.toISOString(),
+        updatedAt: wallet.updatedAt.toISOString(),
+      },
+    });
+  } catch (err: any) {
+    console.warn(JSON.stringify({
+      route: '/me',
+      userId: auth.userId,
+      errorCode: err.code || 'UNKNOWN_ERROR',
+      message: err.message,
+    }));
+    throw err;
+  }
+};
+
 export const getBalance = async (req: Request, res: Response) => {
   const userId = req.params.userId as string;
   const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;

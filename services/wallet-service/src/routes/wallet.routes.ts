@@ -28,6 +28,10 @@ router.use(requireOwnerOrAdmin);
 
 router.post('/', validate(schemas.createWalletSchema), walletController.create);
 router.get('/transactions/lookup', requireInternalOrAdmin, walletController.lookupTransaction);
+
+// K15: Endpoint /me phải được đăng ký TRƯỚC mọi route /:userId/* để tránh bị nuốt thành params.userId
+router.get('/me', walletController.getMe);
+
 router.get('/:userId/balance', validate(schemas.ownerIdParamSchema.merge(schemas.ownerTypeQuerySchema)), walletController.getBalance);
 router.post('/:userId/hold', requireInternalOrAdmin, validate(schemas.holdSchema), walletController.hold);
 router.post('/:userId/capture', requireInternalOrAdmin, validate(schemas.referenceSchema), walletController.capture);
