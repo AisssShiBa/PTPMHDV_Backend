@@ -1,0 +1,187 @@
+# N14a - Mo rong enum NotificationType va mapping su kien moi
+Environment: Windows, Node v24.21.0, Docker Docker version 29.8.0, build 88096ef
+Task: N14a (enum + prisma migration + financeEventMapping + tests + EVENTS.md)
+SHA_CODE (feat(N14a)): 452143c35015453407d6a49530f6fd32a3f90267
+SHA_BASE (origin/main): d6ac0a65c311ccbf9f09f64a3dd434b9ecd0b391
+Date: 2026-11-06 13:52:28 +07:00
+Test database: PostgreSQL that, container notification-postgres-test -> 127.0.0.1:5434, database notification_service_test
+DATABASE_URL: postgresql://notification_test:notification_test@127.0.0.1:5434/notification_service_test
+Commands: npx prisma generate -> npx prisma validate -> npx prisma migrate deploy -> npm run typecheck -> npm test
+KHONG bind event moi vao financeEventBindings/handlers: N14b dang BLOCKED vi packages/finvault-events/src/schemas.ts chua dang ky funding.*, payment.refunded, utility.*, user.kyc_reviewed.
+--- npx prisma generate ---
+node.exe : Environment variables loaded from .env
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Environment variables loaded from .env:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Prisma schema loaded from prisma\schema.prisma
+
+Γ£ö Generated Prisma Client (v6.19.3) to .\node_modules\@prisma\client in 65ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Tip: Interested in query caching in just a few lines of code? Try Accelerate today! https://pris.ly/tip-3-accelerate
+
+
+--- npx prisma validate ---
+node.exe : Environment variables loaded from .env
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Environment variables loaded from .env:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Prisma schema loaded from prisma\schema.prisma
+The schema at prisma\schema.prisma is valid ≡ƒÜÇ
+
+--- npx prisma migrate deploy ---
+node.exe : Environment variables loaded from .env
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Environment variables loaded from .env:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": PostgreSQL database "notification_service_test", schema "public" at "127.0.0.1:5434"
+
+8 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+
+--- npm run typecheck ---
+
+> notification-service@1.0.0 typecheck
+> tsc --noEmit
+
+
+--- npm test ---
+
+> notification-service@1.0.0 test
+> tsx --test tests/*.test.ts
+
+Γ£ö auth package smoke test creates a Gateway Token (38.3419ms)
+Γ£ö notification client route rejects missing Gateway Token (110.2512ms)
+Γ£ö socket ticket endpoint rejects a missing Gateway Token (11.2479ms)
+Γ£ö socket ticket endpoint issues a fresh one-time ticket and expiration for the verified user (27.4336ms)
+Γ£ö socket ticket endpoint rate-limits a user after ten requests in one minute (61.3967ms)
+Γ£ö notification client route rejects expired Gateway Token (8.6406ms)
+Γ£ö notification client route rejects a forged Gateway Token (4.1124ms)
+Γ£ö legacy verification header cannot authenticate client requests (8.8806ms)
+Γ£ö internal key cannot authenticate client requests (4.6694ms)
+Γ£ö a forged user ID header cannot authenticate client requests (26.8513ms)
+Γ£ö internal notification creation still requires x-internal-key (69.5027ms)
+Γ£ö internal notification creation is idempotent when eventId is supplied (141.7324ms)
+Γ£ö health endpoints remain public (5.0287ms)
+Γ£ö payment.succeeded creates one Vietnamese notification per distinct recipient and formats BigInt amounts (69.1604ms)
+Γ£ö payment.succeeded personalizes sender and receiver messages with compacted names (0.8249ms)
+Γ£ö payment.succeeded deduplicates a recipient who is both sender and receiver (0.664ms)
+Γ£ö payment.succeeded includes an optional note in both recipient messages (5.3915ms)
+Γ£ö legacy KYC event does not invent a previous tier (1.3517ms)
+Γ£ö payment.failed does not expose the raw failure reason (1.4001ms)
+Γ£ö funding.topup_succeeded maps to TOPUP_SUCCEEDED with a BigInt-formatted amount (0.8526ms)
+Γ£ö payment.refunded accepts "50000.00" and rejects a non-zero fractional part (1.5068ms)
+Γ£ö funding cashout events map to CASHOUT_SUCCEEDED/CASHOUT_FAILED without exposing a reason (1.1029ms)
+Γ£ö utility order events map to UTILITY_SUCCEEDED/FAILED/REFUNDED (4.2779ms)
+Γ£ö user.kyc_reviewed maps APPROVED and REJECTED, omitting an empty reason (8.7116ms)
+Γ£ö KYC rejection reasons are sanitized and truncated to 200 characters (0.59ms)
+Γ£ö new mappings throw TypeError for a missing userId, invalid amount or invalid KYC status (1.8955ms)
+Γ£ö unknown event types still return no notifications (0.2218ms)
+∩╣ú FinVault events persist transactionally, deduplicate, and emit only once over Socket.IO (3.3345ms) # requires a local RabbitMQ test broker configured with RABBITMQ_URL
+Γ£ö finance consumer retries an initial broker connection failure and starts once available (17.7716ms)
+Γ£ö finance consumer does not retry after stop during backoff (7.1615ms)
+Γ£ö notification service can import the shared event package (1.6563ms)
+Γ£ö consumer uses body.eventId before AMQP messageId (9.6951ms)
+Γ£ö consumer parses a flat event and falls back to AMQP messageId (17.4453ms)
+Γ£ö consumer parses an envelope event using its eventType and data (2.0183ms)
+Γ£ö consumer falls back to AMQP messageId when body.eventId is missing (0.3893ms)
+Γ£ö consumer rejects an event without a user ID (1.4786ms)
+Γ£ö temporary failures retry three times before the fourth delivery goes to DLQ (0.9965ms)
+Γ£ö notification inbox deduplicates identical event deliveries (141.7006ms)
+Γ£ö notification inbox deduplicates twenty concurrent deliveries (197.402ms)
+Γ£ö notification inbox rejects reuse of an eventId with different content (49.5381ms)
+Γ£ö GET /me returns only the authenticated user notifications and database unread count (217.1636ms)
+Γ£ö legacy user-ID GET route is removed (18.182ms)
+Γ£ö legacy user-ID read-all route is removed (15.4997ms)
+Γ£ö a user cannot read another user notification or learn whether it exists (56.8799ms)
+Γ£ö read-all only updates notifications owned by the authenticated user (41.2996ms)
+Γ£ö GET /me clamps the page size to 50 (15.3187ms)
+Γ£ö LogPushProvider reports delivery without ever logging the push token (4.9277ms)
+Γ£ö LogPushProvider rejects an empty identity instead of logging it (1.3611ms)
+Γ£ö socket rejects a missing Gateway Token (78.0004ms)
+Γ£ö socket rejects a malformed Gateway Token (19.2116ms)
+Γ£ö socket rejects an expired Gateway Token (32.9102ms)
+Γ£ö socket rooms deliver notifications only to the matching user (89.395ms)
+Γ£ö a Gateway Token jti can be used only once (53.9941ms)
+Γ£ö a socket ticket can be used once through auth.ticket (77.9632ms)
+Γ£ö a socket ticket remains compatible through deprecated auth.token (45.5601ms)
+Γ£ö socket ticket rate limit rejects the eleventh issue in one minute (2.4409ms)
+Γ£ö socket ticket issuance caps unused tickets per user and evicts the oldest (0.7705ms)
+Γ£ö socket ignores Gateway Token supplied only in the query string (12.1255ms)
+Γ£ö socket disconnects when its maximum age is reached (318.2563ms)
+Γ£ö a device ticket joins the device room and receives an event emitted to it (216.8951ms)
+Γ£ö a socket ticket for a revoked device is rejected with DEVICE_REVOKED (50.9248ms)
+Γ£ö a socket ticket without deviceId keeps the previous connection behavior (11.878ms)
+Γ£ö revoking a device disconnects only that device socket (97.5165ms)
+Γ£ö connecting and disconnecting a device socket updates lastSeenAt through the injected clock hook (34.1308ms)
+Γ£ö registering a new device returns 201 and the list contains exactly one row (289.3438ms)
+Γ£ö re-registering the same deviceId returns 200, updates fields and keeps one row (59.2827ms)
+Γ£ö ten concurrent registrations of the same device create one row and no server error (235.0991ms)
+Γ£ö the eleventh active device is rejected with DEVICE_LIMIT_REACHED (169.0645ms)
+Γ£ö a revoked device does not count toward the active device limit (192.971ms)
+Γ£ö an invalid deviceId is rejected with 400 (4.3778ms)
+Γ£ö a deviceId longer than 128 characters is rejected with 400 (3.9121ms)
+Γ£ö an unknown platform is rejected with 400 (4.7675ms)
+Γ£ö device responses never include the push token (20.065ms)
+Γ£ö another user cannot list or delete a device they do not own (29.2222ms)
+Γ£ö deleting a device twice is idempotent and keeps the first revokedAt (19.0352ms)
+Γ£ö deleting with a non-UUID id is rejected with 400 (1.8403ms)
+Γ£ö re-registering a revoked device clears revokedAt (22.7305ms)
+Γ£ö the devices routes require a Gateway token (1.3808ms)
+Γ£ö user lookup sends the existing internal-key contract and reads only fullName (49.3863ms)
+Γ£ö user lookup degrades absent names to null (1.0975ms)
+Γ£ö user lookup timeout degrades to a generic result (9.8997ms)
+Γ£ö user lookup HTTP errors degrade without logging response bodies or names (1.3855ms)
+Γ£ö user lookup caches hits and misses for the configured TTL (38.4474ms)
+Γ£ö display names use the surname and the final-name initial (2.4689ms)
+Γä╣ tests 84
+Γä╣ suites 0
+Γä╣ pass 83
+Γä╣ fail 0
+Γä╣ cancelled 0
+Γä╣ skipped 1
+Γä╣ todo 0
+Γä╣ duration_ms 2790.0509
+
+--- git grep event moi trong registry va bindings (mong doi: khong co dong nao) ---
+grep_exit=1
+
+--- financeEventBindings hien tai ---
+services/notification-service/src/services/financeEventsConsumer.ts:15:export const financeEventBindings = [
+services/notification-service/src/services/financeEventsConsumer.ts-16-  'user.registered',
+services/notification-service/src/services/financeEventsConsumer.ts-17-  'user.kyc_updated',
+services/notification-service/src/services/financeEventsConsumer.ts-18-  'merchant.status_updated',
+services/notification-service/src/services/financeEventsConsumer.ts-19-  'payment.succeeded',
+services/notification-service/src/services/financeEventsConsumer.ts-20-  'payment.failed',
+services/notification-service/src/services/financeEventsConsumer.ts-21-  'payment.expired'
+services/notification-service/src/services/financeEventsConsumer.ts-22-] as const
+services/notification-service/src/services/financeEventsConsumer.ts-23-
+services/notification-service/src/services/financeEventsConsumer.ts-24-const ignoredEventTypes = ['user.registered', 'merchant.status_updated']
+services/notification-service/src/services/financeEventsConsumer.ts-25-const retryInitialDelayMs = 2000
+
+
+GHI CHU:
+- Chi them enum + mapping thuan (khong I/O), khong sua packages/*, khong them binding/handler (N14b).
+- Khong sua migration cu; migration moi chi gom 6 cau ALTER TYPE ADD VALUE, khong dung gia tri moi trong cung migration.
+- Enum da dong bo giua prisma/schema.prisma va src/types/notification.ts.
+- Test mapping thuan chay khong can DB; toan bo npm test chay tren PostgreSQL that va pass 83, fail 0, skip 1.
+- N14b BLOCKED: event schema registry chi co user.registered, user.kyc_updated, merchant.status_updated, payment.succeeded/failed/expired, wallet.limit_exceeded. Bind funding.*/payment.refunded/utility.*/user.kyc_reviewed se day message vao dead-letter.
+--- migration row trong _prisma_migrations ---
+20261106110000_extend_notification_types | finished=true
+
+--- enum NotificationType trong PostgreSQL (6 gia tri moi) ---
+TOPUP_SUCCEEDED,CASHOUT_SUCCEEDED,CASHOUT_FAILED,UTILITY_SUCCEEDED,UTILITY_FAILED,UTILITY_REFUNDED
+
