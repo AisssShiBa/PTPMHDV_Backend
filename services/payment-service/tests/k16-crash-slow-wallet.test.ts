@@ -10,7 +10,9 @@ import { test, before, after, describe } from 'node:test';
 import http from 'node:http';
 import { randomUUID } from 'crypto';
 import { PrismaClient as PaymentPrisma, PaymentType, PaymentStatus, IdempotencyStatus, Prisma } from '@prisma/client';
-import { PrismaClient as WalletPrisma, OwnerType, HoldStatus } from '../../wallet-service/node_modules/@prisma/client';
+const { PrismaClient: WalletPrisma } = require('../../wallet-service/node_modules/@prisma/client');
+const OwnerType = { USER: 'USER', SYSTEM: 'SYSTEM', MERCHANT: 'MERCHANT' } as const;
+const HoldStatus = { PENDING: 'PENDING', HELD: 'HELD', CAPTURED: 'CAPTURED', RELEASED: 'RELEASED', EXPIRED: 'EXPIRED' } as const;
 import walletApp from '../../wallet-service/src/app';
 import { seedLimitPolicies } from '../../wallet-service/prisma/seed';
 import { LedgerService } from '../../wallet-service/src/services/ledger.service';
@@ -22,7 +24,7 @@ import path from 'path';
 const { getFinancialSnapshot, verifyDeltaConservation } = require(path.resolve(__dirname, '../../../scripts/check-k16-invariants.cjs'));
 
 const pPrisma = new PaymentPrisma({ datasources: { db: { url: paymentDbUrl } } });
-const wPrisma = new WalletPrisma({ datasources: { db: { url: walletDbUrl } } });
+const wPrisma: any = new WalletPrisma({ datasources: { db: { url: walletDbUrl } } });
 const ledgerService = new LedgerService();
 
 let walletServer: http.Server;

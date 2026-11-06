@@ -10,7 +10,8 @@ import { test, before, after, describe } from 'node:test';
 import http from 'node:http';
 import { randomUUID } from 'crypto';
 import { PrismaClient as PaymentPrisma, PaymentStatus } from '@prisma/client';
-import { PrismaClient as WalletPrisma, OwnerType } from '../../wallet-service/node_modules/@prisma/client';
+const { PrismaClient: WalletPrisma } = require('../../wallet-service/node_modules/@prisma/client');
+const OwnerType = { USER: 'USER', SYSTEM: 'SYSTEM', MERCHANT: 'MERCHANT' } as const;
 import walletApp from '../../wallet-service/src/app';
 import { LedgerService } from '../../wallet-service/src/services/ledger.service';
 import { seedLimitPolicies } from '../../wallet-service/prisma/seed';
@@ -23,7 +24,7 @@ import path from 'path';
 const { getFinancialSnapshot, verifyDeltaConservation } = require(path.resolve(__dirname, '../../../scripts/check-k16-invariants.cjs'));
 
 const pPrisma = new PaymentPrisma({ datasources: { db: { url: paymentDbUrl } } });
-const wPrisma = new WalletPrisma({ datasources: { db: { url: walletDbUrl } } });
+const wPrisma: any = new WalletPrisma({ datasources: { db: { url: walletDbUrl } } });
 const ledgerService = new LedgerService();
 
 let walletServer: http.Server;
@@ -118,9 +119,11 @@ describe('K16-1: Transaction Guard & Acceptance Baseline Suite', () => {
     });
 
     const token = {
+      iss: 'auth-service',
+      aud: 'payment-service',
       sub: userId,
       paymentId: checkoutResult.payment.id,
-      amount: new Prisma.Decimal('50000'),
+      amount: '50000',
       jti: randomUUID(),
       exp: Math.floor(Date.now() / 1000) + 60,
       iat: Math.floor(Date.now() / 1000),
@@ -142,7 +145,6 @@ describe('K16-1: Transaction Guard & Acceptance Baseline Suite', () => {
           amount: '60000',
           referenceId: `k16-a1-tx-${i}-${randomUUID()}`,
           transferType: 'P2P_TRANSFER' as any,
-          note: `A1 parallel transfer ${i}`
         })
       )
     );
@@ -220,9 +222,11 @@ describe('K16-1: Transaction Guard & Acceptance Baseline Suite', () => {
     // Tiến hành confirm lệnh thành công duy nhất
     const successfulPayment = (successfulCheckouts[0] as PromiseFulfilledResult<any>).value.payment;
     const token = {
+      iss: 'auth-service',
+      aud: 'payment-service',
       sub: senderId,
       paymentId: successfulPayment.id,
-      amount: new Prisma.Decimal('60000'),
+      amount: '60000',
       jti: randomUUID(),
       exp: Math.floor(Date.now() / 1000) + 60,
       iat: Math.floor(Date.now() / 1000),
