@@ -51,6 +51,22 @@ export const hold = async (req: Request, res: Response) => {
   });
 };
 
+export const extend = async (req: Request, res: Response) => {
+  const userId = req.params.userId as string;
+  const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
+  const { referenceId, expiresAt } = req.body;
+  const { hold, replayed, extended } = await walletHoldService.extendHold(userId, referenceId, expiresAt, ownerType);
+  res.json({
+    success: true, data: {
+      id: hold.id,
+      status: hold.status,
+      expiresAt: hold.expiresAt.toISOString(),
+      replayed,
+      extended,
+    }
+  });
+};
+
 export const capture = async (req: Request, res: Response) => {
   const userId = req.params.userId as string;
   const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;

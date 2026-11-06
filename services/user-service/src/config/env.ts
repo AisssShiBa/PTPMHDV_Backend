@@ -14,7 +14,7 @@ const schema = z.object({
   EVENT_MAX_RETRIES: z.coerce.number().int().min(1).max(10).default(5),
   EVENT_RETRY_MS: z.coerce.number().int().min(100).max(60000).default(2000),
   OUTBOX_POLL_MS: z.coerce.number().int().min(100).default(1000),
-  KYC_URL_TTL_SECONDS: z.coerce.number().int().min(1).max(3600).default(300),
+  KYC_URL_TTL_SECONDS: z.coerce.number().int().min(1).max(3600).default(900),
   KYC_CLEANUP_GRACE_MS: z.coerce.number().int().min(1).max(2592000000).default(86400000),
   STORAGE_CLEANUP_ENABLED: z.enum(['true', 'false']).default('true'),
   S3_ENDPOINT: z.string().url().optional(),

@@ -9,7 +9,7 @@ export async function findMerchantById(merchantId: string) {
   if (!merchant) throw new HttpError(404, 'NOT_FOUND', 'Merchant not found')
   return merchant
 }
-async function enqueue(tx: Prisma.TransactionClient, merchant: Merchant, eventType: string) {
+export async function enqueue(tx: Prisma.TransactionClient, merchant: Merchant, eventType: string) {
   const eventId = randomUUID()
   await tx.merchantOutboxEvent.create({ data: {
     id: eventId, aggregateId: merchant.id, aggregateVersion: merchant.version, eventType,

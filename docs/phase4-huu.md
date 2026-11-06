@@ -28,7 +28,7 @@ rtk proxy node tests/acceptance/phase4.mjs
   được publisher confirm. Auth hiện chỉ có USER/ADMIN; quyền chủ merchant dựa trên
   `ownerId`. Không chèn role MERCHANT, ví hoặc QR giả để che phần còn thiếu.
 - S11–S13 gọi qua Gateway, kiểm tra DB, RabbitMQ và MinIO thật. S12 dùng TTL 2 giây
-  trong môi trường thử; cấu hình mặc định vẫn 300 giây. K1 chạy phần nộp/duyệt/phát
+  trong môi trường thử; cấu hình mặc định đã đổi sang 900 giây ở H14. K1 chạy phần nộp/duyệt/phát
   event và báo BLOCKED tại phụ thuộc thiếu, không đánh dấu pass toàn bộ.
 - Cuối luồng gọi `checkSystemConservation` thật và đối chiếu SUM(balance) = 0.
 
