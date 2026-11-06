@@ -66,6 +66,8 @@ model Payment {
   needsAttention       Boolean            @default(false)
   holdId               String?            @db.VarChar(255)
   holdExpiresAt  DateTime?        @db.Timestamp()
+  workerLeaseUntil     DateTime?          @db.Timestamp(3)
+  attempt              Int                @default(0)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   histories      PaymentHistory[]
@@ -73,6 +75,7 @@ model Payment {
   @@index([userId, createdAt])
   @@index([status])
   @@index([status, nextRefundAttemptAt])
+  @@index([workflow, workerLeaseUntil])
   @@unique([userId, idempotencyKey])
   @@index([idempotencyExpiresAt])
 }
