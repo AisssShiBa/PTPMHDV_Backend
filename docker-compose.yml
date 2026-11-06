@@ -50,6 +50,24 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$(cat /run/secrets/redis_password)\""]
+    expose:
+      - "6379"
+    networks:
+      - internal_net
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   user-migrate:
     build: &user-build
       context: .
@@ -317,7 +335,7 @@ services:
     build:
       context: .
       dockerfile: services/auth-service/Dockerfile
-    secrets: [gateway_public_key, internal_key, access_token_secret, auth_txn_private_key, auth_txn_public_key]
+    secrets: [gateway_public_key, internal_key, access_token_secret, auth_txn_private_key, auth_txn_public_key, redis_password, redis_url]
     expose:
       - "3001"
     networks:
@@ -335,10 +353,13 @@ services:
       - WALLET_SERVICE_URL=http://wallet-service:3004
       - INTERNAL_KEY_FILE=/run/secrets/internal_key
       - CLIENT_URL=${CLIENT_URL:-http://localhost:5173}
+      - REDIS_URL_FILE=/run/secrets/redis_url
     depends_on:
       broker-init:
         condition: service_completed_successfully
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   admin-service:
@@ -370,7 +391,7 @@ services:
     build:
       context: ./gateway
       dockerfile: Dockerfile
-    secrets: [gateway_private_key, gateway_public_key, internal_key, access_token_secret]
+    secrets: [gateway_private_key, gateway_public_key, internal_key, access_token_secret, redis_password, redis_url]
     ports:
       - "${GATEWAY_PORT:-3000}:3000"
     networks:
@@ -391,7 +412,10 @@ services:
       - PAYMENT_SERVICE_URL=http://payment-service:3005
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
       - ADMIN_SERVICE_URL=http://admin-service:3007
+      - REDIS_URL_FILE=/run/secrets/redis_url
     depends_on:
+      redis:
+        condition: service_healthy
       auth-service:
         condition: service_healthy
       admin-service:
@@ -408,6 +432,7 @@ services:
         condition: service_healthy
 
 volumes:
+  redis_data:
   postgres_data:
   rabbitmq_data:
   minio_data:
@@ -419,6 +444,10 @@ networks:
     driver: bridge
 
 secrets:
+  redis_password:
+    file: ./secrets/redis_password.txt
+  redis_url:
+    file: ./secrets/redis_url.txt
   auth_txn_private_key:
     file: ./secrets/auth_txn_private.pem
   auth_txn_public_key:
