@@ -105,9 +105,7 @@ describe('K16-1: Transaction Guard & Acceptance Baseline Suite', () => {
     assert.equal(checkoutResult.payment.idempotencyStatus, 'COMPLETED');
   });
 
-  test('resume không gọi walletClient trong transaction', {
-    skip: 'K16-1: Bật ở Commit 4 khi resume đã tách 3 pha'
-  }, async () => {
+  test('resume không gọi walletClient trong transaction', async () => {
     const { userId } = await createWallet(100000);
     const dest = await createWallet(0);
 
