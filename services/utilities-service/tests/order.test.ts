@@ -8,7 +8,7 @@ import { createUtilityApp } from '../src/app'
 import { prisma } from '../src/config/prisma'
 import { MockProviderEngine } from '../src/services/mockProviderEngine'
 import { HttpPaymentClient, PaymentClientError } from '../src/services/paymentClient'
-import { clearDatabase, FakeProviderClient, testApp, tokenFor, USER_ID } from './helpers'
+import { clearDatabase, FakeProviderClient, startFakePaymentService, testApp, tokenFor, USER_ID } from './helpers'
 
 beforeEach(clearDatabase)
 
@@ -133,7 +133,7 @@ test('checkout forwards the caller Gateway token and never the internal key', as
       res.end(
         JSON.stringify({
           success: true,
-          data: { paymentId: 'pay-http', status: 'PENDING', replayed: false }
+          data: { id: 'pay-http', status: 'PENDING', replayed: false }
         })
       )
     })
@@ -171,5 +171,36 @@ test('checkout forwards the caller Gateway token and never the internal key', as
     assert.equal(captured[0].body.idempotencyKey, `util-${response.body.data.orderId}`)
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('a payment response with only the real Payment id field still stores paymentId', async () => {
+  const fake = await startFakePaymentService()
+  try {
+    const httpClient = new HttpPaymentClient(
+      fake.url,
+      'test-internal-key-01234567890123456789',
+      2000
+    )
+    const httpApp = createUtilityApp({
+      paymentClient: httpClient,
+      providerClient: new FakeProviderClient(),
+      mockProviderEngine: new MockProviderEngine(),
+      mockProviderEnabled: false
+    })
+
+    const response = await request(httpApp)
+      .post('/api/utilities/topup')
+      .set('x-gateway-token', tokenFor())
+      .set('Idempotency-Key', 'http-id-key-1')
+      .send({ phone: '0912345600', amount: '50000' })
+
+    assert.equal(response.status, 201)
+    assert.equal(fake.requests.length, 1)
+    const order = await prisma.utilityOrder.findFirstOrThrow({ where: { userId: USER_ID } })
+    assert.equal(order.paymentId, `pay-${order.id}`)
+    assert.equal(response.body.data.paymentId, `pay-${order.id}`)
+  } finally {
+    await fake.close()
   }
 })

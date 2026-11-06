@@ -1,5 +1,7 @@
 import './setup'
 import { randomUUID } from 'node:crypto'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { createTestGatewayToken } from 'finvault-internal-auth'
 import type { UtilityOrder } from '@prisma/client'
 import { prisma } from '../src/config/prisma'
@@ -52,6 +54,52 @@ export class FakePaymentClient implements PaymentClient {
 
   async getRefundStatus(_paymentId: string): Promise<RefundStatus> {
     return 'UNKNOWN'
+  }
+}
+
+export type FakePaymentServiceRequest = {
+  headers: http.IncomingHttpHeaders
+  body: any
+}
+
+export type FakePaymentService = {
+  url: string
+  requests: FakePaymentServiceRequest[]
+  close(): Promise<void>
+}
+
+// Mimics payment-service's real HTTP response shape: the created Payment row is
+// returned under data, and its primary key is `id` (there is no `paymentId`).
+export async function startFakePaymentService(
+  payloadFor: (body: any) => unknown = body => ({
+    success: true,
+    data: { id: `pay-${body.referenceId}`, status: 'PENDING', replayed: false }
+  })
+): Promise<FakePaymentService> {
+  const requests: FakePaymentServiceRequest[] = []
+  const server = http.createServer((req, res) => {
+    let raw = ''
+    req.on('data', chunk => {
+      raw += chunk
+    })
+    req.on('end', () => {
+      const body = raw.length === 0 ? undefined : JSON.parse(raw)
+      requests.push({ headers: req.headers, body })
+      res.writeHead(201, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(payloadFor(body)))
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+
+  return {
+    url: `http://127.0.0.1:${port}`,
+    requests,
+    close: () =>
+      new Promise<void>(resolve => {
+        server.close(() => resolve())
+        server.closeAllConnections?.()
+      })
   }
 }
 

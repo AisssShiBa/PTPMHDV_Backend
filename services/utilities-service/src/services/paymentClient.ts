@@ -75,14 +75,23 @@ export class HttpPaymentClient implements PaymentClient {
       )
     }
 
-    const paymentId = payload?.data?.paymentId
+    // payment-service returns its Payment row, whose primary key is `id`.
+    // `paymentId` is kept as a fallback for older mocks/deployments.
+    const data = payload?.data
+    const paymentId =
+      typeof data?.id === 'string' && data.id.length > 0 ? data.id : data?.paymentId
     if (typeof paymentId !== 'string' || paymentId.length === 0) {
-      throw new PaymentClientError('Payment response is missing paymentId', undefined, undefined, false)
+      throw new PaymentClientError(
+        'Payment response is missing id/paymentId',
+        undefined,
+        undefined,
+        false
+      )
     }
     return {
       paymentId,
-      status: typeof payload?.data?.status === 'string' ? payload.data.status : 'PENDING',
-      replayed: payload?.data?.replayed === true
+      status: typeof data?.status === 'string' ? data.status : 'PENDING',
+      replayed: data?.replayed === true
     }
   }
 
