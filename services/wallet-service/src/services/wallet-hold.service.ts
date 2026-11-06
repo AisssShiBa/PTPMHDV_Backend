@@ -220,6 +220,8 @@ export class WalletHoldService {
     return result;
   }
 
+  // Chuyển đổi theo cơ chế SKIP LOCKED
+  // Tránh tình trạng nhiều server chạy song song cùng nhảy vào quét tranh chấp
   async releaseHold(
     userId: string,
     referenceId: string,

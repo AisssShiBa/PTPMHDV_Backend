@@ -30,9 +30,9 @@ export async function sweepExpiredPayments(
   const where: any = options?.paymentId
     ? { id: options.paymentId }
     : {
-        status: PaymentStatus.PENDING,
-        holdExpiresAt: { lte: now }
-      };
+      status: PaymentStatus.PENDING,
+      holdExpiresAt: { lte: now }
+    };
 
   const expiredPayments = await prisma.payment.findMany({
     where,
@@ -132,6 +132,7 @@ export async function sweepExpiredPayments(
   return { scanned, expired, skipped, errors };
 }
 
+// Cron jobs định kỳ 30s/lần để kiểm tra và xử lý các giao dịch thanh toán (payment) đã hết hạn hold
 export const startPaymentExpiryJob = () => {
   const walletClient = new WalletClient();
   const p2p = new P2pService(walletClient);

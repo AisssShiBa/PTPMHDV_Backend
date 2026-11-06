@@ -5,6 +5,8 @@ import { drainOutbox } from './outbox.scheduler';
 const ledgerService = new LedgerService();
 const walletHoldService = new WalletHoldService(ledgerService);
 
+// Cron job định kì gửi các khoản tiền tạm giữ (hold) hết hạn cho 
+// các dịch vụ khác để xử lý tiếp (ví dụ: trả lại tiền cho người gửi hoặc chuyển sang người nhận tùy theo logic nghiệp vụ)
 export const startHoldScheduler = () => {
   const intervalMs = process.env.WALLET_HOLD_EXPIRY_INTERVAL_MS
     ? parseInt(process.env.WALLET_HOLD_EXPIRY_INTERVAL_MS, 10)
