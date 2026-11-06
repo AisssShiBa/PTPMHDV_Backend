@@ -69,20 +69,163 @@ export class P2pService {
   }
 
   async completeHold(id: string) {
-    return prisma.$transaction(async tx => {
+    // -------------------------------------------------------------
+    // PHA 1 (Transaction ngắn): Đọc trạng thái, kiểm tra điều kiện,
+    // ghi ý định "chuẩn bị gọi ví" (claim việc) bằng UPDATE có điều kiện, commit.
+    // -------------------------------------------------------------
+    const claimResult = await prisma.$transaction(async tx => {
       const payment = await locked(tx, id);
-      if (payment.idempotencyStatus === 'FAILED') return { error: new DomainException(409, 'CHECKOUT_FAILED', 'Previous checkout failed') };
-      if (payment.workflow !== 'HOLDING') return { payment };
-      try {
-        await this.wallet.createHold(payment.userId, payment.amount.toString(), payment.holdId!, payment.holdExpiresAt!.toISOString(), payment.destinationUserId!, payment.destinationOwnerType || 'USER');
-        return { payment: await tx.payment.update({ where: { id }, data: { workflow: 'IDLE', idempotencyStatus: 'COMPLETED' } }) };
-      } catch (error) {
-        if (error instanceof DomainException && error.status < 500) {
-          await tx.payment.update({ where: { id }, data: { status: 'FAILED', workflow: 'IDLE', idempotencyStatus: 'FAILED', failureReason: error.code } });
-        }
-        return { error: error instanceof DomainException ? error : new DomainException(503, 'WALLET_UNAVAILABLE', 'Wallet unavailable; retry with the same key') };
+
+      if (payment.idempotencyStatus === 'FAILED') {
+        return { status: 'PREVIOUS_FAILED' as const, error: new DomainException(409, 'CHECKOUT_FAILED', 'Previous checkout failed') };
       }
+      if (payment.idempotencyStatus === 'COMPLETED' && payment.workflow === 'IDLE') {
+        return { status: 'ALREADY_COMPLETED' as const, payment };
+      }
+
+      const now = new Date();
+      const leaseUntil = new Date(Date.now() + 30000);
+
+      const updateResult = await tx.payment.updateMany({
+        where: {
+          id,
+          status: 'PENDING',
+          workflow: { in: ['HOLDING', 'HOLD_CALLING'] },
+          OR: [
+            { workerLeaseUntil: null },
+            { workerLeaseUntil: { lte: now } },
+            { workflow: 'HOLDING' }
+          ]
+        },
+        data: {
+          workflow: 'HOLD_CALLING',
+          workerLeaseUntil: leaseUntil,
+          attempt: { increment: 1 }
+        }
+      });
+
+      if (updateResult.count === 0) {
+        const current = await tx.payment.findUniqueOrThrow({ where: { id } });
+        if (current.idempotencyStatus === 'COMPLETED') {
+          return { status: 'ALREADY_COMPLETED' as const, payment: current };
+        }
+        if (current.idempotencyStatus === 'FAILED') {
+          return { status: 'PREVIOUS_FAILED' as const, error: new DomainException(409, 'CHECKOUT_FAILED', 'Previous checkout failed') };
+        }
+        return { status: 'BUSY' as const, payment: current };
+      }
+
+      const claimedPayment = await tx.payment.findUniqueOrThrow({ where: { id } });
+      return { status: 'CLAIMED' as const, payment: claimedPayment };
     }, transactionOptions);
+
+    if (claimResult.status === 'PREVIOUS_FAILED') return { error: claimResult.error };
+    if (claimResult.status === 'ALREADY_COMPLETED') return { payment: claimResult.payment };
+    if (claimResult.status === 'BUSY') {
+      return { error: new DomainException(503, 'WALLET_UNAVAILABLE', 'Payment checkout in progress by another worker') };
+    }
+
+    const payment = claimResult.payment!;
+    const referenceId = payment.holdId!;
+    const startTime = Date.now();
+
+    // -------------------------------------------------------------
+    // PHA 2 (NGOÀI Transaction): Gọi ví HTTP với referenceId lũy đẳng ổn định
+    // -------------------------------------------------------------
+    let walletOk = false;
+    let deterministicError: DomainException | null = null;
+    let indeterminateError: DomainException | null = null;
+
+    try {
+      await this.wallet.createHold(
+        payment.userId,
+        payment.amount.toString(),
+        referenceId,
+        payment.holdExpiresAt!.toISOString(),
+        payment.destinationUserId!,
+        payment.destinationOwnerType || 'USER'
+      );
+      walletOk = true;
+    } catch (error: any) {
+      const durationMs = Date.now() - startTime;
+      if (error instanceof DomainException && error.status < 500) {
+        deterministicError = error;
+        console.warn(`[P2pService] completeHold 4xx deterministic error for payment ${payment.id} ref=${referenceId} code=${error.code} duration=${durationMs}ms`);
+      } else {
+        indeterminateError = error instanceof DomainException
+          ? error
+          : new DomainException(503, 'WALLET_UNAVAILABLE', 'Wallet unavailable; retry with the same key');
+        console.error(`[P2pService] completeHold indeterminate error for payment ${payment.id} ref=${referenceId} duration=${durationMs}ms`);
+      }
+    }
+
+    // -------------------------------------------------------------
+    // PHA 3 (Transaction ngắn): Ghi kết quả bằng UPDATE có điều kiện
+    // -------------------------------------------------------------
+    if (walletOk) {
+      const finalResult = await prisma.$transaction(async tx => {
+        await tx.payment.updateMany({
+          where: {
+            id,
+            workflow: 'HOLD_CALLING'
+          },
+          data: {
+            workflow: 'IDLE',
+            idempotencyStatus: 'COMPLETED',
+            workerLeaseUntil: null
+          }
+        });
+
+        const updated = await tx.payment.findUniqueOrThrow({ where: { id } });
+        return { payment: updated };
+      }, transactionOptions);
+
+      return { payment: finalResult.payment };
+    }
+
+    if (deterministicError) {
+      const finalResult = await prisma.$transaction(async tx => {
+        const updateResult = await tx.payment.updateMany({
+          where: {
+            id,
+            workflow: 'HOLD_CALLING'
+          },
+          data: {
+            status: 'FAILED',
+            workflow: 'IDLE',
+            idempotencyStatus: 'FAILED',
+            failureReason: deterministicError!.code,
+            failureCode: deterministicError!.code,
+            workerLeaseUntil: null
+          }
+        });
+
+        if (updateResult.count === 1) {
+          await tx.paymentHistory.create({
+            data: {
+              id: randomUUID(),
+              paymentId: id,
+              fromStatus: 'PENDING',
+              toStatus: 'FAILED',
+              note: `Hold failed: ${deterministicError!.code}`
+            }
+          });
+        }
+
+        const updated = await tx.payment.findUniqueOrThrow({ where: { id } });
+        return { payment: updated };
+      }, transactionOptions);
+
+      return { error: deterministicError, payment: finalResult.payment };
+    }
+
+    // Lỗi không xác định: giữ nguyên HOLD_CALLING, nhả lease để worker tra cứu/thử lại
+    await prisma.payment.updateMany({
+      where: { id, workflow: 'HOLD_CALLING' },
+      data: { workerLeaseUntil: null }
+    }).catch(() => {});
+
+    return { error: indeterminateError! };
   }
 
   async confirm(id: string, userId: string, token: string | TransactionTokenPayload) {
@@ -152,7 +295,7 @@ export class P2pService {
       OR: [{ workflow: { not: 'IDLE' } }, { holdExpiresAt: { lt: new Date() } }] }, take: 50, orderBy: { updatedAt: 'asc' } });
     for (const payment of pending) {
       try {
-        if (payment.workflow === 'HOLDING') await this.completeHold(payment.id);
+        if (payment.workflow === 'HOLDING' || payment.workflow === 'HOLD_CALLING') await this.completeHold(payment.id);
         else if (payment.workflow !== 'IDLE') await this.resume(payment.id);
         else await this.cancel(payment.id, undefined, true);
       } catch { console.error('[Payment] Recovery will retry', payment.id); }

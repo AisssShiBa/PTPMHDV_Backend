@@ -30,54 +30,7 @@ let walletServer: http.Server;
 let walletClient: WalletClient;
 let p2pService: P2pService;
 
-// Setup Transaction Guard tracking flag
-let isInsideTransaction = false;
-const originalTransaction = paymentPrismaClient.$transaction.bind(paymentPrismaClient);
-
-// Wrap $transaction to track transaction lifecycle
-(paymentPrismaClient as any).$transaction = async (...args: any[]) => {
-  if (typeof args[0] === 'function') {
-    const fn = args[0];
-    return originalTransaction(async (tx: any) => {
-      const prev = isInsideTransaction;
-      isInsideTransaction = true;
-      try {
-        return await fn(tx);
-      } finally {
-        isInsideTransaction = prev;
-      }
-    }, args[1]);
-  }
-  return (originalTransaction as any)(...args);
-};
-
-export class GuardedWalletClient extends WalletClient {
-  private assertNotInTransaction(action: string) {
-    if (isInsideTransaction) {
-      throw new Error(`VIOLATION: walletClient.${action} was called inside an active prisma.$transaction!`);
-    }
-  }
-
-  override async createHold(userId: string, amount: string, referenceId: string, expiresAt: string, destinationUserId?: string, destinationOwnerType?: string) {
-    this.assertNotInTransaction('createHold');
-    return super.createHold(userId, amount, referenceId, expiresAt, destinationUserId, destinationOwnerType);
-  }
-
-  override async captureHold(userId: string, referenceId: string) {
-    this.assertNotInTransaction('captureHold');
-    return super.captureHold(userId, referenceId);
-  }
-
-  override async releaseHold(userId: string, referenceId: string) {
-    this.assertNotInTransaction('releaseHold');
-    return super.releaseHold(userId, referenceId);
-  }
-
-  override async lookupTransaction(referenceId: string) {
-    this.assertNotInTransaction('lookupTransaction');
-    return super.lookupTransaction(referenceId);
-  }
-}
+import { GuardedWalletClient } from './helpers/transaction-guard.helper';
 
 let guardedWalletClient: GuardedWalletClient;
 let guardedP2pService: P2pService;
@@ -136,9 +89,7 @@ describe('K16-1: Transaction Guard & Acceptance Baseline Suite', () => {
     assert.match(errorCaught.message, /VIOLATION: walletClient\.createHold was called inside an active prisma\.\$transaction!/);
   });
 
-  test('completeHold không gọi walletClient trong transaction', {
-    skip: 'K16-1: Bật ở Commit 3 khi completeHold đã tách 3 pha'
-  }, async () => {
+  test('completeHold không gọi walletClient trong transaction', async () => {
     const { userId } = await createWallet(100000);
     const dest = await createWallet(0);
 
@@ -151,6 +102,7 @@ describe('K16-1: Transaction Guard & Acceptance Baseline Suite', () => {
     });
 
     assert.equal(checkoutResult.payment.workflow, 'IDLE');
+    assert.equal(checkoutResult.payment.idempotencyStatus, 'COMPLETED');
   });
 
   test('resume không gọi walletClient trong transaction', {
