@@ -106,6 +106,26 @@ test('a revoked device does not count toward the active device limit', async () 
   assert.equal((await register(userId, { deviceId: 'device-10', platform: 'WEB' })).status, 201)
 })
 
+test('re-registering a revoked device is rejected when 10 devices are already active', async () => {
+  const userId = newUser()
+  const ids: string[] = []
+  for (let index = 0; index < 10; index += 1) {
+    const response = await register(userId, { deviceId: `device-${index}`, platform: 'WEB' })
+    ids.push((await response.json()).data.id)
+  }
+  await call(userId, `/api/notifications/devices/${ids[0]}`, { method: 'DELETE' })
+  assert.equal((await register(userId, { deviceId: 'device-10', platform: 'WEB' })).status, 201)
+
+  const response = await register(userId, { deviceId: 'device-0', platform: 'WEB' })
+
+  assert.equal(response.status, 409)
+  assert.equal((await response.json()).error.code, 'DEVICE_LIMIT_REACHED')
+  const revoked = await prisma.userDevice.findFirstOrThrow({
+    where: { userId, deviceId: 'device-0' }
+  })
+  assert.notEqual(revoked.revokedAt, null)
+})
+
 test('an invalid deviceId is rejected with 400', async () => {
   const userId = newUser()
   const response = await register(userId, { deviceId: 'not allowed!', platform: 'WEB' })

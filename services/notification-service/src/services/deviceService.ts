@@ -60,6 +60,14 @@ export async function registerDevice(
     where: { userId_deviceId: { userId, deviceId: input.deviceId } }
   })
   if (existing) {
+    // Re-registering a revoked device makes it active again, so it must obey
+    // the same cap as a brand-new device.
+    if (existing.revokedAt !== null) {
+      const activeCount = await prisma.userDevice.count({
+        where: { userId, revokedAt: null }
+      })
+      if (activeCount >= DEVICE_LIMIT) throw new DeviceLimitReachedError()
+    }
     const device = await prisma.userDevice.update({
       where: { id: existing.id },
       data: deviceData(input, now)
