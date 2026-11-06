@@ -8,6 +8,7 @@ import {
   markAllNotificationsRead,
   markNotificationRead
 } from '../controllers/notificationController'
+import { createDevice, deleteDevice, getDevices } from '../controllers/deviceController'
 
 const route = express.Router()
 
@@ -19,6 +20,9 @@ route.post('/', internalAuth, createNotification)
 route.use(requireGateway)
 
 route.get('/socket-ticket', getSocketTicket)
+route.post('/devices', createDevice)
+route.get('/devices', getDevices)
+route.delete('/devices/:id', deleteDevice)
 route.get('/me', getNotifications)
 route.patch('/me/read-all', markAllNotificationsRead)
 route.patch('/:id/read', markNotificationRead)

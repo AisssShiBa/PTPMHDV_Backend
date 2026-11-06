@@ -4,10 +4,14 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { Server as SocketIOServer } from 'socket.io'
 import { verifyGatewayToken } from 'finvault-internal-auth'
 import { env } from './config/env'
+import { touchDevice } from './services/deviceService'
 
 export let notificationIO: Server | null = null
 const usedTickets = new Map<string, number>()
-const issuedTickets = new Map<string, { jti: string; userId: string; expiresAt: number }>()
+const issuedTickets = new Map<
+  string,
+  { jti: string; userId: string; deviceId?: string; expiresAt: number }
+>()
 const ticketRequests = new Map<string, number[]>()
 const SOCKET_TICKETS_PER_MINUTE = 10
 const MAX_UNUSED_TICKETS_PER_USER = 5
@@ -36,8 +40,14 @@ const ticketCleanupInterval = setInterval(() => {
 }, 60_000)
 ticketCleanupInterval.unref()
 
-export function issueSocketTicket(userId: string): { ticket: string; expiresAt: string } {
+export function issueSocketTicket(
+  userId: string,
+  deviceId?: string
+): { ticket: string; expiresAt: string } {
   if (!userId.trim()) throw new TypeError('Socket ticket userId must not be empty')
+  if (deviceId !== undefined && !deviceId.trim()) {
+    throw new TypeError('Socket ticket deviceId must not be empty when supplied')
+  }
   const now = Date.now()
   const requests = (ticketRequests.get(userId) ?? [])
     .filter(timestamp => now - timestamp < SOCKET_TICKET_LIFETIME_MS)
@@ -59,11 +69,18 @@ export function issueSocketTicket(userId: string): { ticket: string; expiresAt: 
 
   const ticket = randomBytes(32).toString('base64url')
   const expiresAt = now + SOCKET_TICKET_LIFETIME_MS
-  issuedTickets.set(ticket, { jti: randomUUID(), userId, expiresAt })
+  issuedTickets.set(ticket, {
+    jti: randomUUID(),
+    userId,
+    ...(deviceId === undefined ? {} : { deviceId }),
+    expiresAt
+  })
   return { ticket, expiresAt: new Date(expiresAt).toISOString() }
 }
 
-export function consumeSocketTicket(ticket: string): { jti: string; userId: string } | undefined {
+export function consumeSocketTicket(
+  ticket: string
+): { jti: string; userId: string; deviceId?: string } | undefined {
   const record = issuedTickets.get(ticket)
   issuedTickets.delete(ticket)
   if (!record || record.expiresAt <= Date.now()) return undefined
@@ -76,8 +93,12 @@ export const setNotificationIO = (io: Server) => {
 
 export const createSocketServer = (
   httpServer: HttpServer,
-  options: { maxAgeMs?: number } = {}
+  options: {
+    maxAgeMs?: number
+    touchDevice?: (userId: string, deviceId: string) => Promise<unknown>
+  } = {}
 ) => {
+  const touch = options.touchDevice ?? touchDevice
   const io = new SocketIOServer(httpServer, {
     cors: {
       origin: env.clientUrl,
@@ -92,6 +113,7 @@ export const createSocketServer = (
       const auth = consumeSocketTicket(ticket)
       if (!auth) return next(new Error('INVALID_GATEWAY_TOKEN'))
       socket.data.userId = auth.userId
+      if (auth.deviceId !== undefined) socket.data.deviceId = auth.deviceId
       return next()
     }
 
@@ -124,9 +146,27 @@ export const createSocketServer = (
   })
 
   io.on('connection', (socket) => {
-    socket.join(`user:${socket.data.userId}`)
+    const userId = socket.data.userId as string
+    const deviceId = socket.data.deviceId as string | undefined
+    socket.join(`user:${userId}`)
+
+    if (deviceId !== undefined) {
+      socket.join(`device:${userId}:${deviceId}`)
+      // lastSeenAt is best-effort: a database hiccup must not drop the socket.
+      void touch(userId, deviceId).catch((error: unknown) => {
+        console.error('[Socket] Không thể cập nhật lastSeenAt khi kết nối:', error)
+      })
+    }
+
     const disconnectTimer = setTimeout(() => socket.disconnect(true), maxAgeMs)
-    socket.once('disconnect', () => clearTimeout(disconnectTimer))
+    socket.once('disconnect', () => {
+      clearTimeout(disconnectTimer)
+      if (deviceId !== undefined) {
+        void touch(userId, deviceId).catch((error: unknown) => {
+          console.error('[Socket] Không thể cập nhật lastSeenAt khi ngắt kết nối:', error)
+        })
+      }
+    })
   })
 
   setNotificationIO(io)
