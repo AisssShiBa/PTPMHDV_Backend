@@ -99,6 +99,7 @@ model LedgerEntry {
   @@unique([walletId, referenceId])
   @@index([transactionId])
   @@index([walletId, createdAt])
+  @@index([walletId, createdAt(sort: Desc), id(sort: Desc)])
 }
 
 model WalletHold {
