@@ -1,0 +1,129 @@
+# N11 - UserDevice, PushProvider, thu hoi socket theo thiet bi
+Environment: Windows, Node v24.21.0, Docker Docker version 29.8.0, build 88096ef
+Task: N11 (notification-service)
+SHA_CODE: e32e7a426902aadea316c312b44781fb9fb75627
+SHA_BASE (origin/main): d6ac0a65c311ccbf9f09f64a3dd434b9ecd0b391
+Date: 2026-11-06 12:35:07 +07:00
+Test database: docker compose -f services/notification-service/docker-compose.test.yml up -d --wait (PostgreSQL 5434, RabbitMQ 5674)
+DATABASE_URL: notification_service_test on localhost:5434
+Commands:
+  npx prisma migrate deploy
+  npm run typecheck
+  npm test
+Note: npm test uses the real isolated PostgreSQL test database and socket connections; it is not a mock-only run.
+--- npx prisma migrate deploy ---
+node.exe : Environment variables loaded from .env
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Environment variables loaded from .env:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": PostgreSQL database "notification_service_test", schema "public" at "localhost:5434"
+
+7 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+
+--- npm run typecheck ---
+
+> notification-service@1.0.0 typecheck
+> tsc --noEmit
+
+
+--- npm test ---
+
+> notification-service@1.0.0 test
+> tsx --test tests/*.test.ts
+
+Γ£ö auth package smoke test creates a Gateway Token (21.8968ms)
+Γ£ö notification client route rejects missing Gateway Token (121.6709ms)
+Γ£ö socket ticket endpoint rejects a missing Gateway Token (18.1224ms)
+Γ£ö socket ticket endpoint issues a fresh one-time ticket and expiration for the verified user (21.881ms)
+Γ£ö socket ticket endpoint rate-limits a user after ten requests in one minute (53.7085ms)
+Γ£ö notification client route rejects expired Gateway Token (6.1588ms)
+Γ£ö notification client route rejects a forged Gateway Token (5.3559ms)
+Γ£ö legacy verification header cannot authenticate client requests (5.0324ms)
+Γ£ö internal key cannot authenticate client requests (7.7115ms)
+Γ£ö a forged user ID header cannot authenticate client requests (3.087ms)
+Γ£ö internal notification creation still requires x-internal-key (48.7701ms)
+Γ£ö internal notification creation is idempotent when eventId is supplied (116.0504ms)
+Γ£ö health endpoints remain public (8.6489ms)
+Γ£ö payment.succeeded creates one Vietnamese notification per distinct recipient and formats BigInt amounts (31.1283ms)
+Γ£ö payment.succeeded personalizes sender and receiver messages with compacted names (2.0745ms)
+Γ£ö payment.succeeded deduplicates a recipient who is both sender and receiver (3.8647ms)
+Γ£ö payment.succeeded includes an optional note in both recipient messages (0.9474ms)
+Γ£ö legacy KYC event does not invent a previous tier (0.3091ms)
+Γ£ö payment.failed does not expose the raw failure reason (0.2635ms)
+[FinVault events] Ignoring configured FinVault event {
+  eventId: 'c5409e59-6ae7-47de-8e71-2fe5a8cc1cb3',
+  eventType: 'user.registered'
+}
+Γ£ö FinVault events persist transactionally, deduplicate, and emit only once over Socket.IO (1395.0768ms)
+Γ£ö finance consumer retries an initial broker connection failure and starts once available (14.4783ms)
+Γ£ö finance consumer does not retry after stop during backoff (8.4585ms)
+Γ£ö notification service can import the shared event package (1.4481ms)
+Γ£ö consumer uses body.eventId before AMQP messageId (2.4307ms)
+Γ£ö consumer parses a flat event and falls back to AMQP messageId (98.8538ms)
+Γ£ö consumer parses an envelope event using its eventType and data (1.8235ms)
+Γ£ö consumer falls back to AMQP messageId when body.eventId is missing (0.3505ms)
+Γ£ö consumer rejects an event without a user ID (1.4351ms)
+Γ£ö temporary failures retry three times before the fourth delivery goes to DLQ (1.0691ms)
+Γ£ö notification inbox deduplicates identical event deliveries (245.4585ms)
+Γ£ö notification inbox deduplicates twenty concurrent deliveries (121.725ms)
+Γ£ö notification inbox rejects reuse of an eventId with different content (37.2148ms)
+Γ£ö GET /me returns only the authenticated user notifications and database unread count (241.4235ms)
+Γ£ö legacy user-ID GET route is removed (11.939ms)
+Γ£ö legacy user-ID read-all route is removed (9.953ms)
+Γ£ö a user cannot read another user notification or learn whether it exists (29.4401ms)
+Γ£ö read-all only updates notifications owned by the authenticated user (25.3046ms)
+Γ£ö GET /me clamps the page size to 50 (25.6857ms)
+Γ£ö LogPushProvider reports delivery without ever logging the push token (1.6357ms)
+Γ£ö LogPushProvider rejects an empty identity instead of logging it (0.9101ms)
+Γ£ö socket rejects a missing Gateway Token (104.4994ms)
+Γ£ö socket rejects a malformed Gateway Token (14.9906ms)
+Γ£ö socket rejects an expired Gateway Token (26.3961ms)
+Γ£ö socket rooms deliver notifications only to the matching user (101.6628ms)
+Γ£ö a Gateway Token jti can be used only once (49.2502ms)
+Γ£ö a socket ticket can be used once through auth.ticket (88.4429ms)
+Γ£ö a socket ticket remains compatible through deprecated auth.token (46.7659ms)
+Γ£ö socket ticket rate limit rejects the eleventh issue in one minute (2.7063ms)
+Γ£ö socket ticket issuance caps unused tickets per user and evicts the oldest (0.6356ms)
+Γ£ö socket ignores Gateway Token supplied only in the query string (12.2581ms)
+Γ£ö socket disconnects when its maximum age is reached (325.6157ms)
+Γ£ö a device ticket joins the device room and receives an event emitted to it (268.2585ms)
+Γ£ö a socket ticket for a revoked device is rejected with DEVICE_REVOKED (58.5063ms)
+Γ£ö a socket ticket without deviceId keeps the previous connection behavior (12.941ms)
+Γ£ö revoking a device disconnects only that device socket (121.964ms)
+Γ£ö connecting and disconnecting a device socket updates lastSeenAt through the injected clock hook (33.0748ms)
+Γ£ö registering a new device returns 201 and the list contains exactly one row (306.358ms)
+Γ£ö re-registering the same deviceId returns 200, updates fields and keeps one row (67.7209ms)
+Γ£ö ten concurrent registrations of the same device create one row and no server error (198.0245ms)
+Γ£ö the eleventh active device is rejected with DEVICE_LIMIT_REACHED (143.1079ms)
+Γ£ö a revoked device does not count toward the active device limit (129.6004ms)
+Γ£ö an invalid deviceId is rejected with 400 (3.1463ms)
+Γ£ö a deviceId longer than 128 characters is rejected with 400 (3.9288ms)
+Γ£ö an unknown platform is rejected with 400 (4.6747ms)
+Γ£ö device responses never include the push token (20.758ms)
+Γ£ö another user cannot list or delete a device they do not own (24.2103ms)
+Γ£ö deleting a device twice is idempotent and keeps the first revokedAt (22.7526ms)
+Γ£ö deleting with a non-UUID id is rejected with 400 (2.2369ms)
+Γ£ö re-registering a revoked device clears revokedAt (29.5644ms)
+Γ£ö the devices routes require a Gateway token (2.4864ms)
+Γ£ö user lookup sends the existing internal-key contract and reads only fullName (44.7819ms)
+Γ£ö user lookup degrades absent names to null (3.3798ms)
+Γ£ö user lookup timeout degrades to a generic result (16.0832ms)
+Γ£ö user lookup HTTP errors degrade without logging response bodies or names (1.3402ms)
+Γ£ö user lookup caches hits and misses for the configured TTL (44.3365ms)
+Γ£ö display names use the surname and the final-name initial (0.7747ms)
+Γä╣ tests 76
+Γä╣ suites 0
+Γä╣ pass 76
+Γä╣ fail 0
+Γä╣ cancelled 0
+Γä╣ skipped 0
+Γä╣ todo 0
+Γä╣ duration_ms 3062.0169
+
