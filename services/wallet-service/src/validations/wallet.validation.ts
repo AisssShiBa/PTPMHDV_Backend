@@ -57,6 +57,15 @@ export const referenceSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).me
   }),
 }));
 
+export const extendSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).merge(z.object({
+  body: z.object({
+    referenceId: z.string(),
+    expiresAt: z.string().refine((value) => !Number.isNaN(new Date(value).getTime()), {
+      message: "expiresAt phải là một thời điểm hợp lệ"
+    }),
+  }),
+}));
+
 export const transferSchema = ownerIdParamSchema.merge(z.object({
   body: z.object({
     toUserId: z.string(),
@@ -72,7 +81,7 @@ export const creditDebitSchema = ownerIdParamSchema.merge(ownerTypeQuerySchema).
     transferType: z.enum(['TOPUP', 'PAYMENT', 'REFUND', 'P2P_TRANSFER', 'ADJUSTMENT'], {
       message: "transferType không hợp lệ"
     }).optional(),
-    systemCode: z.enum(['SETTLEMENT', 'FEE', 'CLEARING_TOPUP']).optional(),
+    systemCode: z.enum(['MAIN', 'FEE', 'CLEARING_TOPUP', 'SETTLEMENT']).optional(),
   }),
 }));
 

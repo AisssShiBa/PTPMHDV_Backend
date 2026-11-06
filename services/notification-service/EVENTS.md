@@ -36,3 +36,29 @@ consumer does not bind
 `wallet.limit_exceeded` because no notification type is defined for it, nor
 does it use broad user or merchant wildcards. Legacy exchange consumption
 remains active during the migration.
+
+## Proposed mappings added in N14a (mapping only, not bound)
+
+N14a adds the notification enum values and pure mapping cases below. **These
+event names are proposals and are not registered in
+`packages/finvault-events/src/schemas.ts`**, so they are deliberately absent
+from `financeEventBindings` and from the consumer handlers. Binding an
+unregistered event would make the consumer dead-letter every message (N14b is
+blocked until the schemas exist on `main`).
+
+| Proposed event | Notification enum | Message |
+| --- | --- | --- |
+| `funding.topup_succeeded` | `TOPUP_SUCCEEDED` | `Bạn đã nạp <amount> vào ví thành công.` |
+| `payment.refunded` | `PAYMENT_REFUNDED` | `Bạn được hoàn <amount> vào ví.` (`amount` may be `"50000.00"`; a non-zero fraction is rejected) |
+| `funding.cashout_completed` | `CASHOUT_SUCCEEDED` | `Lệnh rút <amount> của bạn đã thành công.` |
+| `funding.cashout_failed` | `CASHOUT_FAILED` | `Lệnh rút <amount> của bạn không thành công.` (upstream reason is ignored) |
+| `utility.order_succeeded` | `UTILITY_SUCCEEDED` | `Giao dịch tiện ích <amount> đã thành công.` |
+| `utility.order_failed` | `UTILITY_FAILED` | `Giao dịch tiện ích <amount> không thành công.` |
+| `utility.order_refunded` | `UTILITY_REFUNDED` | `Giao dịch tiện ích <amount> đã được hoàn tiền.` |
+| `user.kyc_reviewed` | `KYC_APPROVED` / `KYC_REJECTED` | Approval message, or a rejection message with an optional sanitized reason (≤200 chars). |
+
+Amounts are validated as BigInt integer VND strings; malformed amounts and
+missing `userId`/`authUserId` throw `TypeError`, which the consumer treats as
+non-retryable. KYC reasons have control characters removed and are truncated to
+200 characters. The existing `user.kyc_updated` → `KYC_TIER_CHANGED` mapping is
+unchanged; `user.kyc_reviewed` is a separate event.

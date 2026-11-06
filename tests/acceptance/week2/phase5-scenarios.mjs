@@ -90,7 +90,7 @@ async function s9(ctx) {
     assert.equal(docker(ctx, 'ps', '--status', 'running', '-q', 'wallet-service').split(/\r?\n/).filter(Boolean).length, 2)
     assert.equal(sql(ctx, 'wallet_service', `SELECT string_agg("systemCode"::text || ':' || n, ',' ORDER BY "systemCode"::text)
       FROM (SELECT "systemCode",count(*)::text n FROM "Wallet" WHERE "ownerType"='SYSTEM' GROUP BY "systemCode") counts`),
-      'CLEARING_TOPUP:1,FEE:1,SETTLEMENT:1')
+      'CLEARING_TOPUP:1,FEE:1,MAIN:1,SETTLEMENT:1')
     await conservation(ctx)
   } finally {
     await command(ctx, 's9-restore-wallet', 'docker', [...ctx.composeArgs, 'up', '-d', '--no-deps', '--scale',

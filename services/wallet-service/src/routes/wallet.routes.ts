@@ -35,6 +35,7 @@ router.get('/me', walletController.getMe);
 
 router.get('/:userId/balance', validate(schemas.ownerIdParamSchema.merge(schemas.ownerTypeQuerySchema)), walletController.getBalance);
 router.post('/:userId/hold', requireInternalOrAdmin, validate(schemas.holdSchema), walletController.hold);
+router.post('/:userId/hold/extend', requireInternalOrAdmin, validate(schemas.extendSchema), walletController.extend);
 router.post('/:userId/capture', requireInternalOrAdmin, validate(schemas.referenceSchema), walletController.capture);
 router.post('/:userId/release', requireInternalOrAdmin, validate(schemas.referenceSchema), walletController.release);
 router.post('/:userId/refund', requireInternalOrAdmin, validate(schemas.refundSchema), walletController.refund);

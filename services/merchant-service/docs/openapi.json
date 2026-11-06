@@ -337,6 +337,100 @@
       }
     },
     "/merchants/{id}": {
+      "get": {
+        "operationId": "getMerchantById",
+        "summary": "Read a merchant profile as owner/admin",
+        "description": "Owner/ADMIN/internal only. Soft-deleted merchants are treated as absent (404).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Merchant profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "30000000-0000-4000-8000-000000000001",
+                    "ownerId": "10000000-0000-4000-8000-000000000001",
+                    "businessName": "Demo Shop",
+                    "taxId": null,
+                    "bankAccount": null,
+                    "status": "PENDING",
+                    "version": 1,
+                    "createdAt": "2026-10-07T08:00:00.000Z",
+                    "updatedAt": "2026-10-07T08:00:00.000Z",
+                    "deletedAt": null
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Merchant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
       "put": {
         "operationId": "updateMerchantProfile",
         "summary": "Update merchant profile as owner/admin",
@@ -517,6 +611,238 @@
                     "message": "Request could not be completed"
                   },
                   "requestId": "demo-request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/merchants/{id}/status": {
+      "patch": {
+        "operationId": "updateMerchantStatus",
+        "summary": "Change merchant status (ADMIN only)",
+        "description": "ADMIN/internal only. Allowed transitions: PENDING→APPROVED/REJECTED, APPROVED→REJECTED, REJECTED→PENDING. Repeating the current status is a no-op with no version bump and no event. The status change and its merchant.status_updated Outbox row commit in one Serializable transaction.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "PENDING",
+                      "APPROVED",
+                      "REJECTED"
+                    ]
+                  }
+                }
+              },
+              "example": {
+                "status": "APPROVED"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated merchant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "30000000-0000-4000-8000-000000000001",
+                    "ownerId": "10000000-0000-4000-8000-000000000001",
+                    "businessName": "Demo Shop",
+                    "taxId": null,
+                    "bankAccount": null,
+                    "status": "APPROVED",
+                    "version": 2,
+                    "createdAt": "2026-10-07T08:00:00.000Z",
+                    "updatedAt": "2026-10-07T08:00:00.000Z",
+                    "deletedAt": null
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not ADMIN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Merchant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Transition not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INVALID_TRANSITION",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/merchants/{id}/active": {
+      "get": {
+        "operationId": "checkMerchantActive",
+        "summary": "Check whether a merchant is active",
+        "description": "Any authenticated caller/internal. Returns minimal activity data only; tax ID and bank account are never included. active is true only for APPROVED.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Merchant activity state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantActiveResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "30000000-0000-4000-8000-000000000001",
+                    "ownerId": "10000000-0000-4000-8000-000000000001",
+                    "businessName": "Demo Shop",
+                    "status": "APPROVED",
+                    "active": true
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Merchant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -726,6 +1052,642 @@
           }
         }
       }
+    },
+    "/merchants/{id}/outlets": {
+      "post": {
+        "operationId": "createOutlet",
+        "summary": "Create an outlet for an APPROVED merchant",
+        "description": "Owner/ADMIN/internal only. The merchant must be APPROVED (409 MERCHANT_NOT_APPROVED). The outlet row, the Merchant version bump and the merchant.profile_updated Outbox row commit in one Serializable transaction. Outlet codes are globally unique (409 DUPLICATE_RESOURCE) because a scanned QR resolves an outlet without merchant context.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "code"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "description": "Globally unique. Restricted to letters, digits, hyphen and underscore because the QR canonical form is pipe-delimited."
+                  }
+                }
+              },
+              "example": {
+                "name": "Quan 1",
+                "code": "Q1-COUNTER"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Outlet created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutletResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "40000000-0000-4000-8000-000000000001",
+                    "merchantId": "30000000-0000-4000-8000-000000000001",
+                    "name": "Quan 1",
+                    "code": "Q1-COUNTER",
+                    "createdAt": "2026-11-05T08:00:00.000Z",
+                    "updatedAt": "2026-11-05T08:00:00.000Z"
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Merchant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Merchant is not APPROVED, or the outlet code is already taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "merchantNotApproved": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "MERCHANT_NOT_APPROVED",
+                        "message": "Request could not be completed"
+                      },
+                      "requestId": "demo-request"
+                    }
+                  },
+                  "duplicateCode": {
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "DUPLICATE_RESOURCE",
+                        "message": "Request could not be completed"
+                      },
+                      "requestId": "demo-request"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listOutlets",
+        "summary": "List a merchant's outlets",
+        "description": "Owner/ADMIN/internal only. Always scoped by the merchantId in the path: an outletId belonging to another merchant is never returned.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "description": "Case-insensitive substring match on name or code."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated outlets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutletListResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "content": [
+                      {
+                        "id": "40000000-0000-4000-8000-000000000001",
+                        "merchantId": "30000000-0000-4000-8000-000000000001",
+                        "name": "Quan 1",
+                        "code": "Q1-COUNTER",
+                        "createdAt": "2026-11-05T08:00:00.000Z",
+                        "updatedAt": "2026-11-05T08:00:00.000Z"
+                      }
+                    ],
+                    "page": 1,
+                    "limit": 10,
+                    "totalElements": 1,
+                    "totalPages": 1
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Merchant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/merchants/{id}/outlets/{outletId}/qr": {
+      "get": {
+        "operationId": "getOutletQr",
+        "summary": "Read the signed QR payload for an outlet",
+        "description": "Owner/ADMIN/internal only, APPROVED merchant only. Returns an HMAC-SHA256 signature over the canonical pipe-delimited payload version|merchantId|outletId|outletCode|issuedAt, signed with the dedicated MERCHANT_QR_SECRET system secret (never a merchant API key). The outlet is resolved by both outletId and merchantId, so another merchant's outlet is 404. Responses carry Cache-Control: no-store.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "outletId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Signed QR payload",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutletQrResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "version": 1,
+                    "merchantId": "30000000-0000-4000-8000-000000000001",
+                    "outletId": "40000000-0000-4000-8000-000000000001",
+                    "outletCode": "Q1-COUNTER",
+                    "issuedAt": 1793862000000,
+                    "token": "MS4zMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDE...",
+                    "signature": "3f6d...",
+                    "algorithm": "HMAC-SHA256"
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Merchant not found, or the outlet does not belong to this merchant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Merchant is not APPROVED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "MERCHANT_NOT_APPROVED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/merchants/{id}/api-keys": {
+      "post": {
+        "operationId": "issueMerchantApiKey",
+        "summary": "Issue a merchant API key",
+        "description": "Owner/ADMIN/internal only, APPROVED merchant only. The raw credential `<keyId>.<secret>` is returned exactly once in this response; only the SHA-256 of the secret is stored. Responses carry Cache-Control: no-store, and no endpoint ever returns the stored hash.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "API key issued; the raw secret is present only here",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedApiKeyResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "50000000-0000-4000-8000-000000000001",
+                    "keyId": "60000000-0000-4000-8000-000000000001",
+                    "prefix": "Ab3dE9f1",
+                    "revokedAt": null,
+                    "lastUsedAt": null,
+                    "createdAt": "2026-11-05T08:00:00.000Z",
+                    "key": "60000000-0000-4000-8000-000000000001.<secret>"
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Merchant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Merchant is not APPROVED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "MERCHANT_NOT_APPROVED",
+                    "message": "Request could not be completed"
+                  },
+                  "requestId": "demo-request"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/merchants/{id}/api-keys/{keyId}": {
+      "delete": {
+        "operationId": "revokeMerchantApiKey",
+        "summary": "Revoke a merchant API key",
+        "description": "Owner/ADMIN/internal only. Idempotent: a repeated revoke returns the original revokedAt and never re-exposes the secret. A revoked key never authenticates. An unknown keyId for this merchant answers 404.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "keyId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Key revoked (or already revoked)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantApiKeyResponse"
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "50000000-0000-4000-8000-000000000001",
+                    "keyId": "60000000-0000-4000-8000-000000000001",
+                    "prefix": "Ab3dE9f1",
+                    "revokedAt": "2026-11-05T09:00:00.000Z",
+                    "lastUsedAt": null,
+                    "createdAt": "2026-11-05T08:00:00.000Z"
+                  },
+                  "message": "Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid access token at Gateway, or missing/invalid Gateway Token at service (INVALID_GATEWAY_TOKEN).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated caller lacks owner/admin permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Merchant or API key not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server/database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -928,6 +1890,352 @@
                 "nullable": true
               }
             }
+          },
+          "message": {
+            "type": "string",
+            "example": "Success"
+          }
+        }
+      },
+      "MerchantActive": {
+        "type": "object",
+        "required": [
+          "id",
+          "ownerId",
+          "businessName",
+          "status",
+          "active"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ownerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "businessName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "APPROVED",
+              "REJECTED"
+            ]
+          },
+          "active": {
+            "type": "boolean",
+            "description": "True only when status is APPROVED."
+          }
+        }
+      },
+      "MerchantActiveResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/MerchantActive"
+          },
+          "message": {
+            "type": "string",
+            "example": "Success"
+          }
+        }
+      },
+      "Outlet": {
+        "type": "object",
+        "required": [
+          "id",
+          "merchantId",
+          "name",
+          "code",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "merchantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "Globally unique outlet code."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OutletResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/Outlet"
+          },
+          "message": {
+            "type": "string",
+            "example": "Success"
+          }
+        }
+      },
+      "OutletListResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "content",
+              "page",
+              "limit",
+              "totalElements",
+              "totalPages"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Outlet"
+                }
+              },
+              "page": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "totalElements": {
+                "type": "integer"
+              },
+              "totalPages": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "message": {
+            "type": "string",
+            "example": "Success"
+          }
+        }
+      },
+      "OutletQr": {
+        "type": "object",
+        "required": [
+          "version",
+          "merchantId",
+          "outletId",
+          "outletCode",
+          "issuedAt",
+          "token",
+          "signature",
+          "algorithm"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "enum": [
+              1
+            ],
+            "description": "QR payload schema version; part of the signed canonical form."
+          },
+          "merchantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "outletId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "outletCode": {
+            "type": "string"
+          },
+          "issuedAt": {
+            "type": "integer",
+            "description": "Unix epoch milliseconds; part of the signed canonical form."
+          },
+          "token": {
+            "type": "string",
+            "description": "base64url(canonical) + '.' + base64url(HMAC-SHA256)."
+          },
+          "signature": {
+            "type": "string",
+            "description": "base64url HMAC-SHA256 over version|merchantId|outletId|outletCode|issuedAt."
+          },
+          "algorithm": {
+            "type": "string",
+            "enum": [
+              "HMAC-SHA256"
+            ]
+          }
+        }
+      },
+      "OutletQrResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/OutletQr"
+          },
+          "message": {
+            "type": "string",
+            "example": "Success"
+          }
+        }
+      },
+      "MerchantApiKey": {
+        "type": "object",
+        "required": [
+          "id",
+          "keyId",
+          "prefix",
+          "revokedAt",
+          "lastUsedAt",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "keyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Public 8-character display fragment; not usable as a credential."
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MerchantApiKeyResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/MerchantApiKey"
+          },
+          "message": {
+            "type": "string",
+            "example": "Success"
+          }
+        }
+      },
+      "CreatedApiKey": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MerchantApiKey"
+          },
+          {
+            "type": "object",
+            "required": [
+              "key"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "Raw `<keyId>.<secret>` credential. Present only in this creation response; never stored or returned again."
+              }
+            }
+          }
+        ]
+      },
+      "CreatedApiKeyResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/CreatedApiKey"
           },
           "message": {
             "type": "string",

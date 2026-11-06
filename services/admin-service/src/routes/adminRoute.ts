@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { AdminController } from '../controllers/adminController'
 import { reviewKyc, changeKycTier, getKycDocuments } from '../controllers/kycController'
+import { adjust, report, reports, run } from '../controllers/reconciliationController'
 
 const router = Router()
 
@@ -22,5 +23,11 @@ router.patch('/merchants/:merchantId/status', AdminController.reviewMerchant)
 
 // 4. Lịch sử kiểm toán AdminAuditLog
 router.get('/audit-logs', AdminController.getAuditLogs)
+
+// 5. Đối soát ví (N13): chạy, xem báo cáo, điều chỉnh anomaly
+router.post('/reconciliation/run', run)
+router.get('/reconciliation/reports', reports)
+router.get('/reconciliation/reports/:id', report)
+router.post('/reconciliation/anomalies/:id/adjust', adjust)
 
 export default router

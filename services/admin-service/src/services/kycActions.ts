@@ -49,7 +49,7 @@ async function audited(action: string, userId: string, adminId: string, requestI
 export const KycActions = {
   review(userId: string, status: 'APPROVED' | 'REJECTED', reason: string | undefined, adminId: string, requestId: string) {
     return audited(status === 'APPROVED' ? 'APPROVE_KYC' : 'REJECT_KYC', userId, adminId, requestId, reason,
-      () => userRequest(`${userId}/kyc-status`, requestId, { kycStatus: status }))
+      () => userRequest(`${userId}/kyc-status`, requestId, reason === undefined ? { kycStatus: status } : { kycStatus: status, reason }))
   },
   changeTier(userId: string, tier: 1 | 2, reason: string, adminId: string, requestId: string) {
     return audited('UPDATE_KYC_TIER', userId, adminId, requestId, reason,

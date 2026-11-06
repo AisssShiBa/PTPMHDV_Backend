@@ -1,0 +1,124 @@
+# N12-fix - Doc paymentId tu truong id cua payment-service
+
+Environment: Windows, Node v24.21.0, Docker Docker version 29.8.0, build 88096ef
+Task: N12-fix (paymentClient.checkout doc payload.data.id, fallback paymentId)
+SHA_FIX (fix(N12)): ca2cedee312b1601100a35d45384685ffc0bb856
+SHA_MERGE (sau git pull origin main): 09f102b7e4e53e32149df5c81f93839e10a22457
+SHA_BASE (origin/main): dedd8c4e5d4b9ab741d0db86045b03df3b729ca2
+Date: 2026-11-06 17:32:09 +07:00
+Test database: PostgreSQL that, container notification-postgres-test -> 127.0.0.1:5434, database utilities_test
+DATABASE_URL: postgresql://notification_test:notification_test@127.0.0.1:5434/utilities_test
+Commands: git pull --no-edit origin main -> npx prisma migrate deploy -> npm run typecheck -> npm run build -> npm test
+
+Pham vi test:
+- PostgreSQL la THAT (utilities_test), khong phai mock DB.
+- Payment-service va provider deu la FAKE:
+  * tests/helpers.ts: FakePaymentClient (unit-level, tra CheckoutResponse da chuan hoa).
+  * tests/helpers.ts: startFakePaymentService (HTTP fake, tra { success: true, data: { id, ... } } giong payment-service that).
+  * tests/helpers.ts: FakeProviderClient (khong goi nha cung cap that).
+- KHONG goi payment-service that va KHONG goi provider that.
+--- npx prisma migrate deploy ---
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": PostgreSQL database "utilities_test", schema "public" at "127.0.0.1:5434"
+
+1 migration found in prisma/migrations
+
+
+No pending migrations to apply.
+
+--- npm run typecheck ---
+
+> utilities-service@1.0.0 typecheck
+> tsc --noEmit
+
+
+--- npm run build ---
+
+> utilities-service@1.0.0 prebuild
+> prisma generate
+
+Prisma schema loaded from prisma\schema.prisma
+
+Γ£ö Generated Prisma Client (v6.19.3) to .\node_modules\@prisma\client in 73ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Tip: Want to turn off tips and other hints? https://pris.ly/tip-4-nohints
+
+
+> utilities-service@1.0.0 build
+> tsc
+
+
+--- npm test ---
+
+> utilities-service@1.0.0 test
+> tsx --test --test-concurrency=1 tests/*.test.ts
+
+Γ£ö bill lookup is deterministic and derives the amount from the last two digits (102.3774ms)
+{"requestId":"50704bef-8f69-4e76-8354-4813ba936f15","method":"GET","code":"PROVIDER_TIMEOUT","status":504}
+Γ£ö bill lookup surfaces the provider error for codes ending in 11 and 22 (21.3199ms)
+Γ£ö paying a bill with the wrong amount is rejected with BILL_AMOUNT_MISMATCH and creates no order (32.0405ms)
+Γ£ö paying a bill with the matching amount creates a BILL_PAY order (44.7582ms)
+Γ£ö payment.succeeded fulfils the order once and stores the provider reference (105.0426ms)
+Γ£ö a duplicate event with the same eventId calls the provider only once (57.6271ms)
+Γ£ö two events with different eventIds for one payment still fulfil once (54.6776ms)
+Γ£ö a payment that belongs to no utilities order is acknowledged without side effects (21.7473ms)
+Γ£ö payment.failed marks the order FAILED without requesting a refund (27.0509ms)
+Γ£ö payment.expired marks the order FAILED without requesting a refund (27.3632ms)
+Γ£ö a provider timeout keeps PROVIDER_PENDING and never refunds (55.6144ms)
+Γ£ö a definite provider failure requests one refund and stores REFUNDED (43.2108ms)
+Γ£ö a definite refund rejection stores REFUND_FAILED and is not retried forever (56.8099ms)
+Γ£ö the recovery job finishes an order that stopped after PAID (45.4271ms)
+Γ£ö the recovery job fails an abandoned checkout with no payment after two minutes (41.3035ms)
+Γ£ö refund retries stop at five attempts (30.1052ms)
+Γ£ö the mock provider returns the same result for the same orderId and counts one delivery (30.3908ms)
+Γ£ö a phone ending in 11 is rejected and ending in 22 reveals SUCCESS on the first status query (4.5014ms)
+Γ£ö the mock route rejects missing or wrong internal credentials with 401 (62.6618ms)
+Γ£ö the mock route does not exist when MOCK_PROVIDER_ENABLED is false (8.9646ms)
+Γ£ö the mock route is idempotent per orderId and returns deterministic outcomes (19.8317ms)
+Γ£ö the mock status route reveals SUCCESS for a timed-out order (13.0821ms)
+Γ£ö a new order stores the 3% discount as an integer and never moves money itself (116.3564ms)
+Γ£ö discount uses floor(amount * 3 / 100) for every denomination (155.0344ms)
+Γ£ö the same key with the same payload replays the existing order (39.7976ms)
+Γ£ö the same key with a different payload is rejected with 422 (35.9484ms)
+Γ£ö twenty concurrent requests with one key create one order and one payment (104.5192ms)
+{"requestId":"c75c83ef-27ac-4f90-9059-68741527a91e","method":"POST","code":"UPSTREAM_UNAVAILABLE","status":502}
+Γ£ö a 5xx checkout keeps PENDING_PAYMENT and a retry resumes the same order (40.8257ms)
+Γ£ö a definite 4xx checkout marks the order FAILED and forwards the payment code (31.7072ms)
+Γ£ö checkout forwards the caller Gateway token and never the internal key (57.0941ms)
+Γ£ö a payment response with only the real Payment id field still stores paymentId (39.3397ms)
+Γ£ö a missing Idempotency-Key is rejected with 400 (99.9923ms)
+Γ£ö an over-long Idempotency-Key is rejected with 400 (11.9644ms)
+Γ£ö amounts outside the fixed denomination list are rejected with 400 (27.9152ms)
+Γ£ö a phone number outside the Vietnamese mobile pattern is rejected with 400 (24.7378ms)
+Γ£ö a +84 phone number is normalised to the local 0 form (39.4315ms)
+Γ£ö a userId in the body is ignored and ownership comes from the Gateway token (39.0112ms)
+Γ£ö the utilities routes require a Gateway token (11.6297ms)
+Γä╣ tests 38
+Γä╣ suites 0
+Γä╣ pass 38
+Γä╣ fail 0
+Γä╣ cancelled 0
+Γä╣ skipped 0
+Γä╣ todo 0
+Γä╣ duration_ms 5550.1215
+
+--- cac dong doc id/paymentId trong paymentClient.ts ---
+services/utilities-service/src/services/paymentClient.ts:79:    // `paymentId` is kept as a fallback for older mocks/deployments.
+services/utilities-service/src/services/paymentClient.ts:81:    const paymentId =
+services/utilities-service/src/services/paymentClient.ts:82:      typeof data?.id === 'string' && data.id.length > 0 ? data.id : data?.paymentId
+services/utilities-service/src/services/paymentClient.ts:83:    if (typeof paymentId !== 'string' || paymentId.length === 0) {
+services/utilities-service/src/services/paymentClient.ts:85:        'Payment response is missing id/paymentId',
+services/utilities-service/src/services/paymentClient.ts:92:      paymentId,
+services/utilities-service/src/services/paymentClient.ts:98:  async requestRefund(paymentId: string): Promise<RefundStatus> {
+services/utilities-service/src/services/paymentClient.ts:101:      response = await fetch(`${this.baseUrl}/api/payments/${encodeURIComponent(paymentId)}/refund`, {
+services/utilities-service/src/services/paymentClient.ts:133:  async getRefundStatus(_paymentId: string): Promise<RefundStatus> {
+
+
+GHI CHU:
+- payment-service that tra ve res.status(201).json({ success: true, data: { ...payment, replayed } }); Payment co khoa chinh la id.
+- paymentClient uu tien payload.data.id, chi fallback payload.data.paymentId cho mock/cu.
+- Fake HTTP trong tests/helpers.ts tra data.id giong that; test moi xac nhan chi co id van luu dung UtilityOrder.paymentId.
+- Da pull origin/main (d6ac0a6 -> dedd8c4) truoc khi chay lai; merge commit 09f102b7e4e53e32149df5c81f93839e10a22457.
+- ket qua: typecheck 0 loi, build 0 loi, test 38/38 pass, 0 fail.

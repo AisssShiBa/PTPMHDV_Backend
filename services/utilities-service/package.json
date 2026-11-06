@@ -1,0 +1,42 @@
+{
+  "name": "utilities-service",
+  "version": "1.0.0",
+  "description": "Phone top-up and bill payment service (Node.js / Express / Prisma)",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "nodemon --exec tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "prisma generate",
+    "prebuild": "prisma generate",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "amqplib": "^2.0.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "finvault-events": "file:../../packages/finvault-events",
+    "finvault-internal-auth": "file:../../packages/finvault-internal-auth",
+    "prisma": "^6.19.3",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.8",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.2.0",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.3.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,5 +1,30 @@
 # Notification service
 
+## Device registration and revocation
+
+All device routes require a Gateway token; the user identity always comes from
+`req.auth.userId`, never from the request body or query.
+
+| Method | Route | Behavior |
+| --- | --- | --- |
+| `POST` | `/api/notifications/devices` | Registers `{deviceId, platform, pushToken?}`. Returns `201` for a new row, `200` when the same `(userId, deviceId)` already exists (it is reactivated and updated). At most 10 active devices per user; the 11th returns `409 DEVICE_LIMIT_REACHED`. |
+| `GET` | `/api/notifications/devices` | Lists the caller's devices (including revoked ones) by `lastSeenAt` descending. |
+| `DELETE` | `/api/notifications/devices/:id` | Soft revocation by `UserDevice.id` (UUID). Idempotent: a second call keeps the first `revokedAt`. Disconnects sockets in `device:<userId>:<deviceId>`. |
+
+`deviceId` is 1–128 characters matching `^[A-Za-z0-9._:-]+$`; `platform` is
+`IOS`, `ANDROID`, or `WEB`; `pushToken` is at most 512 characters. Responses
+never expose `pushToken`, only `hasPushToken`.
+
+`GET /api/notifications/socket-ticket?deviceId=<deviceId>` is optional. When
+supplied, the device must belong to the caller and not be revoked. The ticket
+then joins `device:<userId>:<deviceId>` in addition to `user:<userId>`, and
+connect/disconnect refresh `lastSeenAt`. A revoked device returns
+`403 DEVICE_REVOKED`; an unknown device returns `404 NOT_FOUND`.
+
+`LogPushProvider` implements the `PushProvider` interface for local use. It
+logs only the user ID, device ID, and content lengths — never the push token.
+It is not wired into notification delivery in this task.
+
 ## Internal event enrichment
 
 `payment.succeeded` notifications use separate sender and receiver messages.

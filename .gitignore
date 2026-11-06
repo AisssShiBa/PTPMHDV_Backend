@@ -17,6 +17,7 @@ npm-debug.log*
 # Build outputs
 dist/
 build/
+*.tsbuildinfo
 .cache/
 
 # OS and Editor files

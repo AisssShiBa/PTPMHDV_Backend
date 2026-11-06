@@ -4,7 +4,9 @@ import { account, call, documents, sql, until, broker, pause, uuid, docker } fro
 
 export class Blocked extends Error {}
 const review = (ctx, admin, user, status) => call(ctx, '/admin/kyc/' + user.profileId + '/review', {
-  method: 'POST', token: admin.token, body: { status }
+  method: 'POST', token: admin.token,
+  // REJECTED requires a non-empty detail; Week 3 made it mandatory on the Admin -> User path.
+  body: status === 'REJECTED' ? { status, detail: 'Week-2 acceptance rejection' } : { status }
 })
 const auditCount = (ctx, user, action) => Number(sql(ctx, 'admin_service',
   'SELECT count(*) FROM "AdminAuditLog" WHERE "targetId"=\'' + user.profileId + "\' AND action='" + action + "'"))

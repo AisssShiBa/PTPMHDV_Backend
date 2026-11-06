@@ -23,8 +23,8 @@ The Express app mounts wallet routes at `/api/wallets` and admin routes at
 `/api/wallets/admin`. Wallet routes first accept either a valid
 `x-gateway-token` (verified by `finvault-internal-auth`) or an `x-internal-key`
 matching `INTERNAL_KEY`. Gateway users are restricted to their own `userId`
-unless their role is `ADMIN`. The hold, capture, release, transfer, credit, and
-debit routes additionally require an internal call or `ADMIN`; balance and
+unless their role is `ADMIN`. The hold, hold-extend, capture, release, transfer,
+credit, and debit routes additionally require an internal call or `ADMIN`; balance and
 history allow the owner, `ADMIN`, or an internal call. Admin routes require a
 Gateway token with the `ADMIN` role and do not accept the internal-key path.
 
@@ -44,6 +44,7 @@ target without changing wallet routes.
 | `POST /api/wallets` | Create a USER or MERCHANT wallet idempotently by `userId` | Current: owner, `ADMIN`, or internal; target: `ADMIN`/internal (đang chờ K9) |
 | `GET /api/wallets/:userId/balance` | Read balance, held balance and available balance (Route cũ, giữ tương thích ngược) | Owner, `ADMIN`, or internal |
 | `POST /api/wallets/:userId/hold` | Reserve funds; body includes `amount`, `referenceId`, `expiresAt`, and `destinationUserId` | Internal or `ADMIN` |
+| `POST /api/wallets/:userId/hold/extend` | Push a pending hold's `expiresAt` forward; body is `referenceId` and a later `expiresAt`. Moves no money and never shortens a hold | Internal or `ADMIN` |
 | `POST /api/wallets/:userId/capture` | Convert a hold to a PAYMENT ledger transfer | Internal or `ADMIN` |
 | `POST /api/wallets/:userId/release` | Release a pending hold | Internal or `ADMIN` |
 | `POST /api/wallets/:userId/transfer` | P2P transfer using `toUserId`, `amount`, and `referenceId` | Internal or `ADMIN` |
@@ -120,6 +121,9 @@ wallet.  All money amounts are decimal strings with no more than two places.
 - Ledger rows are append-only: a database trigger rejects `UPDATE` and `DELETE`.
 - Expired holds are released by the scheduled worker. Capture/release of an
   already-resolved hold is safe and never double-adjusts held balance.
+- A hold whose payment is still settling can be extended, so it outlives an
+  outcome the caller cannot yet observe. Extension is PENDING-only, never
+  shortens a hold, and is capped by `WALLET_HOLD_MAX_LIFETIME_MS` (default 24 h).
 - Notification events are written to `WalletOutboxEvent` in the same transaction
   as balance mutations. The relay drains after commit and every second as a
   fallback, publishing legacy notification messages through `wallet.events`

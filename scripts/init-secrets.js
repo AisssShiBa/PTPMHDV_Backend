@@ -38,6 +38,11 @@ function initialize(root = path.resolve(__dirname, '..')) {
   ensure('RABBITMQ_USER', 'finvault')
   secret('ACCESS_TOKEN_SECRET', 'access_token_secret.txt', random())
   secret('INTERNAL_KEY', 'internal_key.txt', random())
+  secret('REDIS_PASSWORD', 'redis_password.txt', random())
+  ensure('REDIS_HOST', 'redis')
+  ensure('REDIS_PORT', '6379')
+  // Dedicated system secret for outlet QR HMAC; never a merchant API key.
+  secret('MERCHANT_QR_SECRET', 'merchant_qr_secret.txt', random())
   ensure('MINIO_ROOT_USER', 'finvault-admin')
   ensure('MINIO_ROOT_PASSWORD', random())
   ensure('S3_ACCESS_KEY_ID', 'finvault-kyc')
@@ -48,6 +53,11 @@ function initialize(root = path.resolve(__dirname, '..')) {
   set('POSTGRES_PASSWORD_URLENCODED', encodeURIComponent(config.POSTGRES_PASSWORD))
   set('RABBITMQ_URL', 'amqp://' + encodeURIComponent(config.RABBITMQ_USER) + ':' +
     encodeURIComponent(config.RABBITMQ_PASS) + '@rabbitmq:5672')
+  set('REDIS_PASSWORD_URLENCODED', encodeURIComponent(config.REDIS_PASSWORD))
+  set('REDIS_URL', 'redis://:' + encodeURIComponent(config.REDIS_PASSWORD) + '@' +
+    config.REDIS_HOST + ':' + config.REDIS_PORT)
+  const redisUrlFile = path.join(secretDir, 'redis_url.txt')
+  fs.writeFileSync(redisUrlFile, config.REDIS_URL + '\n', { mode: 0o600 })
 
   const privatePath = path.join(secretDir, 'gateway_private.pem')
   const publicPath = path.join(secretDir, 'gateway_public.pem')
@@ -106,3 +116,4 @@ if (require.main === module) {
   try { initialize(); console.log('Run: docker compose up -d --build --wait') }
   catch (error) { console.error(error.message); process.exitCode = 1 }
 }
+

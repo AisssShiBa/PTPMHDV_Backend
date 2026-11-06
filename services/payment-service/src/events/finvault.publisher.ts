@@ -31,13 +31,16 @@ export function buildPaymentFinvaultEvent(row: PaymentOutbox): FinvaultEvent | u
   const payload = row.payload
   // Huu's durable P2P workflow already stores the complete event envelope.
   // Keep its stable ID while using main's leased outbox and retry handling.
-  if (row.eventType.startsWith('payment.')) {
+  if (row.eventType.startsWith('payment.') || row.eventType.startsWith('funding.cashout_')) {
     if (row.eventType.startsWith('payment.refund')) {
       return undefined;
     }
     const event = parseFinvaultEvent(payload)
+    const data = event.data as Record<string, unknown>
+    // Cash-out events aggregate on CashOut.id and name it cashOutId.
+    const aggregateKey = row.eventType.startsWith('funding.cashout_') ? 'cashOutId' : 'paymentId'
     if (event.eventId !== row.id || event.eventType !== row.eventType ||
-        (event.data as Record<string, unknown>).paymentId !== row.aggregateId) {
+        data[aggregateKey] !== row.aggregateId) {
       throw new TypeError('Payment event envelope does not match its outbox row')
     }
     return event

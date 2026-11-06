@@ -2,7 +2,7 @@
 import 'dotenv/config'
 import { readFileSync } from 'node:fs'
 
-for (const name of ['INTERNAL_KEY', 'ACCESS_TOKEN_SECRET']) {
+for (const name of ['INTERNAL_KEY', 'ACCESS_TOKEN_SECRET', 'REDIS_URL']) {
     const file = process.env[`${name}_FILE`]
     if (file === undefined) continue
     let value: string
@@ -26,6 +26,7 @@ export const env = {
     // ACCESS_TOKEN_SECRET bắt buộc phải có, nếu thiếu Gateway sẽ tự tắt để báo động
     accessTokenSecret: required('ACCESS_TOKEN_SECRET'),
     internalKey: process.env.INTERNAL_KEY || '',
+    redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
 
     // Danh bạ định tuyến tới các Microservices nội bộ
     services: {
@@ -36,6 +37,7 @@ export const env = {
         payment: process.env.PAYMENT_SERVICE_URL || 'http://localhost:3005',
         notification: process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3006',
         admin: process.env.ADMIN_SERVICE_URL || 'http://localhost:3007',
+        utilities: process.env.UTILITIES_SERVICE_URL || 'http://localhost:3008',
     }
 }
 

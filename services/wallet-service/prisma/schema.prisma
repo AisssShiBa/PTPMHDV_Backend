@@ -43,6 +43,7 @@ enum SystemWalletCode {
   SETTLEMENT
   FEE
   CLEARING_TOPUP
+  MAIN
 }
 
 model Wallet {

@@ -8,6 +8,11 @@ import { getVnDay } from "../utils/timezone.helper";
 import { drainOutbox } from "../jobs/outbox.scheduler";
 
 const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, CONFLICT: 409 };
+// A hold may be pushed forward while its owner is still settling the payment,
+// but never indefinitely: past this lifetime the caller must capture or release.
+const HOLD_MAX_LIFETIME_MS = Number(process.env.WALLET_HOLD_MAX_LIFETIME_MS || 24 * 60 * 60 * 1000);
+// Where a hold with no explicit destination settles when captured.
+const CAPTURE_SYSTEM_CODE = SystemWalletCode.SETTLEMENT;
 const prisma = new PrismaClient();
 
 export interface ReleaseExpiredHoldsOptions {
@@ -111,6 +116,65 @@ export class WalletHoldService {
     }, { maxWait: 15000, timeout: 25000 });
   }
 
+  // Moves expiresAt forward without touching money: the held amount, the usage
+  // reservation and the status all stay as they are. A caller still settling an
+  // external payment uses this to keep its hold alive across an outcome it cannot
+  // yet observe. Extending is monotonic and PENDING-only, so it can never revive a
+  // hold that was already captured or released.
+  async extendHold(
+    userId: string,
+    referenceId: string,
+    expiresAtValue: string,
+    ownerType: OwnerType = OwnerType.USER,
+  ) {
+    const requested = new Date(expiresAtValue);
+    if (Number.isNaN(requested.getTime())) {
+      throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_HOLD_EXPIRY", "expiresAt must be a valid date");
+    }
+    if (requested.getTime() <= Date.now()) {
+      throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_HOLD_EXPIRY", "expiresAt must be in the future");
+    }
+
+    return await prisma.$transaction(async (tx) => {
+      // Same lock order as capture/release/sweeper: the Wallet row comes first so
+      // two workers cannot deadlock against each other through WalletHold.
+      const wallet = await this.ledgerService.findWalletTx(tx, userId, ownerType);
+      const hold = await tx.walletHold.findUnique({
+        where: { sourceWalletId_referenceId: { sourceWalletId: wallet.id, referenceId } }
+      });
+
+      if (!hold) throw new DomainException(HttpStatus.NOT_FOUND, "HOLD_NOT_FOUND", "Hold was not found");
+      if (hold.status === HoldStatus.CAPTURED) {
+        throw conflict("HOLD_ALREADY_CAPTURED", "Captured holds cannot be extended");
+      }
+      if (hold.status !== HoldStatus.PENDING) {
+        throw conflict("HOLD_NOT_EXTENDABLE", "Only a pending hold can be extended");
+      }
+
+      // A shorter or equal expiry is a replay, not a request to shrink the hold.
+      if (requested.getTime() <= hold.expiresAt.getTime()) {
+        return { hold, replayed: true, extended: false };
+      }
+      if (requested.getTime() > hold.createdAt.getTime() + HOLD_MAX_LIFETIME_MS) {
+        throw new DomainException(HttpStatus.BAD_REQUEST, "HOLD_LIFETIME_EXCEEDED",
+          `A hold may not stay open longer than ${HOLD_MAX_LIFETIME_MS}ms`);
+      }
+
+      // Conditional on PENDING and on the expiry still being shorter, so a
+      // concurrent release/expiry or a competing extend cannot be overwritten.
+      const updated = await tx.walletHold.updateMany({
+        where: { id: hold.id, status: HoldStatus.PENDING, expiresAt: { lt: requested } },
+        data: { expiresAt: requested }
+      });
+      if (updated.count !== 1) {
+        throw conflict("HOLD_NOT_EXTENDABLE", "Hold is no longer pending");
+      }
+
+      const extended = await tx.walletHold.findUnique({ where: { id: hold.id } });
+      return { hold: extended!, replayed: false, extended: true };
+    }, { maxWait: 15000, timeout: 25000 });
+  }
+
   async captureHold(
     userId: string,
     referenceId: string,
@@ -124,7 +188,10 @@ export class WalletHoldService {
       const ids = [source.id];
       if (candidate.destinationWalletId) ids.push(candidate.destinationWalletId);
       else {
-        const system = await tx.wallet.findUniqueOrThrow({ where: { systemCode: SystemWalletCode.SETTLEMENT } });
+        // A hold with no explicit destination is settlement-bound: cash-out and
+        // every other platform payment settle into SYSTEM SETTLEMENT (plan §5.4
+        // K12). MAIN stays the default for admin adjustments only.
+        const system = await tx.wallet.findUniqueOrThrow({ where: { systemCode: CAPTURE_SYSTEM_CODE } });
         ids.push(system.id);
       }
       const wallets = await this.ledgerService.lockAndFetchWalletsTx(tx, ids);
@@ -186,7 +253,7 @@ export class WalletHoldService {
         if (!found) throw new DomainException(HttpStatus.NOT_FOUND, "DESTINATION_NOT_FOUND", "Destination wallet not found");
         destWallet = found;
       } else {
-        destWallet = await this.ledgerService.getSystemWalletTx(tx);
+        destWallet = await this.ledgerService.getSystemWalletTx(tx, CAPTURE_SYSTEM_CODE);
       }
 
       const movement = await this.ledgerService.moveMoneyTxInternal(tx, {
@@ -408,7 +475,7 @@ export class WalletHoldService {
 
           // Cập nhật WalletHold PENDING -> EXPIRED có điều kiện
           const updated = await tx.walletHold.updateMany({
-            where: { id: hold.id, status: HoldStatus.PENDING },
+            where: { id: hold.id, status: HoldStatus.PENDING, expiresAt: { lt: new Date() } },
             data: { status: HoldStatus.EXPIRED }
           });
 

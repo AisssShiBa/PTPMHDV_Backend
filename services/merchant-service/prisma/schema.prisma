@@ -20,10 +20,43 @@ model Merchant {
   updatedAt    DateTime       @updatedAt @map("updated_at")
   deletedAt    DateTime?      @map("deleted_at")
   version      Int            @default(1)
+  outlets      Outlet[]
+  apiKeys      MerchantApiKey[]
 
   @@index([status])
   @@index([ownerId])
   @@map("merchants")
+}
+
+model Outlet {
+  id         String   @id @default(uuid())
+  merchantId String   @map("merchant_id")
+  name       String
+  // Globally unique: a scanned QR resolves an outlet without merchant context.
+  code       String   @unique
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Restrict)
+
+  @@index([merchantId])
+  @@map("outlets")
+}
+
+model MerchantApiKey {
+  id         String    @id @default(uuid())
+  merchantId String    @map("merchant_id")
+  keyId      String    @unique @map("key_id")
+  // Public, non-secret display/log fragment of the secret.
+  prefix     String
+  // SHA-256 of the secret; the raw value is never persisted.
+  secretHash String    @map("secret_hash")
+  revokedAt  DateTime? @map("revoked_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  merchant   Merchant  @relation(fields: [merchantId], references: [id], onDelete: Restrict)
+
+  @@index([merchantId, revokedAt])
+  @@map("merchant_api_keys")
 }
 
 enum MerchantStatus {

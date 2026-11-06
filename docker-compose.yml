@@ -50,6 +50,24 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$(cat /run/secrets/redis_password)\""]
+    expose:
+      - "6379"
+    networks:
+      - internal_net
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   user-migrate:
     build: &user-build
       context: .
@@ -70,7 +88,7 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?run node scripts/init-secrets.js}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?run node scripts/init-secrets.js}
       S3_FORCE_PATH_STYLE: 'true'
-      KYC_URL_TTL_SECONDS: ${KYC_URL_TTL_SECONDS:-300}
+      KYC_URL_TTL_SECONDS: ${KYC_URL_TTL_SECONDS:-900}
       KYC_CLEANUP_GRACE_MS: ${KYC_CLEANUP_GRACE_MS:-86400000}
       STORAGE_CLEANUP_ENABLED: ${STORAGE_CLEANUP_ENABLED:-true}
     command: ["npx", "prisma", "migrate", "deploy"]
@@ -138,6 +156,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/merchant_service
       INTERNAL_KEY_FILE: /run/secrets/internal_key
       GATEWAY_PUBLIC_KEY_FILE: /run/secrets/gateway_public_key
+      MERCHANT_QR_SECRET_FILE: /run/secrets/merchant_qr_secret
       RABBITMQ_URL: ${RABBITMQ_URL:?run node scripts/init-secrets.js}
       EVENT_EXCHANGE: finvault.events
     command: ["npx", "prisma", "migrate", "deploy"]
@@ -155,7 +174,7 @@ services:
     environment: *merchant-env
     networks: [internal_net]
     healthcheck: *http-health
-    secrets: [gateway_public_key, internal_key]
+    secrets: [gateway_public_key, internal_key, merchant_qr_secret]
     depends_on:
       merchant-migrate:
         condition: service_completed_successfully
@@ -178,7 +197,7 @@ services:
     stop_grace_period: 30s
     environment: *merchant-env
     networks: [internal_net]
-    secrets: [gateway_public_key, internal_key]
+    secrets: [gateway_public_key, internal_key, merchant_qr_secret]
     command: ["node", "dist/events/worker.js"]
     depends_on:
       merchant-migrate:
@@ -294,6 +313,12 @@ services:
       - VNP_URL=${VNP_URL:-}
       - VNP_RETURN_URL=${VNP_RETURN_URL:-}
       - VNP_IPN_URL=${VNP_IPN_URL:-}
+      # Stand-in payout bank. Off by default and refused outright when
+      # NODE_ENV=production, which this file pins, so a stray flag cannot fake
+      # a bank transfer here. Only an isolated stack that also overrides
+      # NODE_ENV to a test value can enable it.
+      - MOCK_PAYOUT_ENABLED=${MOCK_PAYOUT_ENABLED:-false}
+      - CASHOUT_HOLD_TTL_MS=${CASHOUT_HOLD_TTL_MS:-300000}
     secrets:
       - vnp_hash_secret
       - gateway_public_key
@@ -305,12 +330,64 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  utilities-migrate:
+    build:
+      context: .
+      dockerfile: services/utilities-service/Dockerfile
+    image: finvault-utilities-service:local
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/utilities_service
+    command: ["npx", "prisma", "migrate", "deploy"]
+    networks: [internal_net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  utilities-service:
+    healthcheck: *http-health
+    build:
+      context: .
+      dockerfile: services/utilities-service/Dockerfile
+    image: finvault-utilities-service:local
+    restart: unless-stopped
+    init: true
+    secrets: [gateway_public_key, internal_key]
+    expose:
+      - "3008"
+    networks:
+      - internal_net
+    environment:
+      - PORT=3008
+      - NODE_ENV=production
+      - GATEWAY_PUBLIC_KEY_FILE=/run/secrets/gateway_public_key
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_URLENCODED:?run node scripts/init-secrets.js}@postgres:5432/utilities_service
+      - INTERNAL_KEY_FILE=/run/secrets/internal_key
+      - RABBITMQ_URL=${RABBITMQ_URL:-amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672}
+      - PAYMENT_SERVICE_URL=http://payment-service:3005
+      # Sandbox only: deterministic fake top-ups, no real money.
+      - MOCK_PROVIDER_ENABLED=true
+      - PROVIDER_BASE_URL=http://utilities-service:3008
+      - PROVIDER_TIMEOUT_MS=10000
+      - RECOVERY_ENABLED=true
+      - RECOVERY_INTERVAL_MS=30000
+      - RECOVERY_STALE_MS=60000
+    depends_on:
+      utilities-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+
   auth-service:
     healthcheck: *http-health
     build:
       context: .
       dockerfile: services/auth-service/Dockerfile
-    secrets: [gateway_public_key, internal_key, access_token_secret, auth_txn_private_key, auth_txn_public_key]
+    secrets: [gateway_public_key, internal_key, access_token_secret, auth_txn_private_key, auth_txn_public_key, redis_password, redis_url]
     expose:
       - "3001"
     networks:
@@ -328,10 +405,13 @@ services:
       - WALLET_SERVICE_URL=http://wallet-service:3004
       - INTERNAL_KEY_FILE=/run/secrets/internal_key
       - CLIENT_URL=${CLIENT_URL:-http://localhost:5173}
+      - REDIS_URL_FILE=/run/secrets/redis_url
     depends_on:
       broker-init:
         condition: service_completed_successfully
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   admin-service:
@@ -363,7 +443,7 @@ services:
     build:
       context: ./gateway
       dockerfile: Dockerfile
-    secrets: [gateway_private_key, gateway_public_key, internal_key, access_token_secret]
+    secrets: [gateway_private_key, gateway_public_key, internal_key, access_token_secret, redis_password, redis_url]
     ports:
       - "${GATEWAY_PORT:-3000}:3000"
     networks:
@@ -384,7 +464,11 @@ services:
       - PAYMENT_SERVICE_URL=http://payment-service:3005
       - NOTIFICATION_SERVICE_URL=http://notification-service:3006
       - ADMIN_SERVICE_URL=http://admin-service:3007
+      - UTILITIES_SERVICE_URL=http://utilities-service:3008
+      - REDIS_URL_FILE=/run/secrets/redis_url
     depends_on:
+      redis:
+        condition: service_healthy
       auth-service:
         condition: service_healthy
       admin-service:
@@ -399,8 +483,11 @@ services:
         condition: service_healthy
       payment-service:
         condition: service_healthy
+      utilities-service:
+        condition: service_healthy
 
 volumes:
+  redis_data:
   postgres_data:
   rabbitmq_data:
   minio_data:
@@ -412,12 +499,18 @@ networks:
     driver: bridge
 
 secrets:
+  redis_password:
+    file: ./secrets/redis_password.txt
+  redis_url:
+    file: ./secrets/redis_url.txt
   auth_txn_private_key:
     file: ./secrets/auth_txn_private.pem
   auth_txn_public_key:
     file: ./secrets/auth_txn_public.pem
   internal_key:
     file: ./secrets/internal_key.txt
+  merchant_qr_secret:
+    file: ./secrets/merchant_qr_secret.txt
   access_token_secret:
     file: ./secrets/access_token_secret.txt
   postgres_password:

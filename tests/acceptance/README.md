@@ -50,7 +50,7 @@ Seed tạo an/binh/chi/highlands/admin `@demo.vn`, tier 2/1/0 và số dư
 thật; ví MERCHANT/QR còn phụ thuộc Đ12/H9, được ghi thiếu trong seed-result.
 
 S12 dùng TTL 2 giây trên cụm thử và xác nhận hai URL trả 403 sau hạn. Cấu hình
-production vẫn mặc định 300 giây. B6 dùng database `finvault_test`, schema
+production vẫn mặc định 900 giây. B6 dùng database `finvault_test`, schema
 `user_test`/`merchant_test`/`admin_test` riêng và RabbitMQ vhost riêng; không
 chạy test xóa fixture lên database ứng dụng. `FINVAULT_ACCEPTANCE_CONFIG` là
 adapter tùy chọn cho test cũ; bỏ biến này thì cách chạy integration cũ giữ nguyên.

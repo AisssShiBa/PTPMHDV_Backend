@@ -49,7 +49,7 @@ Duyệt PENDING yêu cầu đủ hai object key và idNumber. Hồ sơ legacy th
 cần nộp lại; hồ sơ APPROVED cũ không bị tự hạ tier. Không thêm log chứa CCCD.
 
 `GET /api/admin/kyc/:userId/documents` trả
-`{success:true,data:{frontUrl,backUrl,expiresAt},auditLog}`. TTL mặc định 300 giây,
+`{success:true,data:{frontUrl,backUrl,expiresAt},auditLog}`. TTL mặc định 900 giây (H14),
 đọc `KYC_URL_TTL_SECONDS` cả khi chạy Compose. URL/bucket private và response
 `Cache-Control: no-store`. Admin đọc ảnh qua endpoint này để ghi audit mỗi lần.
 Signed ADMIN không lấy URL trực tiếp qua các route User; endpoint User hai URL

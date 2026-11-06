@@ -18,7 +18,13 @@ import { publishConfirmed } from '../../src/events/amqp'
 const internal = { 'x-internal-key': process.env.INTERNAL_KEY! }
 const auth = (userId: string, role = 'USER') => ({ 'x-gateway-token': createTestGatewayToken(userId, role) })
 before(async () => { assert.ok(process.env.DATABASE_URL?.includes('/finvault_test?schema=merchant_test')); await prisma.$connect() })
-beforeEach(async () => { await prisma.merchantOutboxEvent.deleteMany(); await prisma.merchant.deleteMany() })
+// Outlets and API keys reference merchants with RESTRICT, so they must go first.
+beforeEach(async () => {
+  await prisma.merchantApiKey.deleteMany()
+  await prisma.outlet.deleteMany()
+  await prisma.merchantOutboxEvent.deleteMany()
+  await prisma.merchant.deleteMany()
+})
 after(() => prisma.$disconnect())
 test('concurrent registration creates one merchant and one transactional event', async () => {
   const ownerId = randomUUID()

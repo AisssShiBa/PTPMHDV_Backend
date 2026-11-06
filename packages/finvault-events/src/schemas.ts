@@ -58,6 +58,20 @@ export const walletLimitExceededSchema = z.object({
   kycTier: tier
 }).passthrough()
 
+export const fundingCashoutCompletedSchema = z.object({
+  cashOutId: nonEmptyString,
+  userId: nonEmptyString,
+  amount: z.string().regex(/^\d+$/).refine(value => value === value.trim()),
+  walletTransactionId: z.string().uuid().optional()
+}).passthrough()
+
+export const fundingCashoutFailedSchema = z.object({
+  cashOutId: nonEmptyString,
+  userId: nonEmptyString,
+  amount: z.string().regex(/^\d+$/).refine(value => value === value.trim()),
+  reason: nonEmptyString
+}).passthrough()
+
 export const eventSchemaRegistry = {
   'user.registered': { 1: userRegisteredSchema },
   'user.kyc_updated': { 1: userKycUpdatedSchema },
@@ -65,7 +79,9 @@ export const eventSchemaRegistry = {
   'payment.succeeded': { 1: paymentSucceededSchema },
   'payment.failed': { 1: paymentFailedSchema },
   'payment.expired': { 1: paymentExpiredSchema },
-  'wallet.limit_exceeded': { 1: walletLimitExceededSchema }
+  'wallet.limit_exceeded': { 1: walletLimitExceededSchema },
+  'funding.cashout_completed': { 1: fundingCashoutCompletedSchema },
+  'funding.cashout_failed': { 1: fundingCashoutFailedSchema }
 } as const
 
 export type RegisteredEventType = keyof typeof eventSchemaRegistry

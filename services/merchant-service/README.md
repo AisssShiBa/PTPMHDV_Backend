@@ -19,7 +19,7 @@ npm run build
 npm start
 ```
 
-Cấu hình service: `DATABASE_URL`, `INTERNAL_KEY` (ít nhất 32 ký tự), `PORT`, `CLIENT_URL`. Production cần `GATEWAY_PUBLIC_KEY_FILE` hoặc `GATEWAY_PUBLIC_KEY`. User/Merchant không đọc access-token secret.
+Cấu hình service: `DATABASE_URL`, `INTERNAL_KEY` (ít nhất 32 ký tự), `MERCHANT_QR_SECRET` (ít nhất 32 ký tự, khóa HMAC riêng của hệ thống để ký QR outlet), `PORT`, `CLIENT_URL`. Production cần `GATEWAY_PUBLIC_KEY_FILE` hoặc `GATEWAY_PUBLIC_KEY`, và `MERCHANT_QR_SECRET_FILE` thay vì giá trị inline. User/Merchant không đọc access-token secret. Sinh secret bằng `node ../../scripts/init-secrets.js` (ghi `.env` và `secrets/merchant_qr_secret.txt`, quyền 0600); thiếu file secret thì service dừng khi khởi động.
 
 Migration thêm unique `ownerId`, `version`, bảng `merchant_outbox_events`. Một chủ chỉ có một merchant, kể cả hồ sơ đã soft delete. Migration dừng và báo lỗi khi có owner trùng; không tự xóa/ghép dữ liệu. Kiểm tra trước khi áp dụng:
 
@@ -45,6 +45,11 @@ Request người dùng gửi Bearer token tới Gateway. Gateway chuyển `x-gat
 | PUT | `/:id` | Chính chủ/ADMIN/internal | Ít nhất một trường `businessName`, `taxId`, `bankAccount` |
 | PATCH | `/:id/status` | ADMIN/internal | `status` |
 | GET | `/:id/active` | Caller đã xác thực/internal | Trạng thái hoạt động, không trả tài khoản ngân hàng |
+| POST | `/:id/outlets` | Chính chủ/ADMIN/internal | `name`, `code`; merchant phải APPROVED |
+| GET | `/:id/outlets` | Chính chủ/ADMIN/internal | Phân trang, tìm theo tên hoặc code |
+| GET | `/:id/outlets/:outletId/qr` | Chính chủ/ADMIN/internal | Payload QR đã ký; merchant phải APPROVED |
+| POST | `/:id/api-keys` | Chính chủ/ADMIN/internal | Cấp API key; merchant phải APPROVED |
+| DELETE | `/:id/api-keys/:keyId` | Chính chủ/ADMIN/internal | Thu hồi API key (idempotent) |
 | GET | `/health` | Công khai | Liveness |
 
 Ngoài ra có `GET /health`. `ownerId` là Auth ID trong token. Người dùng không được đăng ký hộ bằng cách thay `ownerId` trong body. UUID, chuỗi và query được validate; page 1–100000, limit 1–100 (mặc định 1/10); search tối đa 200 ký tự. Hồ sơ có `deletedAt` bị loại khỏi xem/sửa/danh sách/active.
@@ -81,6 +86,26 @@ Response nghiệp vụ thành công: `{ success: true, data: ..., message: "Succ
 
 `active` chỉ true cho APPROVED. PENDING/REJECTED trả false. Không tồn tại/soft delete trả 404. Sai định dạng ID trả 400, không đủ thông tin xác thực trả 401/403. Endpoint chỉ cung cấp kết quả trạng thái; không thực hiện chuyển tiền.
 
+### Outlet, API key và QR
+
+Chỉ merchant `APPROVED` mới tạo được outlet, đọc QR và cấp API key; trạng thái khác trả `409 MERCHANT_NOT_APPROVED`. Mọi endpoint lồng dưới `/:id` kiểm tra quyền chủ sở hữu trước khi xử lý (ADMIN và internal call được bỏ qua kiểm tra này).
+
+**Outlet.** `code` là duy nhất toàn hệ thống vì QR đã quét phải phân giải được outlet mà không cần ngữ cảnh merchant; trùng code trả `409 DUPLICATE_RESOURCE`. `code` chỉ gồm chữ, số, `-` và `_` (3–64 ký tự) vì canonical form QR dùng `|` làm dấu phân cách. Tạo outlet, tăng `Merchant.version` và ghi outbox `merchant.profile_updated` trong **cùng một transaction Serializable**; mọi event của cùng merchant vì thế giữ cặp `aggregateId/aggregateVersion` duy nhất.
+
+**QR.** Service ký HMAC-SHA256 trên canonical form có phiên bản:
+
+```
+1|<merchantId>|<outletId>|<outletCode>|<issuedAt>
+```
+
+`token` = `base64url(canonical) + "." + base64url(signature)` (chữ ký 32 byte). Response trả kèm `version, merchantId, outletId, outletCode, issuedAt, token, signature, algorithm` và header `Cache-Control: no-store` vì payload sinh theo từng request.
+
+- Khóa ký là `MERCHANT_QR_SECRET` — secret hệ thống chuyên biệt đọc từ Docker secret. **Không** dùng API key của merchant làm signing key.
+- Outlet được tra bằng cả `outletId` và `merchantId`, nên `outletId` của merchant khác trả `404`, không phải một QR hợp lệ khác chủ.
+- `GET` QR không cấp quyền thanh toán; bên verify (checkout) phải gọi `verifyOutletQr(token, { merchantId, outletId })` từ `src/services/qr.service.ts` để kiểm chữ ký bằng constant-time compare **và** đối chiếu merchant/outlet mong đợi. QR của merchant B không bao giờ verify cho merchant A. `issuedAt` là thời điểm phát, không phải hạn dùng; chính sách hết hạn (nếu có) phải do bên verify áp đặt.
+
+**API key.** Credential có dạng `<keyId>.<secret>`; `secret` là 32 byte ngẫu nhiên. Response tạo key (201, `Cache-Control: no-store`) là nơi **duy nhất** trả về secret thô. Database chỉ lưu `secret_hash` = SHA-256(secret), `key_id` duy nhất và `prefix` 8 ký tự để hiển thị/log. Verify dùng constant-time compare; key đã thu hồi không bao giờ xác thực; `lastUsedAt` chỉ được cập nhật khi secret trình bày khớp thật. Thu hồi lặp lại giữ nguyên `revokedAt` lần đầu và không làm lộ lại hash hay secret. `keyId` không tồn tại của merchant trả `404`.
+
 ## Outbox và publisher
 
 Đăng ký và cập nhật trạng thái ghi Merchant + outbox trong cùng transaction Serializable. Mỗi event logic có UUID ổn định và unique cặp `aggregateId/aggregateVersion`.
@@ -95,6 +120,7 @@ Exchange topic durable: `EVENT_EXCHANGE`, mặc định `finvault.events`. Routi
 
 - `merchant.registered`
 - `merchant.status_updated`
+- `merchant.profile_updated` (chỉnh hồ sơ và tạo outlet)
 
 Ví dụ payload:
 
@@ -151,7 +177,7 @@ npm run test:integration
 
 PostgreSQL test ở `127.0.0.1:25432/finvault_test`, schema `merchant_test`; RabbitMQ test ở 5673. Các test dọn dữ liệu schema test cố định, không dùng database ứng dụng.
 
-Đã chạy thành công: 13 test API/unit, 10 test integration và build TypeScript. Bao phủ phân quyền, đăng ký đồng thời, rollback khi outbox lỗi, trạng thái/no-op, active, soft delete, worker lease và tiến trình publisher sau restart, retry/FAILED/replay, confirm RabbitMQ, event không có queue nhận và lệch đồng hồ ứng dụng 10 phút.
+Đã chạy thành công: 33 test API/unit, 18 test integration và build TypeScript. Bao phủ phân quyền, đăng ký đồng thời, rollback khi outbox lỗi, trạng thái/no-op, active, soft delete, worker lease và tiến trình publisher sau restart, retry/FAILED/replay, confirm RabbitMQ, event không có queue nhận và lệch đồng hồ ứng dụng 10 phút. Bộ test H13 bổ sung: outlet/outbox cùng transaction và unique version, code trùng toàn hệ thống trả 409, QR ký–verify và từ chối token bị sửa/khác merchant/khác outlet/bị cắt, gate `MERCHANT_NOT_APPROVED`, secret API key chỉ trả một lần với `Cache-Control: no-store`, hash không xuất hiện trong response, thu hồi idempotent và revoked key không verify được, cùng owner isolation 403.
 
 Dockerfile chạy migration deploy và mã `dist/server.js`; có thể chạy publisher bằng `node dist/events/worker.js` sau migration. File `.dockerignore` loại credentials local và node_modules khỏi build context.
 
