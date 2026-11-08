@@ -8,11 +8,11 @@ import { signGatewayToken } from '../utils/gatewayToken'
 /* ==========================================================================
    1. ĐỊNH NGHĨA KIỂU DỮ LIỆU (INTERFACE)
    Mô tả cấu trúc payload của Access Token do Client gửi lên.
+   Theo quyết định M17: Bỏ claim kycTier khỏi Gateway token.
    ========================================================================== */
 interface ClientJwtPayload {
     userId: string
     role: string
-    kycTier?: number
 }
 
 interface PublicRoute {
@@ -21,8 +21,10 @@ interface PublicRoute {
 }
 
 /* ==========================================================================
-   2. DANH SÁCH ROUTE CÔNG KHAI (PUBLIC ROUTES)
-   Các endpoint này không yêu cầu Client phải gửi Bearer Token.
+   2. DANH SÁCH ROUTE CÔNG KHAI (PUBLIC ROUTES) - NHIỆM VỤ Đ16
+   Thu hẹp Whitelist:
+   - LOẠI BỎ hoàn toàn whitelist cả nhánh /api/funding.* (chống lỗ hổng lộ lọt /api/funding/cash-out)
+   - CHỈ giữ lại đúng các webhook/return IPN thực tế của VNPAY và QR Login/Auth công khai
    ========================================================================== */
 const PUBLIC_ROUTES: PublicRoute[] = [
     { method: 'POST', path: '/api/auth/signup' },
@@ -33,8 +35,9 @@ const PUBLIC_ROUTES: PublicRoute[] = [
     { method: 'POST', path: '/api/auth/qr-login/init' },
     { method: 'GET', path: /^\/api\/auth\/qr-login\/[a-zA-Z0-9_-]+\/status$/ },
     { method: '*', path: '/health' },
+    // Thu hẹp Whitelist: Chỉ mở công khai đúng IPN / Return URL của cổng thanh toán VNPAY
     { method: '*', path: /^\/api\/payments\/topups\/vnpay\/.*/ },
-    { method: '*', path: /^\/api\/funding(\/.*)?$/ }, // Whitelist webhook/IPN VNPAY
+    { method: '*', path: /^\/api\/funding\/vnpay\/.*/ },
     { method: '*', path: /^\/socket\.io(\/.*)?$/ },    // Whitelist WebSocket handshake (notification-service tự xác thực)
 ]
 
@@ -59,15 +62,15 @@ const isPublicRoute = (req: Request): boolean => {
 }
 
 /* ==========================================================================
-   4. MIDDLEWARE XÁC THỰC & ĐÓNG DẤU GATEWAY TOKEN (NHIỆM VỤ Đ1)
+   4. MIDDLEWARE XÁC THỰC & ĐÓNG DẤU GATEWAY TOKEN (NHIỆM VỤ Đ1 & Đ16)
    Cơ chế:
-   - Cho qua nếu là route công khai.
+   - Cho qua nếu là route công khai hợp lệ.
    - Kiểm tra Access Token của người dùng (Bearer JWT).
-   - Ký số Gateway Token mới (ES256, TTL 60s) chứa danh tính & quyền hạn.
+   - Ký số Gateway Token mới (ES256, TTL 60s) chứa danh tính sub, role (Bỏ claim kycTier theo M17).
    - Gắn Gateway Token vào header 'x-gateway-token' trước khi chuyển tiếp.
    ========================================================================== */
 export const authenticate = (req: Request, res: Response, next: NextFunction): void | Response => {
-    // 1. Nếu là Route công khai thì cho qua trực tiếp, KHÔNG gắn cờ tĩnh giả
+    // 1. Nếu là Route công khai thì cho qua trực tiếp
     if (isPublicRoute(req)) {
         return next()
     }
@@ -85,11 +88,11 @@ export const authenticate = (req: Request, res: Response, next: NextFunction): v
         const decoded = jwt.verify(token, env.accessTokenSecret) as ClientJwtPayload
 
         // 4. KÝ GATEWAY TOKEN BẰNG THUẬT TOÁN ES256 (Khóa riêng của Gateway)
-        // Token này có TTL 60s, định danh chính xác sub, role, kycTier và mã jti ngẫu nhiên
+        // Quyết định M17: Nguồn sự thật duy nhất của kycTier là Wallet.kycTier.
+        // Bỏ claim kycTier khỏi Gateway token để tránh hiểu nhầm và tránh lệch đồng bộ.
         const gatewayToken = signGatewayToken(
             decoded.userId,
-            decoded.role,
-            decoded.kycTier ?? 0
+            decoded.role
         )
 
         // 5. Gắn Gateway Token mật mã vào header để proxy chuyển tiếp cho các service con
