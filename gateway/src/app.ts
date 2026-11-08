@@ -14,6 +14,10 @@ import { errorHandler } from './middlewares/errorHandler'
 
 const app = express()
 
+// 0. Cấu hình Trust Proxy để Express nhận diện chính xác req.ip từ Reverse Proxy / Load Balancer
+// Tránh bị kẻ tấn công giả mạo header X-Forwarded-For để vượt qua Rate Limiter (Nhiệm vụ Đ14)
+app.set('trust proxy', 1)
+
 // 1. Bảo mật Header HTTP & Ghi nhật ký Log
 app.use(helmet())
 app.use(morgan('[:date[iso]] :method :url :status :response-time ms - ReqId: :req[x-request-id]'))
@@ -21,16 +25,18 @@ app.use(morgan('[:date[iso]] :method :url :status :response-time ms - ReqId: :re
 // 2. Cấu hình CORS
 app.use(
     cors({
-        origin: 'http://localhost:5173',
+        origin: env.clientUrl || 'http://localhost:5173',
         credentials: true,
     })
 )
 
-// 3. Endpoint kiểm tra sức khỏe Gateway (Công khai, không yêu cầu Token)
+// 3. Endpoint kiểm tra sức khỏe Gateway (Công khai, không áp dụng Rate Limit)
 app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', service: 'api-gateway' }))
 
-// 4. Rate Limiter chặn spam & DDoS toàn hệ thống (120 req/phút mỗi IP)
-app.use(rateLimiter(60 * 1000, 120))
+// 4. Rate Limiter tập trung bằng Redis (Nhiệm vụ Đ14)
+// - 120 req/phút cho mỗi IP toàn hệ thống
+// - 10 req/phút cho mỗi User trên các route nhạy cảm (PIN, Thanh toán, Rút tiền)
+app.use(rateLimiter(60 * 1000, 120, 10))
 
 // 5. Chuỗi Middleware cốt lõi (Thứ tự: Sanitize -> RequestId -> Auth)
 app.use(sanitizeHeaders)
