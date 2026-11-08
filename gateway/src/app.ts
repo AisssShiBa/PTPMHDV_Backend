@@ -89,7 +89,8 @@ app.use(createServiceProxy('/api/merchants', env.services.merchant))
 app.use(createServiceProxy('/api/wallets/admin', env.services.wallet))
 app.use(createServiceProxy('/api/wallets', env.services.wallet))
 app.use(createServiceProxy('/api/payments', env.services.payment))
-app.use(createServiceProxy('/api/funding', env.services.payment)) // Whitelist Webhook VNPAY
+app.use(createServiceProxy('/api/funding', env.services.payment)) // Nối luồng nạp/rút tiền tới payment-service
+app.use(createServiceProxy('/api/utilities', env.services.payment)) // Proxy Tiện ích hóa đơn & nạp ĐT (Nhiệm vụ Đ16)
 app.use(createServiceProxy('/api/notifications', env.services.notification))
 app.use(createServiceProxy('/socket.io', env.services.notification, true)) // Proxy WebSocket sang notification-service
 app.use(createServiceProxy('/api/admin', env.services.admin))
