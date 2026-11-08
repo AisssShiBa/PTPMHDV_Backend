@@ -116,15 +116,18 @@ export const QrLoginService = {
         { expiresIn: ACCESS_TOKEN_EXPIRATION }
       )
 
-      // 3. Sinh Refresh Token mới (64 bytes ngẫu nhiên) và lưu vào bảng Session
+      // 3. Sinh Refresh Token mới (64 bytes ngẫu nhiên) và khởi tạo Token Family (Nhiệm vụ Đ15b)
       const rawRefreshToken = crypto.randomBytes(64).toString('hex')
       const tokenHash = hashToken(rawRefreshToken)
+      const familyId = crypto.randomUUID()
 
       await prisma.session.create({
         data: {
           refreshToken: tokenHash,
+          familyId,
           expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRATION_MS),
-          userId: user.id
+          userId: user.id,
+          revokedAt: null
         }
       })
 

@@ -87,7 +87,7 @@ export const AuthService = {
   },
 
   /**
-   * 2. Đăng nhập hệ thống (Bảo vệ Constant-time & Hash Refresh Token)
+   * 2. Đăng nhập hệ thống (Bảo vệ Constant-time, Hash Token & Khởi tạo Token Family - Nhiệm vụ Đ15b)
    */
   signIn: async (input: SignInInput) => {
     const { username, password } = input
@@ -116,12 +116,17 @@ export const AuthService = {
     const rawRefreshToken = crypto.randomBytes(64).toString('hex')
     const tokenHash = hashToken(rawRefreshToken)
 
-    // Lưu vào Session dưới dạng Hash SHA-256 (Không lưu plaintext)
+    // Khởi tạo một familyId mới cho chuỗi phiên làm việc này (Nhiệm vụ Đ15b)
+    const familyId = crypto.randomUUID()
+
+    // Lưu vào Session dưới dạng Hash SHA-256 kèm familyId và revokedAt = null
     await prisma.session.create({
       data: {
         refreshToken: tokenHash,
+        familyId,
         expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRATION_MS),
-        userId: user.id
+        userId: user.id,
+        revokedAt: null
       }
     })
 
@@ -140,7 +145,7 @@ export const AuthService = {
   },
 
   /**
-   * 3. Làm mới token với cơ chế xoay vòng (Refresh Token Rotation - RTR)
+   * 3. Làm mới token với cơ chế xoay vòng (RTR) & Phát hiện tái sử dụng Token (Token Reuse Detection - Đ15b)
    */
   refresh: async (rawRefreshToken: string | undefined) => {
     if (!rawRefreshToken) {
@@ -149,38 +154,67 @@ export const AuthService = {
 
     const tokenHash = hashToken(rawRefreshToken)
 
-    // Tìm session theo chuỗi hash
+    // Tìm session theo chuỗi hash SHA-256
     const session = await prisma.session.findUnique({
       where: { refreshToken: tokenHash },
       include: { user: true }
     })
 
-    // Kiểm tra tính hợp lệ và thời hạn session
-    if (!session || session.expiresAt < new Date()) {
-      if (session) {
-        // Dọn dẹp session đã hết hạn
-        await prisma.session.delete({ where: { id: session.id } }).catch(() => {})
-      }
+    // Trường hợp 1: Token hoàn toàn không tồn tại trong hệ thống
+    if (!session) {
       throw new AppError(401, 'INVALID_REFRESH_TOKEN', 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ')
     }
 
-    // Sinh Refresh Token mới (Rotation)
+    // Trường hợp 2 (BÁO ĐỘNG ĐỎ - S1): Token ĐÃ BỊ THU HỒI / ĐÃ XOAY VÒNG mà lại được gửi lên!
+    // Đây là dấu hiệu chắc chắn kẻ gian đang tái sử dụng token đã đánh cắp (Token Reuse Attack)
+    if (session.revokedAt !== null) {
+      // Thu hồi TOÀN BỘ các token thuộc cùng gia đình phiên này (familyId)
+      await prisma.session.updateMany({
+        where: { familyId: session.familyId },
+        data: { revokedAt: new Date() }
+      })
+
+      throw new AppError(
+        401,
+        'TOKEN_REUSE_DETECTED',
+        'Phát hiện refresh token đã qua sử dụng. Toàn bộ phiên liên quan đã bị thu hồi vì lý do an toàn'
+      )
+    }
+
+    // Trường hợp 3: Token đã quá thời hạn hiệu lực (14 ngày)
+    if (session.expiresAt < new Date()) {
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { revokedAt: new Date() }
+      }).catch(() => {})
+
+      throw new AppError(401, 'INVALID_REFRESH_TOKEN', 'Phiên đăng nhập đã hết hạn')
+    }
+
+    // Trường hợp 4: Token hợp lệ -> Tiến hành Xoay vòng (Rotation) nguyên tử
     const newRawRefreshToken = crypto.randomBytes(64).toString('hex')
     const newTokenHash = hashToken(newRawRefreshToken)
 
-    // Thực hiện xoay vòng token nguyên tử trong Transaction: Xóa token cũ, tạo token mới
     await prisma.$transaction(async (tx) => {
-      await tx.session.delete({ where: { id: session.id } })
+      // a) Đánh dấu token cũ là ĐÃ THU HỒI (revokedAt = now), KHÔNG XÓA DÒNG để giữ làm bẫy phát hiện reuse
+      await tx.session.update({
+        where: { id: session.id },
+        data: { revokedAt: new Date() }
+      })
+
+      // b) Tạo session mới kế thừa CÙNG familyId để duy trì gia đình phiên
       await tx.session.create({
         data: {
           refreshToken: newTokenHash,
+          familyId: session.familyId,
           expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRATION_MS),
-          userId: session.userId
+          userId: session.userId,
+          revokedAt: null
         }
       })
     })
 
-    // Ký Access Token mới
+    // Ký Access Token mới cho người dùng
     const accessToken = jwt.sign(
       { userId: session.user.id, role: session.user.role },
       env.accessTokenSecret,
@@ -202,14 +236,22 @@ export const AuthService = {
   },
 
   /**
-   * 4. Đăng xuất và thu hồi session
+   * 4. Đăng xuất và thu hồi toàn bộ gia đình phiên (Sign Out & Revoke Family)
    */
   signOut: async (rawRefreshToken: string | undefined) => {
     if (rawRefreshToken) {
       const tokenHash = hashToken(rawRefreshToken)
-      await prisma.session.deleteMany({
+      const session = await prisma.session.findUnique({
         where: { refreshToken: tokenHash }
-      }).catch(() => {})
+      })
+
+      if (session) {
+        // Thu hồi toàn bộ session cùng familyId để đăng xuất triệt để
+        await prisma.session.updateMany({
+          where: { familyId: session.familyId },
+          data: { revokedAt: new Date() }
+        }).catch(() => {})
+      }
     }
     return true
   }

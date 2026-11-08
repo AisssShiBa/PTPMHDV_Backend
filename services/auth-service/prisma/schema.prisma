@@ -21,14 +21,17 @@ model User {
 }
 
 model Session {
-  id           String   @id @default(uuid())
-  refreshToken String   @unique
+  id           String    @id @default(uuid())
+  refreshToken String    @unique
+  familyId     String    @default(uuid())
+  revokedAt    DateTime?
   expiresAt    DateTime
-  createdAt    DateTime @default(now())
+  createdAt    DateTime  @default(now())
   userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([familyId])
 }
 
 model UserPin {
