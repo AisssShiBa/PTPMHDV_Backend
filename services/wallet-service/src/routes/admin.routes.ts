@@ -24,5 +24,6 @@ router.post('/:userId/adjust',      validate(schemas.adjustSchema), adminControl
 router.get('/',                     validate(schemas.listWalletsSchema), adminController.list);
 router.get('/reconciliation',       adminController.reconciliation);
 router.get('/reconciliation/reports', adminController.listReports);
+router.get('/reconciliation/reports/:id', adminController.getReport);
 
 export default router;

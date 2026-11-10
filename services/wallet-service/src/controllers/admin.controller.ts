@@ -91,3 +91,12 @@ export const listReports = async (req: Request, res: Response) => {
     data: result,
   });
 };
+
+export const getReport = async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const report = await reconciliationService.getReportById(id);
+  return res.json({
+    success: true,
+    data: report,
+  });
+};

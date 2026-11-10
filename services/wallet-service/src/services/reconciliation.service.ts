@@ -271,6 +271,25 @@ export class ReconciliationService {
     };
   }
 
+  async getReportById(id: number): Promise<ReportView> {
+    if (isNaN(id) || !Number.isInteger(id) || id <= 0) {
+      throw new DomainException(400, 'INVALID_REPORT_ID', 'Report id must be a positive integer');
+    }
+
+    const report = await prisma.reconciliationReport.findUnique({
+      where: { id },
+      include: {
+        anomalies: true,
+      },
+    });
+
+    if (!report) {
+      throw new DomainException(404, 'REPORT_NOT_FOUND', 'Reconciliation report not found');
+    }
+
+    return formatReport(report);
+  }
+
   private async checkNegativeBalances() {
     const result: any[] = await prisma.$queryRaw`
       SELECT id as "walletId", balance
