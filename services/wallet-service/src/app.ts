@@ -18,6 +18,12 @@ app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'wallet-serv
 app.use('/api/wallets', walletRoutes);
 app.use('/api/wallets/admin', adminRoutes);
 
+// Hỗ trợ truy cập trực tiếp /reconciliation (W1-W4) tương thích cả 2 tiền tố
+app.use('/reconciliation', (req, res, next) => {
+  req.url = '/reconciliation' + (req.url === '/' ? '' : req.url);
+  adminRoutes(req, res, next);
+});
+
 app.use(errorHandler);
 
 export default app;
