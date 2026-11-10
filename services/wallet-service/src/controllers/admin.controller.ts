@@ -100,3 +100,15 @@ export const getReport = async (req: Request, res: Response) => {
     data: report,
   });
 };
+
+export const adjustAnomaly = async (req: Request, res: Response) => {
+  const anomalyId = req.params.id as string;
+  const reason = req.body?.reason;
+  const adminId = (req as any).auth?.userId || (req.headers['x-user-id'] as string) || 'ADMIN';
+
+  const result = await reconciliationService.adjustAnomaly(anomalyId, reason, adminId);
+  return res.json({
+    success: true,
+    data: result,
+  });
+};

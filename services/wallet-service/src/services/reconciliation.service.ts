@@ -290,6 +290,224 @@ export class ReconciliationService {
     return formatReport(report);
   }
 
+  async adjustAnomaly(anomalyIdStr: string, reason: string, adminId: string) {
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 10) {
+      console.error(
+        JSON.stringify({
+          event: 'ANOMALY_ADJUST_ERROR',
+          anomalyId: anomalyIdStr,
+          adminId,
+          code: 'REASON_REQUIRED',
+          message: 'reason is required and must contain at least 10 characters',
+        })
+      );
+      throw new DomainException(
+        400,
+        'REASON_REQUIRED',
+        'reason is required and must contain at least 10 characters'
+      );
+    }
+
+    let bigIntId: bigint;
+    try {
+      bigIntId = BigInt(anomalyIdStr);
+      if (bigIntId <= 0n) throw new Error();
+    } catch {
+      throw new DomainException(400, 'INVALID_ANOMALY_ID', 'Anomaly id must be a positive integer');
+    }
+
+    console.log(
+      JSON.stringify({
+        event: 'ANOMALY_ADJUST_START',
+        anomalyId: anomalyIdStr,
+        adminId,
+        reason: reason.trim().substring(0, 100),
+      })
+    );
+
+    try {
+      const result = await prisma.$transaction(
+        async tx => {
+          // 1. Khóa hàng anomaly bằng SELECT ... FOR UPDATE
+          const anomalies = await tx.$queryRaw<any[]>`
+            SELECT id, "reportId", type, "walletId", expected, actual, difference, status, "resolutionNote", "adjustmentReferenceId"
+            FROM "ReconciliationAnomaly"
+            WHERE id = ${bigIntId}
+            FOR UPDATE
+          `;
+
+          if (!anomalies || anomalies.length === 0) {
+            throw new DomainException(404, 'ANOMALY_NOT_FOUND', 'Reconciliation anomaly not found');
+          }
+
+          const anomaly = anomalies[0];
+
+          // 2. Nếu anomaly đã được giải quyết -> Idempotent replay
+          if (anomaly.status === 'RESOLVED') {
+            const existingAdj = await tx.anomalyAdjustment.findUnique({
+              where: { anomalyId: bigIntId },
+            });
+            return {
+              anomalyId: anomaly.id.toString(),
+              status: 'RESOLVED',
+              walletId: anomaly.walletId,
+              delta: existingAdj ? existingAdj.delta.toFixed(2) : (anomaly.difference?.toString() ?? '0.00'),
+              replayed: true,
+              transactionId: null,
+              adjustment: existingAdj
+                ? {
+                    id: existingAdj.id.toString(),
+                    anomalyId: existingAdj.anomalyId.toString(),
+                    walletId: existingAdj.walletId,
+                    delta: existingAdj.delta.toFixed(2),
+                    reason: existingAdj.reason,
+                    adminId: existingAdj.adminId,
+                    referenceId: existingAdj.referenceId,
+                    createdAt: existingAdj.createdAt.toISOString(),
+                  }
+                : null,
+            };
+          }
+
+          // 3. Kiểm tra loại anomaly có được hỗ trợ điều chỉnh tự động không
+          const isDrift =
+            anomaly.type === AnomalyType.BALANCE_DRIFT_QUICK ||
+            anomaly.type === AnomalyType.BALANCE_DRIFT_FULL ||
+            anomaly.type === 'BALANCE_DRIFT';
+
+          if (!isDrift || !anomaly.walletId) {
+            throw new DomainException(
+              422,
+              'ADJUST_NOT_SUPPORTED',
+              `Anomaly type ${anomaly.type} cannot be adjusted automatically`
+            );
+          }
+
+          // 4. Khóa hàng ví theo thứ tự ID tăng dần để triệt tiêu nguy cơ Deadlock
+          const wallets = await tx.$queryRaw<any[]>`
+            SELECT id, balance, "heldBalance", "ownerType"
+            FROM "Wallet"
+            WHERE id = ${anomaly.walletId}
+            FOR UPDATE
+          `;
+
+          if (!wallets || wallets.length === 0) {
+            throw new DomainException(404, 'WALLET_NOT_FOUND', 'Wallet not found');
+          }
+
+          const wallet = wallets[0];
+
+          // 5. Tính số dư kỳ vọng từ Sổ cái LedgerEntry (nguồn sự thật duy nhất)
+          const ledgerSumResult = await tx.$queryRaw<any[]>`
+            SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN amount ELSE -amount END), 0) as "expectedBalance"
+            FROM "LedgerEntry"
+            WHERE "walletId" = ${wallet.id}
+          `;
+
+          const expectedBalance = new Prisma.Decimal(
+            ledgerSumResult[0]?.expectedBalance?.toString() || '0.00'
+          );
+          const currentBalance = new Prisma.Decimal(wallet.balance.toString());
+          const delta = currentBalance.minus(expectedBalance);
+
+          // 6. Đồng bộ Wallet.balance về số dư sổ cái (TUYỆT ĐỐI không sửa/xóa LedgerEntry)
+          await tx.wallet.update({
+            where: { id: wallet.id },
+            data: {
+              balance: expectedBalance,
+            },
+          });
+
+          // 7. Cập nhật Anomaly sang trạng thái RESOLVED
+          const now = new Date();
+          const referenceId = `adjust_${anomaly.id}`;
+
+          await tx.reconciliationAnomaly.update({
+            where: { id: bigIntId },
+            data: {
+              status: 'RESOLVED',
+              resolvedAt: now,
+              resolvedBy: adminId,
+              resolutionNote: reason.trim(),
+              adjustmentReferenceId: referenceId,
+            },
+          });
+
+          // 8. Ghi bản ghi AnomalyAdjustment độc lập
+          const adjustment = await tx.anomalyAdjustment.create({
+            data: {
+              anomalyId: bigIntId,
+              walletId: wallet.id,
+              delta,
+              reason: reason.trim(),
+              adminId,
+              referenceId,
+              createdAt: now,
+            },
+          });
+
+          return {
+            anomalyId: anomaly.id.toString(),
+            status: 'RESOLVED',
+            walletId: wallet.id,
+            delta: delta.toFixed(2),
+            expectedBalance: expectedBalance.toFixed(2),
+            actualBalance: expectedBalance.toFixed(2),
+            replayed: false,
+            transactionId: null,
+            adjustment: {
+              id: adjustment.id.toString(),
+              anomalyId: adjustment.anomalyId.toString(),
+              walletId: adjustment.walletId,
+              delta: adjustment.delta.toFixed(2),
+              reason: adjustment.reason,
+              adminId: adjustment.adminId,
+              referenceId: adjustment.referenceId,
+              createdAt: adjustment.createdAt.toISOString(),
+            },
+          };
+        },
+        { timeout: 15000, maxWait: 10000 }
+      );
+
+      console.log(
+        JSON.stringify({
+          event: 'ANOMALY_ADJUST_SUCCESS',
+          anomalyId: anomalyIdStr,
+          walletId: result.walletId,
+          delta: result.delta,
+          replayed: result.replayed,
+          adminId,
+        })
+      );
+
+      return result;
+    } catch (err: any) {
+      if (err instanceof DomainException) {
+        console.error(
+          JSON.stringify({
+            event: 'ANOMALY_ADJUST_ERROR',
+            anomalyId: anomalyIdStr,
+            adminId,
+            code: err.code,
+            message: err.message,
+          })
+        );
+      } else {
+        console.error(
+          JSON.stringify({
+            event: 'ANOMALY_ADJUST_ERROR',
+            anomalyId: anomalyIdStr,
+            adminId,
+            code: 'INTERNAL_ERROR',
+            message: err.message,
+          })
+        );
+      }
+      throw err;
+    }
+  }
+
   private async checkNegativeBalances() {
     const result: any[] = await prisma.$queryRaw`
       SELECT id as "walletId", balance

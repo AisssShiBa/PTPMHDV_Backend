@@ -25,5 +25,6 @@ router.get('/',                     validate(schemas.listWalletsSchema), adminCo
 router.get('/reconciliation',       adminController.reconciliation);
 router.get('/reconciliation/reports', adminController.listReports);
 router.get('/reconciliation/reports/:id', adminController.getReport);
+router.post('/reconciliation/anomalies/:id/adjust', adminController.adjustAnomaly);
 
 export default router;
