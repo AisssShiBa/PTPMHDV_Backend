@@ -1,4 +1,5 @@
 import { AnomalyType, Prisma, PrismaClient } from '@prisma/client';
+import { DomainException } from '../utils/domain.exception';
 
 const prisma = new PrismaClient();
 
@@ -172,6 +173,102 @@ export class ReconciliationService {
       `[Reconciliation] Completed. Report ID: ${report.id}. Mode: ${modeStr}. Anomalies found: ${anomalies.length}`
     );
     return formatReport(report);
+  }
+
+  async listReports(options: {
+    cursor?: string;
+    limit?: number;
+    page?: number;
+    includeAnomalies?: boolean;
+  }) {
+    const DEFAULT_LIMIT = 20;
+    const MAX_LIMIT = 100;
+
+    let limit = options.limit !== undefined ? options.limit : DEFAULT_LIMIT;
+    if (isNaN(limit) || !Number.isInteger(limit) || limit <= 0) {
+      throw new DomainException(400, 'INVALID_LIMIT', 'Limit must be a positive integer');
+    }
+    if (limit > MAX_LIMIT) {
+      limit = MAX_LIMIT;
+    }
+
+    let whereClause: Prisma.ReconciliationReportWhereInput = {};
+
+    if (options.cursor) {
+      let decoded: any;
+      try {
+        const jsonStr = Buffer.from(options.cursor, 'base64url').toString('utf8');
+        decoded = JSON.parse(jsonStr);
+      } catch {
+        throw new DomainException(400, 'INVALID_CURSOR', 'Cursor phân trang không hợp lệ');
+      }
+
+      if (!decoded || typeof decoded !== 'object') {
+        throw new DomainException(400, 'INVALID_CURSOR', 'Cursor phân trang không hợp lệ');
+      }
+
+      const runAtDate = new Date(decoded.runAt);
+      const cursorId = Number(decoded.id);
+
+      if (isNaN(runAtDate.getTime()) || !Number.isInteger(cursorId) || cursorId <= 0) {
+        throw new DomainException(400, 'INVALID_CURSOR', 'Cursor phân trang không hợp lệ');
+      }
+
+      whereClause = {
+        OR: [
+          { runAt: { lt: runAtDate } },
+          { runAt: runAtDate, id: { lt: cursorId } },
+        ],
+      };
+    }
+
+    const total = await prisma.reconciliationReport.count();
+
+    const includeClause = options.includeAnomalies ? { anomalies: true } : undefined;
+
+    let reports: any[];
+    if (options.page !== undefined && !options.cursor) {
+      const page = options.page;
+      if (isNaN(page) || !Number.isInteger(page) || page <= 0) {
+        throw new DomainException(400, 'INVALID_PAGE', 'Page must be a positive integer');
+      }
+      const skip = (page - 1) * limit;
+      reports = await prisma.reconciliationReport.findMany({
+        orderBy: [{ runAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: limit + 1,
+        include: includeClause,
+      });
+    } else {
+      reports = await prisma.reconciliationReport.findMany({
+        where: whereClause,
+        orderBy: [{ runAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        include: includeClause,
+      });
+    }
+
+    const hasMore = reports.length > limit;
+    const items = hasMore ? reports.slice(0, limit) : reports;
+
+    let nextCursor: string | null = null;
+    if (hasMore && items.length > 0) {
+      const last = items[items.length - 1];
+      nextCursor = Buffer.from(
+        JSON.stringify({
+          runAt: last.runAt.toISOString(),
+          id: last.id,
+        })
+      ).toString('base64url');
+    }
+
+    return {
+      items: items.map(formatReport),
+      nextCursor,
+      page: options.page ?? 1,
+      limit,
+      total,
+    };
   }
 
   private async checkNegativeBalances() {

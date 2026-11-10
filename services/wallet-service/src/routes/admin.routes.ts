@@ -23,5 +23,6 @@ router.post('/:userId/unlock',      validate(ownerIdParamSchema.merge(ownerTypeQ
 router.post('/:userId/adjust',      validate(schemas.adjustSchema), adminController.adjust);
 router.get('/',                     validate(schemas.listWalletsSchema), adminController.list);
 router.get('/reconciliation',       adminController.reconciliation);
+router.get('/reconciliation/reports', adminController.listReports);
 
 export default router;

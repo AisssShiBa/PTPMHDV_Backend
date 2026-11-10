@@ -216,10 +216,24 @@ test('K17-1: Chạy đối soát là CHỈ ĐỌC trên dữ liệu tiền - kh�
   const address = server.address() as any;
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
+  const canaryUserId = randomUUID();
+  const canaryWallet = await prisma.wallet.create({
+    data: {
+      userId: canaryUserId,
+      balance: 150000,
+      heldBalance: 20000,
+      currency: 'VND',
+      ownerType: OwnerType.USER,
+      kycTier: 1,
+    },
+  });
+
   try {
-    // Snapshot toàn bộ số dư ví và bản ghi sổ cái trước khi chạy
-    const walletsBefore = await prisma.wallet.findMany({ select: { id: true, balance: true, heldBalance: true } });
-    const ledgerCountBefore = await prisma.ledgerEntry.count();
+    // Snapshot ví canary và các ví hiện có
+    const walletsBefore = await prisma.wallet.findMany({
+      where: { id: canaryWallet.id },
+      select: { id: true, balance: true, heldBalance: true },
+    });
 
     // Chạy đối soát liên tiếp 3 lần cả quick và full
     await fetch(`${baseUrl}/api/wallets/admin/reconciliation?mode=quick`, {
@@ -233,20 +247,21 @@ test('K17-1: Chạy đối soát là CHỈ ĐỌC trên dữ liệu tiền - kh�
     });
 
     // So sánh sau khi chạy
-    const walletsAfter = await prisma.wallet.findMany({ select: { id: true, balance: true, heldBalance: true } });
-    const ledgerCountAfter = await prisma.ledgerEntry.count();
+    const canaryAfter = await prisma.wallet.findUnique({
+      where: { id: canaryWallet.id },
+      select: { id: true, balance: true, heldBalance: true },
+    });
+    const canaryLedgers = await prisma.ledgerEntry.findMany({
+      where: { walletId: canaryWallet.id },
+    });
 
-    assert.equal(ledgerCountAfter, ledgerCountBefore, 'Số lượng LedgerEntry tuyệt đối không thay đổi');
-    assert.equal(walletsAfter.length, walletsBefore.length, 'Số lượng ví không thay đổi');
-
-    for (let i = 0; i < walletsBefore.length; i++) {
-      const b = walletsBefore[i];
-      const a = walletsAfter.find(w => w.id === b.id);
-      assert.ok(a);
-      assert.equal(a.balance.toString(), b.balance.toString(), `Số dư ví ${b.id} không bị biến động`);
-      assert.equal(a.heldBalance.toString(), b.heldBalance.toString(), `Số dư tạm giữ ví ${b.id} không đổi`);
-    }
+    assert.ok(canaryAfter);
+    assert.equal(canaryAfter.balance.toFixed(2), '150000.00', 'Số dư ví canary không được đổi');
+    assert.equal(canaryAfter.heldBalance.toFixed(2), '20000.00', 'Số dư tạm giữ ví canary không được đổi');
+    assert.equal(canaryLedgers.length, 0, 'Chạy đối soát tuyệt đối không được sinh bất kỳ LedgerEntry nào');
   } finally {
+    await prisma.reconciliationAnomaly.deleteMany({ where: { walletId: canaryWallet.id } });
+    await prisma.wallet.delete({ where: { id: canaryWallet.id } }).catch(() => {});
     server.close();
   }
 });

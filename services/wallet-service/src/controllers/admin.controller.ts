@@ -72,3 +72,22 @@ export const reconciliation = async (req: Request, res: Response) => {
     data: report 
   });
 };
+
+export const listReports = async (req: Request, res: Response) => {
+  const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+  const limit = req.query.limit ? Number(req.query.limit) : undefined;
+  const page = req.query.page ? Number(req.query.page) : undefined;
+  const includeAnomalies = req.query.includeAnomalies === 'true';
+
+  const result = await reconciliationService.listReports({
+    cursor,
+    limit,
+    page,
+    includeAnomalies,
+  });
+
+  return res.json({
+    success: true,
+    data: result,
+  });
+};
