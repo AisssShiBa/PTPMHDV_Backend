@@ -49,9 +49,25 @@ export const list = async (req: Request, res: Response) => {
 };
 
 export const reconciliation = async (req: Request, res: Response) => {
-  const isFull = req.query.isFull === 'true';
-  const report = await reconciliationService.runReconciliation(isFull);
-  res.json({ 
+  let mode: 'quick' | 'full' = 'quick';
+  if (req.query.mode !== undefined) {
+    const qMode = String(req.query.mode).toLowerCase();
+    if (qMode !== 'quick' && qMode !== 'full') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_MODE',
+          message: "mode must be 'quick' or 'full'",
+        },
+      });
+    }
+    mode = qMode as 'quick' | 'full';
+  } else if (req.query.isFull === 'true') {
+    mode = 'full';
+  }
+
+  const report = await reconciliationService.runReconciliation(mode);
+  return res.json({ 
     success: true, 
     data: report 
   });
