@@ -39,3 +39,11 @@ redisClient.on('error', (err) => {
   }
 })
 
+if (process.env.NODE_ENV !== 'test') {
+  redisClient.connect().catch((err) => {
+    if (process.env.NODE_ENV !== 'test') {
+      console.error('[Redis Gateway] Không thể kết nối ban đầu tới Redis:', err.message)
+    }
+  })
+}
+
