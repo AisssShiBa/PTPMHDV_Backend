@@ -1,0 +1,11 @@
+{
+  "name": "finvault-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FinVault E-Wallet Microservices Backend",
+  "type": "module",
+  "scripts": {
+    "acceptance": "node scripts/k20-acceptance-runner.mjs",
+    "test:framework": "node --test tests/acceptance/k20/shared.test.mjs"
+  }
+}
