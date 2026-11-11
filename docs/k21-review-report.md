@@ -317,3 +317,23 @@
   ==================================
   ```
 - **Kết luận:** Tổng số dư toàn hệ thống người dùng và ví hệ thống bằng đúng 0 VND. Sổ cái kép cân bằng tuyệt đối giữa Nợ và Có. Không có bất kỳ ví người dùng nào bị âm tiền.
+
+---
+
+## 7. Kết Luận Và Kiến Nghị Nghiệm Thu (Commit 6)
+
+### 7.1. Kết Luận Độc Lập Từ Reviewer
+Sau khi rà soát độc lập toàn bộ mã nguồn K16, kiểm tra tĩnh AST trên 46 file nguồn của `payment-service`, theo dõi động thời gian thực thi bằng `AsyncLocalStorage`, và chạy lại toàn diện 100% các bộ test nghiệp vụ, concurrency, crash boundaries và kịch bản nghiệm thu K20 (A1, A2, A4, S8, S15):
+1. **Triệt tiêu hoàn toàn cuộc gọi ví trong transaction:** Toàn bộ 29 khối `prisma.$transaction` trong `payment-service` đều sạch 100%. Không còn bất kỳ cuộc gọi HTTP, Network I/O hay delay nào nằm trong transaction DB.
+2. **Loại bỏ nguy cơ nghẽn DB connection pool:** Thời gian giữ transaction DB giảm từ >2.000ms xuống chỉ còn **16ms – 31ms** (< 50ms) ngay cả khi ví đối tác bị trễ 2 giây.
+3. **An toàn tuyệt đối trước sự cố và crash:** 4 ranh giới crash pha đều phục hồi tự động, an toàn và lũy đẳng nhờ cơ chế Lease phân tán (`workerLeaseUntil`) kết hợp tra cứu ví (`lookupTransaction`) trước khi capture.
+4. **Bảo toàn tài chính tuyệt đối:** $\sum(\text{Wallet}) = 0\text{ VND}$ và $\Delta\text{CREDIT} - \Delta\text{DEBIT} = 0\text{ VND}$ được bảo tồn xuyên suốt tất cả các bài thử nghiệm khắc nghiệt nhất.
+5. **Đồng nhất hợp đồng và hành vi nghiệp vụ:** Các mốc nghiệm thu A1 (10 lần lặp) và A2 (idempotency 2 lần) đều đạt kết quả chính xác tuyệt đối như thiết kế ban đầu.
+
+### 7.2. Kiến Nghị Nghiệm Thu & Hòa Nhánh
+- **Đánh giá tổng thể:** **PASS (ĐẠT 100% TIÊU CHÍ NGHIỆM THU)**.
+- **Khuyến nghị:**
+  1. Cho phép hòa nhánh `feat/k21-k16-review` vào nhánh chính (`main` / `develop`).
+  2. Bảng checklist [`docs/k16-review-checklist.md`](file:///d:/PTPMHDV_Backend/docs/k16-review-checklist.md) đã được điền đầy đủ kết luận và chứng cứ kỹ thuật độc lập cho từng mục từ 1 đến 11, phần chữ ký Reviewer để trống theo đúng quy định để phục vụ ký duyệt thủ công của kỹ sư phụ trách.
+  3. Duy trì script `npm run guard:transactions` (`scripts/guard-p2p-transactions.cjs`) trong CI/CD pipeline để tự động ngăn chặn bất kỳ ai vô tình đưa cuộc gọi mạng hoặc gọi ví vào trong `prisma.$transaction` trong tương lai.
+
