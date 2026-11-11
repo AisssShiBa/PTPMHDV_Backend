@@ -1,5 +1,6 @@
-const paymentDbUrl = process.env.PAYMENT_DATABASE_URL || 'postgresql://postgres:8932ce4c6b28dba8c13430d3317b1e51e4f8838c6b02824423f9b57b69d56d4a@localhost:5432/payment_service?schema=public';
-const walletDbUrl = process.env.WALLET_DATABASE_URL || 'postgresql://postgres:8932ce4c6b28dba8c13430d3317b1e51e4f8838c6b02824423f9b57b69d56d4a@localhost:5432/wallet_service?schema=public';
+const defaultPassword = process.env.POSTGRES_PASSWORD || '404897ba313a20d9a166a1db0625276a77186fc0160c690a5e6e93ee09e06720';
+const paymentDbUrl = process.env.PAYMENT_DATABASE_URL || `postgresql://postgres:${defaultPassword}@localhost:5432/payment_service?schema=public`;
+const walletDbUrl = process.env.WALLET_DATABASE_URL || `postgresql://postgres:${defaultPassword}@localhost:5432/wallet_service?schema=public`;
 
 process.env.PAYMENT_DATABASE_URL = paymentDbUrl;
 process.env.DATABASE_URL = walletDbUrl;
@@ -62,7 +63,7 @@ before(async () => {
   await new Promise<void>((resolve) => walletServer.listen(0, resolve));
   const port = (walletServer.address() as any).port;
   process.env.WALLET_SERVICE_URL = `http://127.0.0.1:${port}`;
-  process.env.INTERNAL_KEY = 'f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68';
+  process.env.INTERNAL_KEY = process.env.INTERNAL_KEY || 'e33caedf3f0c0417c80adfd683c06753a53c8f5c50ac1e8d6a3344685de9332f';
 
   walletClient = new WalletClient();
   p2pService = new P2pService(walletClient);

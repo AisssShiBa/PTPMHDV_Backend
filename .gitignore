@@ -13,6 +13,8 @@ secrets/
 # Logs
 *.log
 npm-debug.log*
+logs/
+
 
 # Build outputs
 dist/

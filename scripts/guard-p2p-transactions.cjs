@@ -121,23 +121,70 @@ function analyzeFile(filePath, customSource) {
   };
 }
 
+function analyzeDirectory(dirPath) {
+  const results = [];
+  function scan(dir) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== 'node_modules' && entry.name !== 'dist' && entry.name !== '.git' && entry.name !== 'tests') {
+          scan(fullPath);
+        }
+      } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')) {
+        results.push(analyzeFile(fullPath));
+      }
+    }
+  }
+  scan(dirPath);
+  const totalTransactionBlocks = results.reduce((sum, r) => sum + r.transactionBlockCount, 0);
+  const allViolations = results.flatMap(r => r.violations.map(v => ({ ...v, file: r.file })));
+  return {
+    dir: dirPath,
+    filesScanned: results.length,
+    transactionBlockCount: totalTransactionBlocks,
+    violations: allViolations,
+    fileResults: results,
+  };
+}
+
 // CLI execution
 if (require.main === module) {
-  console.log(`[K16 Guard] Scanning: ${targetFile}`);
-  const result = analyzeFile(targetFile);
+  const paymentSrcDir = path.resolve(__dirname, '../services/payment-service/src');
+  const target = process.argv[2] ? path.resolve(process.argv[2]) : paymentSrcDir;
 
-  console.log(`[K16 Guard] Phát hiện ${result.transactionBlockCount} khối prisma.$transaction trong file.`);
+  const isDirectory = fs.existsSync(target) && fs.statSync(target).isDirectory();
+  if (isDirectory) {
+    console.log(`[K21/K16 Guard] Scanning entire payment-service directory: ${target}`);
+    const summary = analyzeDirectory(target);
+    console.log(`[K21/K16 Guard] Đã quét ${summary.filesScanned} file .ts, phát hiện ${summary.transactionBlockCount} khối prisma.$transaction.`);
 
-  if (result.violations.length > 0) {
-    console.error(`\n❌ [VIOLATION DETECTED] Phát hiện ${result.violations.length} vi phạm gọi ví/I/O trong transaction:`);
-    for (const v of result.violations) {
-      console.error(`  - Dòng ${v.line}:${v.col} [${v.type}]: ${v.message}`);
+    if (summary.violations.length > 0) {
+      console.error(`\n❌ [VIOLATION DETECTED] Phát hiện ${summary.violations.length} vi phạm gọi ví/I/O trong transaction:`);
+      for (const v of summary.violations) {
+        console.error(`  - ${path.basename(v.file)} dòng ${v.line}:${v.col} [${v.type}]: ${v.message}`);
+      }
+      process.exit(1);
+    } else {
+      console.log(`✅ [PASS] 100% SẠCH SẼ: Không có bất kỳ lời gọi ví (walletClient), Network I/O, hay setTimeout nào nằm trong prisma.$transaction trên toàn bộ payment-service.`);
+      process.exit(0);
     }
-    process.exit(1);
   } else {
-    console.log(`✅ [PASS] 100% SẠCH SẼ: Không có bất kỳ lời gọi ví (walletClient), Network I/O, hay setTimeout nào nằm trong prisma.$transaction.`);
-    process.exit(0);
+    console.log(`[K16 Guard] Scanning single file: ${target}`);
+    const result = analyzeFile(target);
+    console.log(`[K16 Guard] Phát hiện ${result.transactionBlockCount} khối prisma.$transaction trong file.`);
+
+    if (result.violations.length > 0) {
+      console.error(`\n❌ [VIOLATION DETECTED] Phát hiện ${result.violations.length} vi phạm gọi ví/I/O trong transaction:`);
+      for (const v of result.violations) {
+        console.error(`  - Dòng ${v.line}:${v.col} [${v.type}]: ${v.message}`);
+      }
+      process.exit(1);
+    } else {
+      console.log(`✅ [PASS] 100% SẠCH SẼ: Không có bất kỳ lời gọi ví (walletClient), Network I/O, hay setTimeout nào nằm trong prisma.$transaction.`);
+      process.exit(0);
+    }
   }
 }
 
-module.exports = { analyzeFile };
+module.exports = { analyzeFile, analyzeDirectory };
