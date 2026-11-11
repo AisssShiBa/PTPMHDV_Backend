@@ -1,4 +1,5 @@
-const paymentDbUrl = process.env.PAYMENT_DATABASE_URL || 'postgresql://postgres:8932ce4c6b28dba8c13430d3317b1e51e4f8838c6b02824423f9b57b69d56d4a@localhost:5432/payment_service?schema=public';
+const defaultPassword = process.env.POSTGRES_PASSWORD || '404897ba313a20d9a166a1db0625276a77186fc0160c690a5e6e93ee09e06720';
+const paymentDbUrl = process.env.PAYMENT_DATABASE_URL || `postgresql://postgres:${defaultPassword}@localhost:5432/payment_service?schema=public`;
 
 process.env.PAYMENT_DATABASE_URL = paymentDbUrl;
 process.env.RABBITMQ_URL = '';
