@@ -238,3 +238,82 @@
 | `wallet-service test:concurrency` | 3 | **PASS (3/3)** | 4.5s | Race condition 20 req -> 1 OK 19 FAIL; Deadlock cross-transfers; Parallel hold. |
 | `A1 Acceptance (10 lần lặp)` | 10 | **PASS (10/10)** | 16.3s | Chạy trên docker compose sạch: 10/10 lần đều đúng 1 thành công 19 từ chối, An=40k, Binh=360k. |
 | `A2 Acceptance (Sequential & Concurrent)` | 2 | **PASS (2/2)** | 5.3s | Đúng 1 payment, lần 2 `replayed: true`, đúng 1 hold. |
+
+---
+
+## 6. Nghiệm Thu Toàn Diện Không Còn Gọi Ví Trong Transaction (Commit 5)
+
+### 6.1. Chứng Cứ Tĩnh: Quét AST Toàn Bộ Mã Nguồn `payment-service`
+- **Công cụ kiểm tra:** AST Static Scanner ([`scripts/guard-p2p-transactions.cjs`](file:///d:/PTPMHDV_Backend/scripts/guard-p2p-transactions.cjs)), tích hợp trong test suite tự động [`k16-transaction-static-guard.test.ts`](file:///d:/PTPMHDV_Backend/services/payment-service/tests/k16-transaction-static-guard.test.ts).
+- **Phạm vi quét:** Đệ quy toàn bộ thư mục `services/payment-service/src` (bao gồm `controllers/`, `services/`, `jobs/`, `clients/`, `events/`, `workers/`, `routes/`, `utils/`).
+- **Kết quả đo đạc thực tế:**
+  - Tổng số file `.ts` phân tích cú pháp AST: **46 file**.
+  - Tổng số khối `prisma.$transaction` phát hiện: **29 khối**.
+  - Số vi phạm cuộc gọi ví (`walletClient` / `createHold` / `captureHold` / `releaseHold` / `lookupTransaction`): **0 vi phạm**.
+  - Số vi phạm Network HTTP I/O (`fetch`, `axios`, `http.request`): **0 vi phạm**.
+  - Số vi phạm Timer giữ khóa DB (`setTimeout`, `setInterval`, sleep loops): **0 vi phạm**.
+- **Đầu ra lệnh quét:**
+  ```text
+  [K21/K16 Guard] Scanning entire payment-service directory: D:\PTPMHDV_Backend\services\payment-service\src
+  [K21/K16 Guard] Đã quét 46 file .ts, phát hiện 29 khối prisma.$transaction.
+  ✅ [PASS] 100% SẠCH SẼ: Không có bất kỳ lời gọi ví (walletClient), Network I/O, hay setTimeout nào nằm trong prisma.$transaction trên toàn bộ payment-service.
+  ```
+
+### 6.2. Chứng Cứ Động: Runtime Transaction Guard (`GuardedWalletClient`)
+- **Cơ chế hoạt động:** Sử dụng `AsyncLocalStorage<boolean>` theo dõi ngữ cảnh thực thi bất đồng bộ của `prisma.$transaction`. Mọi phương thức của `WalletClient` (`createHold`, `extendHold`, `captureHold`, `releaseHold`, `refundCapture`, `refundCredit`, `topupCredit`, `getBalance`, `lookupTransaction`) đều được bọc bởi guard; nếu phát hiện đang nằm trong active transaction sẽ ném lỗi lập tức.
+- **Phạm vi kiểm thử động:**
+  - `checkout` (3 pha, `createHold` ở Pha 2 ngoài transaction): PASS.
+  - `confirm / resume` (3 pha, `captureHold` ở Pha 2 ngoài transaction): PASS.
+  - `sweepExpiredPayments` (giải phóng hold quá hạn ngoài transaction): PASS.
+  - `processRefundEvent` (hoàn tiền qua `walletClient.refundCapture` ngoài transaction): PASS.
+  - Tất cả 8/8 test trong `k16-transaction-guard.test.ts` đạt 100%.
+
+### 6.3. Kết Quả Kiểm Thử Toàn Diện Hai Service
+1. **`wallet-service` (Đơn vị & Nghiệp vụ):**
+   - Lệnh: `npm.cmd --prefix services/wallet-service test`
+   - Kết quả: **70 / 70 tests PASS (100%)**, thời gian 20.1s. Bao gồm các bộ test K13, K14, K17, Limit Engine, Timezone, Outbox event routing.
+2. **`wallet-service` (Đồng thời & Tranh chấp Concurrency):**
+   - Lệnh: `npm.cmd --prefix services/wallet-service run test:concurrency`
+   - Kết quả: **3 / 3 kịch bản PASS (100%)**.
+     - Test 1 (20 requests song song): 1 THÀNH CÔNG, 19 THẤT BẠI, số dư ví A còn đúng 40.000đ.
+     - Test 2 (Deadlock chéo C->D và D->C): Cả 2 thành công, không deadlock nhờ cơ chế `lockAndFetchWalletsTx`.
+     - Test 3 (2 request hold song song cùng ví): 1 THÀNH CÔNG, 1 THẤT BẠI.
+3. **`payment-service` (Toàn bộ bộ test K16):**
+   - Lệnh: `npm.cmd --prefix services/payment-service run test:k16`
+   - Kết quả: **35 / 35 tests PASS (6 suites, 100%)**, thời gian 82.8s.
+     - `k16-transaction-static-guard.test.ts`: 5/5 PASS.
+     - `k16-transaction-guard.test.ts`: 8/8 PASS.
+     - `k16-crash-slow-wallet.test.ts`: 8/8 PASS.
+     - `k16-complete-hold-decoupled.test.ts`: 6/6 PASS.
+     - `k16-resume-decoupled.test.ts`: 6/6 PASS.
+     - `k16-workflow-schema.test.ts`: 2/2 PASS.
+4. **Kịch bản nghiệm thu K20 A1 (Chuyển tiền song song 10 lần lặp):**
+   - Lệnh: `node scripts/k20-acceptance-runner.mjs A1`
+   - Kết quả: **10 / 10 lần lặp PASS (100%)**.
+     - Mỗi lần: 20 request x 60k -> đúng 1 thành công (201 SUCCESS), 19 bị từ chối (409 INSUFFICIENT_BALANCE).
+     - Số dư ví An: 40.000đ, heldBalance: 0đ.
+     - Số dư ví Binh: 360.000đ, heldBalance: 0đ.
+     - Bảo toàn hệ thống: `Delta = 0 VND`.
+5. **Kịch bản nghiệm thu K20 A2 (Idempotency checkout 2 lần):**
+   - Lệnh: `node scripts/k20-acceptance-runner.mjs A2`
+   - Kết quả: **2 / 2 nhánh PASS (100%)**.
+     - Nhánh tuần tự: Request 1 `replayed: false`, Request 2 `replayed: true`.
+     - Nhánh song song: In-flight guard kích hoạt an toàn, replay trả về cùng paymentId và `replayed: true`.
+     - Số payment tạo ra: đúng 1 payment; số hold: đúng 1 hold.
+
+### 6.4. Hậu Kiểm Bảo Toàn Tài Chính Toàn Hệ Thống
+- **Script kiểm tra:** [`scripts/check-wallets.cjs`](file:///d:/PTPMHDV_Backend/scripts/check-wallets.cjs)
+- **Kết quả báo cáo:**
+  ```text
+  === GLOBAL WALLET AUDIT REPORT ===
+  WALLETS_COUNT:        8
+  TOTAL_BALANCE:        0 VND
+  TOTAL_HELD_BALANCE:   0 VND
+  NEGATIVE_WALLETS:     0
+  TOTAL_LEDGER_CREDIT:  1650000 VND
+  TOTAL_LEDGER_DEBIT:   1650000 VND
+  LEDGER_DIFF:          0 VND
+  CONSERVATION_STATUS:  CONSERVED (0 VND)
+  ==================================
+  ```
+- **Kết luận:** Tổng số dư toàn hệ thống người dùng và ví hệ thống bằng đúng 0 VND. Sổ cái kép cân bằng tuyệt đối giữa Nợ và Có. Không có bất kỳ ví người dùng nào bị âm tiền.
