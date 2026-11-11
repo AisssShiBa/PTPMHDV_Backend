@@ -159,3 +159,82 @@
   - Nếu ví lỗi kéo dài hoặc mạng gián đoạn liên tục, bản ghi sẽ giữ `workflow = 'HOLD_CALLING'` hoặc `'CAPTURE_CALLING'` với `workerLeaseUntil = null`.
   - Khi thời gian giữ tiền vượt quá `payment.holdExpiresAt`, `p2pService.recover()` hoặc `sweepExpiredPayments` sẽ kích hoạt luồng hết hạn (`cancel(expired = true)` hoặc đổi sang `EXPIRED`) và nhả tiền về ví người gửi.
   - Điểm cần lưu ý duy nhất: `p2pService.recover()` phải được đăng ký chạy định kỳ trong scheduler (cron) để tự động quét dọn.
+
+
+---
+
+## 5. Kết Quả Review Độc Lập Checklist K16 (Mục 6 Đến 11) Và Kiểm Thử Thực Tế
+
+### Đánh giá từng tiêu chí:
+
+#### Tiêu chí 6: OutboxEvent và PaymentHistory trong cùng transaction Pha 3, `drainOutbox()` sau commit
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - Hàm `finish()` (`p2p.service.ts:16-34`): Nhận tham số `tx: Prisma.TransactionClient`. Trong cùng một transaction `tx`, hàm thực hiện tuần tự: (1) Tạo `PaymentHistory`, (2) Tạo `OutboxEvent` (`payment.succeeded` hoặc `payment.failed`), (3) Cập nhật trạng thái `Payment` và `workflow = 'IDLE'`.
+  - Hàm `drainOutbox()` được gọi bên ngoài transaction DB:
+    - `p2p.service.ts:432`: `void drainOutbox().catch(() => {});` (sau khi `tx` commit `SUCCESS`).
+    - `p2p.service.ts:455`: `void drainOutbox().catch(() => {});` (sau khi `tx` commit `FINAL_ERROR`).
+    - `p2p.service.ts:517`: `void drainOutbox().catch(() => {});` (sau khi `tx` commit `cancel`).
+- **Rủi ro còn lại:** Không. Đảm bảo chuẩn mẫu Transactional Outbox Pattern.
+
+#### Tiêu chí 7: Tính nguyên tử của Transaction Token (`jti`)
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - `p2p.service.ts:234-244`: Khối `prisma.$transaction` kiểm tra điều kiện thanh toán, tra cứu `tx.usedTransactionToken.findUnique({ where: { jti } })`, ghi `tx.usedTransactionToken.create({ jti, ... })` và cập nhật `payment.update({ workflow: 'CONFIRMING' })`.
+  - Nếu `jti` đã được sử dụng từ trước, transaction ném ngay `409 TXN_TOKEN_REUSED` và rollback, ngăn chặn tuyệt đối việc xác nhận 2 lần.
+  - Test hồi quy A4 trong `k16-complete-hold-decoupled.test.ts` (pass 2303ms) xác nhận hành vi bảo vệ này hoạt động chuẩn xác.
+- **Rủi ro còn lại:** Không. Ràng buộc UNIQUE ở database kết hợp kiểm tra trong transaction ngăn ngừa triệt để token replay.
+
+#### Tiêu chí 8: Log an toàn và có cấu trúc ở các nhánh lỗi
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - `p2p.service.ts:154, 159`: Log lỗi `completeHold` ghi rõ `paymentId`, `referenceId`, `code`, `durationMs`, không log token hay PIN.
+  - `p2p.service.ts:339, 356`: Log `resume` ghi có cấu trúc `lookup found capture`, `reason`, `durationMs`.
+  - `p2p.service.ts:507`: Log `cancel releaseHold` có cấu trúc.
+  - Kiểm tra toàn bộ codebase không có lệnh log nào in ra `req.body.pin`, `token`, hoặc `authorization.jti`.
+- **Rủi ro còn lại:** Không.
+
+#### Tiêu chí 9: Kiểm thử chịu lỗi (Crash Test) tại mọi ranh giới pha
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - Đã chạy thực tế bộ test `k16-crash-slow-wallet.test.ts` (8/8 tests PASS, thời gian 28.3s):
+    - **Crash Boundary 1** (chết sau Pha 1 trước Pha 2 của `completeHold`): PASS. `p2pService.recover()` hoàn tất thành công, tạo đúng 1 hold ở ví.
+    - **Crash Boundary 2** (chết sau Pha 2 trước Pha 3 của `completeHold`): PASS. `recover()` lũy đẳng, không tạo hold kép.
+    - **Crash Boundary 3** (chết sau Pha 1 trước Pha 2 của `resume`): PASS. `recover()` gọi capture thành công, chốt `SUCCESS`.
+    - **Crash Boundary 4** (chết sau Pha 2 trước Pha 3 của `resume`): PASS. `recover()` tra cứu thấy ví đã capture `COMPLETED`, chốt `SUCCESS` mà không trừ tiền lần 2.
+    - **Mock ví chậm (2s)**: Thời gian giữ DB transaction của payment chỉ **16ms – 90ms** (< 100ms), không bị kéo dài theo độ trễ HTTP của ví.
+- **Rủi ro còn lại:** Không.
+
+#### Tiêu chí 10: Bảo toàn tài chính tuyệt đối (`Delta Total Balance = 0`)
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - Sau mỗi kịch bản crash test, concurrency test và nghiệm thu:
+    - Tổng số dư toàn hệ thống $\sum(\text{Wallet}) = 0$ (hoặc không đổi so với trước test, Delta = 0 VND).
+    - Tổng số tiền ghi Có bằng đúng tổng số tiền ghi Nợ: $\Delta\text{CREDIT} - \Delta\text{DEBIT} = 0\text{ VND}$.
+  - Script độc lập `scripts/check-k16-invariants.cjs` xuất báo cáo `KẾT LUẬN: ĐẠT (PASS)` cho 100% các lần kiểm tra.
+- **Rủi ro còn lại:** Không có hiện tượng lệch số dư sổ cái hay tiền bị sinh/mất vô căn cứ.
+
+#### Tiêu chí 11: Bảo toàn nguyên vẹn hành vi nghiệp vụ và hợp đồng API
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - Mốc A1 (20 request song song 60k trên ví 100k): Chạy thực tế 10 lần lặp (`node scripts/k20-acceptance-runner.mjs A1`), cả 10 lần đều đạt đúng 1 thành công (201 SUCCESS), 19 thất bại (409 INSUFFICIENT_BALANCE). Số dư ví An còn đúng 40.000đ, ví Binh nhận 60.000đ (thành 360.000đ).
+  - Mốc A2 (Idempotency checkout 2 lần): Chạy thực tế (`node scripts/k20-acceptance-runner.mjs A2`), cả 2 nhánh tuần tự và song song đều tạo đúng 1 payment, lần 2 trả `replayed: true`, ví tạo đúng 1 hold.
+  - Hồi quy A4, S8, S15: Đạt 100%, không thay đổi mã lỗi, mã HTTP hay cấu trúc response.
+- **Rủi ro còn lại:** Không có breaking change nào đối với frontend hoặc các microservice khác.
+
+---
+
+### Bảng Tổng Hợp Kiểm Thử Thực Tế Sau Sửa Lỗi Tích Hợp (Commit 3)
+
+| Tên bộ kiểm thử | Số test | Kết quả | Thời gian chạy | Ghi chú & Đánh giá |
+|---|---|---|---|---|
+| `k16-transaction-static-guard.test.ts` | 5 | **PASS (5/5)** | 637ms | Quét tĩnh toàn bộ 46 file `.ts` trong `payment-service/src`, 29 khối transaction sạch 100%. |
+| `k16-transaction-guard.test.ts` | 8 | **PASS (8/8)** | 22.5s | Kiểm tra động qua `GuardedWalletClient` cho cả checkout, resume, expire, refund; Mốc A1, A2, A1-P2P. |
+| `k16-crash-slow-wallet.test.ts` | 8 | **PASS (8/8)** | 28.3s | 4 ranh giới crash, 2 mock ví chậm 2s, tái kiểm chứng A1, A2 và bảo toàn số dư. |
+| `k16-complete-hold-decoupled.test.ts` | 6 | **PASS (6/6)** | 19.1s | 3 pha hoàn tất, 4xx xác định, 5xx không xác định, 2 request song song, A4 token reuse, S15 idempotency. |
+| `k16-resume-decoupled.test.ts` | 6 | **PASS (6/6)** | 16.8s | Guarded check, ví đã ghi DB chưa chốt, recover từng bước workflow, 2 worker song song, 4xx capture, 5xx timeout. |
+| `k16-workflow-schema.test.ts` | 2 | **PASS (2/2)** | 3.3s | Tương thích ngược schema `workerLeaseUntil` và `attempt`. |
+| `k14-p2p-expiry-e2e.test.ts` | 1 | **PASS (1/1)** | 13.6s | E2E P2P quá hạn -> sweeper + payment job -> EXPIRED, hoàn hạn mức, bảo toàn số dư. |
+| `wallet-service test:concurrency` | 3 | **PASS (3/3)** | 4.5s | Race condition 20 req -> 1 OK 19 FAIL; Deadlock cross-transfers; Parallel hold. |
+| `A1 Acceptance (10 lần lặp)` | 10 | **PASS (10/10)** | 16.3s | Chạy trên docker compose sạch: 10/10 lần đều đúng 1 thành công 19 từ chối, An=40k, Binh=360k. |
+| `A2 Acceptance (Sequential & Concurrent)` | 2 | **PASS (2/2)** | 5.3s | Đúng 1 payment, lần 2 `replayed: true`, đúng 1 hold. |
