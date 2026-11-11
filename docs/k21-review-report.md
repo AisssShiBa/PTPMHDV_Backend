@@ -64,3 +64,98 @@
 5. **Commit 4 [K21-4]**: Khắc phục các lỗi tích hợp phát hiện (đảm bảo `WalletClient` phân giải `INTERNAL_KEY` động tại thời điểm gọi request, bảo vệ chống lệch auth).
 6. **Commit n-1 [K21-5]**: Nghiệm thu toàn diện: Chạy toàn bộ test suites của 2 service, AST guard toàn bộ files, kiểm tra bảo toàn số dư hệ thống $\sum(\text{Wallet}) = 0$.
 7. **Commit n [K21-6]**: Hoàn thiện báo cáo review `docs/k21-review-report.md` và cập nhật kết luận trong `docs/k16-review-checklist.md` (giữ nguyên trống phần chữ ký chuyên gia).
+
+
+---
+
+## 4. Kết Quả Review Độc Lập Checklist K16 (Mục 1 Đến 5)
+
+### Đánh giá từng tiêu chí:
+
+#### Tiêu chí 1: Tách triệt để cuộc gọi ví HTTP ra ngoài `prisma.$transaction`
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - `p2p.service.ts:141`: `createHold` được gọi tại Pha 2, nằm hoàn toàn ngoài bất kỳ khối `prisma.$transaction` nào.
+  - `p2p.service.ts:337`: `lookupTransaction` tra cứu trạng thái ví ngoài transaction.
+  - `p2p.service.ts:348, 396`: `captureHold` gọi ngoài transaction.
+  - `p2p.service.ts:360, 387, 502`: `releaseHold` gọi ngoài transaction.
+  - Kiểm tra tĩnh AST bằng `scripts/guard-p2p-transactions.cjs` và test `k16-transaction-static-guard.test.ts` quét 46 file `.ts` (29 khối `$transaction`) đạt 0 vi phạm.
+  - Kiểm tra động runtime bằng `k16-transaction-guard.test.ts` sử dụng `GuardedWalletClient` bọc toàn bộ các hàm API ví, xác nhận cờ transaction không bao giờ active khi ví được gọi.
+- **Rủi ro còn lại:** Không còn. Đã có 2 lớp guard tĩnh (AST parser) và động (AsyncLocalStorage runtime hook) ngăn chặn hồi quy.
+
+#### Tiêu chí 2: Ghi nhận intent trước khi gọi ví (Pha 1)
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - Tại checkout (`p2p.service.ts:50-59`): Bản ghi `Payment` được tạo với `status = 'PENDING'`, `workflow = 'HOLDING'`. Trước khi gọi ví ở Pha 2, transaction Pha 1 (`p2p.service.ts:90-106`) chuyển trạng thái sang `workflow = 'HOLD_CALLING'`, tăng `attempt`, đặt `workerLeaseUntil` và commit hoàn tất.
+  - Tại confirm (`p2p.service.ts:234-244`): Ghi nhận `jti` vào `UsedTransactionToken`, chuyển `workflow = 'CONFIRMING'` trong một transaction ngắn commit xong mới tiến hành gọi `resume()`. Tại Pha 1 của `resume()` (`p2p.service.ts:275-290`), `workflow` chuyển sang `CAPTURE_CALLING` và commit trước khi gọi `wallet.captureHold`.
+- **Rủi ro còn lại:** Không. Nếu sập nguồn ngay sau khi ghi intent, hệ thống đã lưu đầy đủ thông tin để worker phục hồi.
+
+#### Tiêu chí 3: UPDATE có điều kiện ở Pha 1 và Pha 3 (Chống ghi đè tranh chấp)
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - Pha 1 `completeHold` (`p2p.service.ts:90-100`): Điều kiện `where` kiểm tra chặt chẽ `status = 'PENDING'`, `workflow IN ('HOLDING', 'HOLD_CALLING')`, và `(workerLeaseUntil IS NULL OR workerLeaseUntil <= NOW() OR workflow = 'HOLDING')`.
+  - Pha 3 `completeHold` (`p2p.service.ts:168-172`, `189-193`): Điều kiện `where: { id, workflow: 'HOLD_CALLING' }`. Nếu worker khác đã can thiệp hoặc lease đã đổi, update count trả về 0 và không ghi đè dữ liệu.
+  - Pha 1 `resume` (`p2p.service.ts:275-285`): Điều kiện `where` kiểm tra `workflow IN allowedWorkflows` kèm kiểm tra hạn lease.
+  - Pha 3 `resume` (`p2p.service.ts:418-423`, `441-446`): Điều kiện `where: { id, status: 'PENDING', workflow IN ('CAPTURE_CALLING', 'RELEASE_CALLING', 'CONFIRMING') }`.
+- **Rủi ro còn lại:** Không. Đã bảo đảm triệt để nguyên lý Optimistic Concurrency Control (OCC) và Row-level Locking của PostgreSQL.
+
+#### Tiêu chí 4: Lỗi không xác định (Timeout/5xx) không chuyển trạng thái cuối
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - `p2p.service.ts:150-161`: Phân định rõ ràng: chỉ `error instanceof DomainException && error.status < 500` mới là `deterministicError`. Các lỗi >= 500 hoặc lỗi mạng/timeout được xếp vào `indeterminateError`.
+  - `p2p.service.ts:223-229`: Khi gặp `indeterminateError`, payment KHÔNG bị đổi thành `FAILED`, giữ nguyên `HOLD_CALLING`, chỉ giải phóng `workerLeaseUntil = null` để worker có thể nhận lại và tra cứu.
+  - `p2p.service.ts:353-383, 459-465`: Trong `resume`, lỗi không xác định giữ nguyên `status = 'PENDING'`, không nhả hold và không chuyển sang trạng thái cuối (`FAILED` / `EXPIRED`).
+- **Rủi ro còn lại:** Không có rủi ro mất tiền hoặc sai lệch trạng thái.
+
+#### Tiêu chí 5: Cơ chế Lease phân tán của Worker (`workerLeaseUntil`)
+- **Kết luận:** **ĐẠT (PASS)**
+- **Chứng cứ kiểm tra (`file:line`):**
+  - Migration SQL `20261106140000_add_payment_workflow_lease`: Bổ sung `workerLeaseUntil` (DateTime nullable) và `attempt` (Int default 0), kèm index `Payment_workflow_workerLeaseUntil_idx`.
+  - `p2p.service.ts:88, 253`: Lease có thời hạn 30 giây (`new Date(Date.now() + 30000)`).
+  - Sử dụng lệnh `tx.payment.updateMany` nguyên tử. Nếu 2 worker cùng vào claim 1 payment, câu lệnh UPDATE của PostgreSQL chỉ cho phép 1 transaction cập nhật thành công (`count = 1`), transaction còn lại nhận `count = 0` và chuyển sang trạng thái `BUSY` (dòng 116, 295).
+  - Test tương thích ngược `k16-workflow-schema.test.ts` và test tranh chấp đồng thời xác nhận không bị race condition giữa các worker.
+- **Rủi ro còn lại:** Cần đảm bảo tiến trình `recover()` được scheduler gọi định kỳ để dọn dẹp các lease bị quá hạn do worker chết đột ngột.
+
+---
+
+### Trả Lời 4 Câu Hỏi Chuyên Sâu Của K21:
+
+#### (i) `referenceId` có thực sự ổn định qua các lần thử/phục hồi không, hay có chỗ nào sinh mới hoặc ghép timestamp?
+- **Kết luận:** **Hoàn toàn ổn định và bất biến**.
+- **Bằng chứng:**
+  - `referenceId` được sinh đúng 1 lần duy nhất lúc tạo `Payment` ban đầu (`p2p.service.ts:46`: `const holdId = randomUUID();`) và gán cố định vào `payment.holdId` / `payment.referenceId`.
+  - Trong `completeHold`: `const referenceId = payment.holdId!` (dòng 130).
+  - Trong `resume`: `const referenceId = payment.holdId!` (dòng 319).
+  - Trong `cancel`: `await this.wallet.releaseHold(payment.userId, payment.holdId)` (dòng 502).
+  - Trong `recover`: gọi lại `completeHold(payment.id)` và `resume(payment.id)`, cả hai đều đọc lại `payment.holdId` từ bản ghi DB hiện có.
+  - Tuyệt đối **không có** bất kỳ vị trí nào sinh UUID mới hoặc ghép nối `Date.now()` / timestamp vào `referenceId` khi retry hoặc recover.
+
+#### (ii) Khoảng hở giữa Pha 1 (đã ghi intent) và Pha 2 (chưa gọi ví): Nếu tiến trình chết ở đây, cơ chế phục hồi xử lý thế nào? Có bị trừ tiền oan hoặc treo không?
+- **Kết luận:** **Không bị trừ tiền oan, không bị treo vĩnh viễn**.
+- **Bằng chứng:**
+  - Nếu chết giữa Pha 1 và Pha 2:
+    - Tại DB payment: `workflow` là `'HOLD_CALLING'` (hoặc `'CAPTURE_CALLING'`), `workerLeaseUntil = T + 30s`.
+    - Tại Wallet: Chưa nhận được cuộc gọi nào, không có hold hoặc capture nào được ghi.
+  - Sau 30s, lease hết hạn. Scheduler hoặc worker gọi `p2pService.recover()`:
+    - Bản ghi được quét ra do `workflow != 'IDLE'`.
+    - Với `HOLD_CALLING`: `completeHold` được gọi lại, claim lease mới, tăng `attempt = 2`. Pha 2 gọi `wallet.createHold` với cùng `referenceId = payment.holdId`. Ví tạo hold an toàn, Pha 3 chốt `COMPLETED`.
+    - Với `CAPTURE_CALLING`: `resume` được gọi lại. Vì `attempt > 1`, Pha 2 gọi `wallet.lookupTransaction(referenceId)`. Ví báo `exists: false` (chưa từng nhận capture), `resume` an toàn tiến hành gọi `wallet.captureHold(referenceId)`.
+  - Kết quả: Tiền được bảo toàn nguyên vẹn, giao dịch hoàn tất đúng 1 lần.
+
+#### (iii) Nếu Pha 2 gọi ví mất 30 giây (quá hạn lease), worker khác vào claim lại và gọi ví lần hai, ví xử lý hai lời gọi này ra sao? Có idempotent không?
+- **Kết luận:** **Idempotent 100% ở cả 2 service**.
+- **Bằng chứng:**
+  - Tại `wallet-service`: Cả hai request (từ Worker 1 đang trễ và Worker 2 vừa claim) đều mang chung `referenceId` (`holdId`).
+  - `wallet-service` (`wallet-hold.service.ts:102-120`) sử dụng row lock `SELECT ... FOR UPDATE` theo `referenceId`:
+    - Khi request của Worker 1 hoặc Worker 2 đến trước, hold chuyển sang `CAPTURED` và ghi 1 cặp bút toán Nợ/Có.
+    - Khi request của worker còn lại đến sau, `wallet-service` kiểm tra thấy hold đã ở trạng thái `CAPTURED` -> Trả về kết quả lũy đẳng thành công (HTTP 200) kèm dữ liệu ban đầu, không tạo thêm bất kỳ bút toán nào (`replayed: true`).
+  - Tại `payment-service` ở Pha 3:
+    - Cả hai worker đều chạy `UPDATE Payment SET workflow = 'IDLE' WHERE id = :id AND workflow = 'CAPTURE_CALLING'`.
+    - Do có điều kiện `workflow = 'CAPTURE_CALLING'`, chỉ worker đầu tiên cập nhật được `count = 1` và đẩy OutboxEvent. Worker thứ hai cập nhật `count = 0` và bỏ qua an toàn.
+  - Sổ cái tài chính bảo toàn Delta Balance = 0.
+
+#### (iv) Có kịch bản nào bản ghi bị kẹt vĩnh viễn ở trạng thái trung gian không?
+- **Phân tích:**
+  - Nếu ví lỗi kéo dài hoặc mạng gián đoạn liên tục, bản ghi sẽ giữ `workflow = 'HOLD_CALLING'` hoặc `'CAPTURE_CALLING'` với `workerLeaseUntil = null`.
+  - Khi thời gian giữ tiền vượt quá `payment.holdExpiresAt`, `p2pService.recover()` hoặc `sweepExpiredPayments` sẽ kích hoạt luồng hết hạn (`cancel(expired = true)` hoặc đổi sang `EXPIRED`) và nhả tiền về ví người gửi.
+  - Điểm cần lưu ý duy nhất: `p2pService.recover()` phải được đăng ký chạy định kỳ trong scheduler (cron) để tự động quét dọn.
