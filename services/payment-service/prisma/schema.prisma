@@ -123,6 +123,7 @@ enum TopupStatus {
 model TopupRequest {
   id                  String       @id @default(uuid()) @db.Uuid
   userId              String       @db.VarChar(50)
+  idempotencyKey      String?      @db.Uuid
   amount              Decimal      @db.Decimal(20, 2)
   code                String       @unique @db.VarChar(50)
   status              TopupStatus  @default(PENDING)
@@ -141,6 +142,7 @@ model TopupRequest {
 
   auditLogs           TopupAuditLog[]
 
+  @@unique([userId, idempotencyKey])
   @@index([userId])
   @@index([status])
 }

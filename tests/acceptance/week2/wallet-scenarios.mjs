@@ -75,7 +75,8 @@ export async function walletS6(ctx, accounts) {
   const before = state(ctx, user)
   const references = Array.from({ length: 10 }, () => uuid())
   const expiresAt = new Date(Date.now() + 300000).toISOString()
-  for (const destinationUserId of [undefined, 'not-a-uuid']) {
+  // Destination is optional for generic cashout holds; an explicitly invalid UUID is rejected.
+  for (const destinationUserId of ['not-a-uuid']) {
     const invalid = await operation(ctx, accounts, user, 'hold', {
       amount: '100000', referenceId: uuid(), expiresAt, destinationUserId
     }, 400)
@@ -137,14 +138,19 @@ export async function inlineExpiry(ctx, accounts) {
   await hold(ctx, accounts, user, 100000, referenceId, expiresAt)
   // Separate service process, real DB, fake time. The live scheduler cannot
   // mask a rolled-back expiry because this hold is still an hour in its future.
-  const result = JSON.parse(docker(ctx, 'exec', '-T', 'wallet-service', 'node', '--import', 'tsx', '-e', `
+  const marker = '__WALLET_INLINE_EXPIRY__'
+  const output = docker(ctx, 'exec', '-T', 'wallet-service', 'node', '--import', 'tsx', '-e', `
+    const marker='${marker}';
     const {WalletHoldService}=require('./src/services/wallet-hold.service');
     const {LedgerService}=require('./src/services/ledger.service');
     const RealDate=Date,now=Date.parse('${expiresAt}')+1;
     global.Date=class extends RealDate{constructor(...a){super(...(a.length?a:[now]))}static now(){return now}};
     new WalletHoldService(new LedgerService()).captureHold('${user.id}','${referenceId}')
-      .then(()=>{console.log(JSON.stringify({unexpectedSuccess:true}));process.exit(1)})
-      .catch(e=>{console.log(JSON.stringify({status:e.status,code:e.code}));process.exit(0)});`))
+      .then(()=>{console.log(marker+JSON.stringify({unexpectedSuccess:true}));process.exit(1)})
+      .catch(e=>{console.log(marker+JSON.stringify({status:e.status,code:e.code}));process.exit(0)});`)
+  const frames = output.split('\n').filter(line => line.startsWith(marker))
+  assert.equal(frames.length, 1, 'Expected exactly one expiry result frame')
+  const result = JSON.parse(frames[0].slice(marker.length))
   assert.deepEqual(result, { status: 409, code: 'HOLD_EXPIRED' })
   const after = state(ctx, user)
   const status = holdStatus(ctx, referenceId)
@@ -155,7 +161,7 @@ export async function inlineExpiry(ctx, accounts) {
   assert.equal(after.balance, before.balance)
   assert.equal(after.ledger, before.ledger)
   const replay = await operation(ctx, accounts, user, 'capture', { referenceId }, 409)
-  assert.equal(replay.error?.code, 'HOLD_NOT_CAPTURABLE')
+  assert.equal(replay.error?.code, 'HOLD_EXPIRED')
   assert.deepEqual(state(ctx, user), after, 'Retry after inline expiry must not refund usage twice')
 }
 

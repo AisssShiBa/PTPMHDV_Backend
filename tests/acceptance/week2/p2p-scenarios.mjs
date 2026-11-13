@@ -103,7 +103,7 @@ export async function s15(ctx, a) {
 }
 export async function s8(ctx, a) {
   const user = await funded(ctx, a, 'p2p-s8')
-  const before = state(ctx, user)
+  const before = JSON.parse(state(ctx, user)), receiverBefore = JSON.parse(state(ctx, a.binh))
   const payment = (await checkout(ctx, user, a.binh, '1000')).data
   const token = await tokenFor(ctx, user, payment)
   try {
@@ -113,9 +113,14 @@ export async function s8(ctx, a) {
   } finally {
     await command(ctx, 's8-start-wallet', 'docker', [...ctx.composeArgs, 'up', '-d', '--no-deps', '--wait', 'wallet-service'])
   }
-  await until(() => sql(ctx, 'payment_service', `SELECT status FROM "Payment" WHERE id='${payment.id}'`) === 'FAILED', 'Capture failure did not recover')
-  assert.equal(state(ctx, user), before)
-  assert.equal(sql(ctx, 'wallet_service', `SELECT status FROM "WalletHold" WHERE "referenceId"='${payment.holdId}'`), 'RELEASED')
+  // A transient Wallet outage is indeterminate. The recovery worker retries
+  // the same durable capture rather than declaring failure or releasing funds.
+  await until(() => sql(ctx, 'payment_service', `SELECT status FROM "Payment" WHERE id='${payment.id}'`) === 'SUCCESS', 'Capture did not recover after Wallet restart', 65000)
+  const after = JSON.parse(state(ctx, user)), receiverAfter = JSON.parse(state(ctx, a.binh))
+  assert.equal(after.balance, before.balance - 1000); assert.equal(receiverAfter.balance, receiverBefore.balance + 1000)
+  assert.equal(after.held, 0); assert.equal(after.ledger, before.ledger + 1); assert.equal(receiverAfter.ledger, receiverBefore.ledger + 1)
+  assert.equal(sql(ctx, 'wallet_service', `SELECT status FROM "WalletHold" WHERE "referenceId"='${payment.holdId}'`), 'CAPTURED')
+  assert.equal(sql(ctx, 'wallet_service', `SELECT count(*) FROM "LedgerEntry" WHERE "referenceId"='${payment.holdId}'`), '2')
 }
 export async function s16(ctx, a) {
   const payment = (await checkout(ctx, a.an, a.binh, '1000')).data
@@ -123,12 +128,17 @@ export async function s16(ctx, a) {
   try {
     await command(ctx, 's16-stop-broker', 'docker', [...ctx.composeArgs, 'stop', 'rabbitmq'])
     assert.equal((await confirm(ctx, a.an, payment, token)).data.status, 'SUCCESS')
-    assert.equal(sql(ctx, 'payment_service', `SELECT status FROM "OutboxEvent" WHERE "aggregateId"='${payment.id}'`), 'PENDING')
+    // The publisher may already hold its durable claim while RabbitMQ is down.
+    // Both queued and claimed are unsent; do not mistake PROCESSING for loss.
+    const row = JSON.parse(sql(ctx, 'payment_service', `SELECT json_build_object('status',status,'sent',"sentAt" IS NOT NULL) FROM "OutboxEvent" WHERE "aggregateId"='${payment.id}'`))
+    assert.ok(['PENDING', 'PROCESSING'].includes(row.status), 'Broker-down event must remain retryable, not terminal')
+    assert.equal(row.sent, false)
   } finally {
     await command(ctx, 's16-start-broker', 'docker', [...ctx.composeArgs, 'start', 'rabbitmq'])
   }
   const eventId = sql(ctx, 'payment_service', `SELECT id FROM "OutboxEvent" WHERE "aggregateId"='${payment.id}'`)
   await until(() => sql(ctx, 'notification_service', `SELECT count(*) FROM "Notification" WHERE "eventId"='${eventId}'`) === '2', 'Payment notification did not recover', 90000)
+  await until(() => sql(ctx, 'payment_service', `SELECT status FROM "OutboxEvent" WHERE id='${eventId}'`) === 'SENT', 'Recovered event was not marked sent')
   assert.equal(sql(ctx, 'wallet_service', `SELECT count(*) FROM "LedgerEntry" WHERE "referenceId"='${payment.holdId}'`), '2')
 }
 
@@ -171,13 +181,20 @@ export async function ambiguousCapture(ctx, a) {
   const before = JSON.parse(state(ctx, a.an))
   const beforeReceiver = JSON.parse(state(ctx, a.binh))
   // Fault injection only in this test process: real Wallet capture commits, then its response is lost.
-  const script = `const assert=require('node:assert/strict');const {P2pService}=require('./src/services/p2p.service');
+  const marker = '__P2P_CAPTURE_RESULT__'
+  const script = `const marker='${marker}';const assert=require('node:assert/strict');const {P2pService}=require('./src/services/p2p.service');
     const {WalletClient}=require('./src/clients/wallet.client');const {DomainException}=require('./src/utils/domain.exception');
     class LostResponse extends WalletClient {once=true;async captureHold(...args){const result=await super.captureHold(...args);
       if(this.once){this.once=false;throw new DomainException(503,'WALLET_UNAVAILABLE','simulated lost capture response')}return result;}}
     new P2pService(new LostResponse()).confirm('${payment.id}','${a.an.id}',${JSON.stringify(token)})
-      .then(p=>{assert.equal(p.status,'SUCCESS');console.log('ok');process.exit(0)}).catch(()=>process.exit(1));`
-  assert.equal(docker(ctx, 'exec', '-T', 'payment-service', 'node', '--import', 'tsx', '-e', script), 'ok')
+      .then(p=>{assert.equal(p.status,'SUCCESS');console.log(marker+'ok');process.exit(0)})
+      .catch(e=>{if(e.code==='PAYMENT_PROCESSING'){console.log(marker+'processing');process.exit(0)}process.exit(1)});`
+  const outcome = docker(ctx, 'exec', '-T', 'payment-service', 'node', '--import', 'tsx', '-e', script)
+  const frames = outcome.split('\n').filter(line => line.startsWith(marker))
+  assert.equal(frames.length, 1, 'Expected one capture outcome frame')
+  assert.ok(['ok', 'processing'].includes(frames[0].slice(marker.length)))
+  // No second confirm/token: poll the durable record while the worker reconciles.
+  await until(() => sql(ctx, 'payment_service', `SELECT status FROM "Payment" WHERE id='${payment.id}'`) === 'SUCCESS', 'Lost capture response did not reconcile', 65000)
   const after = JSON.parse(state(ctx, a.an)), afterReceiver = JSON.parse(state(ctx, a.binh))
   assert.equal(after.balance, before.balance-1000); assert.equal(afterReceiver.balance, beforeReceiver.balance+1000)
   assert.equal(after.ledger, before.ledger+1); assert.equal(afterReceiver.ledger, beforeReceiver.ledger+1)

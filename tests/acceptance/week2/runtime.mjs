@@ -3,7 +3,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { createServer, createConnection } from 'node:net'
-import { mkdirSync, copyFileSync, readFileSync, writeFileSync, openSync, closeSync } from 'node:fs'
+import { mkdirSync, chmodSync, copyFileSync, readFileSync, writeFileSync, openSync, closeSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
@@ -25,10 +25,14 @@ async function freePort() {
 export async function prepare() {
   const project = 'finvault-acceptance-' + randomUUID().replaceAll('-', '').slice(0, 12)
   const directory = resolve(root, '.cache/acceptance-week2', project)
-  mkdirSync(directory, { recursive: true })
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
   copyFileSync(resolve(root, '.env.example'), resolve(directory, '.env.example'))
   copyFileSync(resolve(root, 'init-db.sql'), resolve(directory, 'init-db.sql'))
   initialize(directory)
+  // PostgreSQL reads initialization SQL as its database user. The parent stays
+  // private on the host; credential files retain their original 0600 modes.
+  chmodSync(resolve(directory, 'secrets'), 0o700)
+  chmodSync(resolve(directory, 'secrets/init-db.sql'), 0o644)
   const config = parseEnv(readFileSync(resolve(directory, '.env'), 'utf8'))
   const ports = new Set()
   async function port() { let p; do { p = await freePort() } while (ports.has(p)); ports.add(p); return p }
@@ -47,6 +51,7 @@ export async function prepare() {
   // Every run gets a new project, credentials, ports and volumes. No down -v.
   const secrets = Object.fromEntries(Object.entries({
     internal_key: 'internal_key.txt', access_token_secret: 'access_token_secret.txt',
+    redis_password: 'redis_password.txt', redis_url: 'redis_url.txt',
     merchant_qr_secret: 'merchant_qr_secret.txt',
     postgres_password: 'postgres_password.txt', rabbitmq_pass: 'rabbitmq_pass.txt',
     gateway_private_key: 'gateway_private.pem', gateway_public_key: 'gateway_public.pem',
@@ -59,6 +64,15 @@ export async function prepare() {
       rabbitmq: { ports: ['127.0.0.1:' + brokerPort + ':5672'],
         healthcheck: { start_period: '120s', timeout: '20s', retries: 20 } }
     }, secrets
+  }
+  if (process.env.FINVAULT_ACCEPTANCE_ROOTLESS === '1') {
+    // An explicit test-only opt-in for rootless Podman on SELinux hosts. Never
+    // changes the production Compose file or relabels user-owned source trees.
+    const source = readFileSync(resolve(root, 'docker-compose.yml'), 'utf8')
+    const serviceSection = source.slice(source.indexOf('services:\n'), source.indexOf('\nvolumes:'))
+    for (const match of serviceSection.matchAll(/^  ([a-z0-9-]+):$/gm)) {
+      override.services[match[1]] = { ...override.services[match[1]], security_opt: ['label=disable'] }
+    }
   }
   writeFileSync(resolve(directory, 'compose.json'), JSON.stringify(override, null, 2))
   const testConfig = {
