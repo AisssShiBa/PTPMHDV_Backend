@@ -133,3 +133,62 @@ Lần nghiệm thu 26/09/2026 phát hiện schema Admin có model `AdminAuditLog
 Database mới dùng `prisma migrate deploy` bình thường. Với môi trường đã từng dùng `prisma db push` tạo sẵn bảng này, cần kiểm tra cấu trúc bảng/index và baseline migration theo quy trình của dự án trước khi deploy; không chạy lại CREATE TABLE lên bảng có sẵn. Bộ nghiệm thu chỉ migrate database `finvault_acceptance` trên cổng 25433.
 
 Phạm vi kết quả là môi trường local có backend/database/storage thật. Không bao gồm production, giao diện Admin, Payment hoặc các RabbitMQ worker.
+
+## Tuần 4 / N20 — seed bổ sung (Nguyên)
+
+Module `tests/acceptance/week4/seed-nguyen.mjs` export `seedNguyen(ctx)` và không sửa
+`tests/acceptance/seed.mjs` của Hữu (chỉ thêm điểm gọi sau khi Hữu đồng ý).
+
+Phần seed tạo thêm, chạy trên cụm acceptance đã có seed gốc:
+
+- **5 hồ sơ KYC chờ duyệt** (`week4.kyc01@demo.vn` … `week4.kyc05@demo.vn`): đăng ký qua
+  `POST /api/auth/signup`, upload hai mặt qua `POST /api/users/kyc/documents` (ảnh PNG tổng
+  hợp 900×560 sinh bằng `sharp`, có dòng "SYNTHETIC IMAGE - NOT AN ID DOCUMENT", mỗi mặt
+  upload đúng một lần). Không ghi thẳng DB, không bỏ qua kiểm định JPEG/PNG ≤ 5 MB.
+- **5 thông báo mẫu** `WALLET_CREDITED`, tạo qua route nội bộ
+  `POST /api/notifications` của notification-service với `x-internal-key` đọc từ secret
+  mount. `eventId` cố định (`week4-seed-<slot>-wallet-credited`) nên Inbox khử trùng khi chạy
+  lại. Nội dung tiếng Việt, không có dữ liệu nhạy cảm.
+- **Đúng 1 ví lệch** `week4.drift@demo.vn`: nạp thật 200.000 ₫ qua ledger API, sau đó
+  `UPDATE "Wallet".balance` cộng thêm 5.000 ₫ — **không** sửa/xóa bút toán nào.
+
+Chốt chặn ví lệch: hàm `assertDriftAllowed` từ chối khi `NODE_ENV=production` hoặc khi thiếu
+`SEED_ALLOW_DRIFT=1`. Không có cờ thì seed dừng trước khi ghi bất kỳ dòng nào.
+
+Chạy lại (idempotent): email/slot cố định, tài khoản đã có thì bỏ qua; KYC chỉ upload khi
+chưa có hồ sơ hoặc trạng thái `NONE`; credit dùng `referenceId` cố định nên ledger replay;
+thông báo khử trùng theo `eventId`; ví lệch phân loại `apply`/`skip` bằng BigInt
+(`classifyDrift`). Chạy lần 2 không nhân đôi hồ sơ, thông báo hay khoản nạp.
+
+Thứ tự bắt buộc: chạy seed gốc → **RC1 (đối soát) trước** khi seed ví lệch nếu muốn
+`isBalanced=true` → chạy seed Tuần 4 → **A8 sau**. Tổng số dư mọi ví **trừ ví lệch** vẫn bằng
+0; ví lệch cố ý làm báo cáo đối soát lệch 5.000 ₫ cho A8.
+
+Lệnh (sau khi cụm acceptance đang chạy và đã có `accounts.json` của seed gốc):
+
+```powershell
+$env:SEED_ALLOW_DRIFT = '1'
+node tests/acceptance/week4/seed-nguyen.mjs --project finvault-acceptance-<id>
+```
+
+Khi chạy chung với seed của Hữu, chỉ cần thêm một dòng vào `seed.mjs` sau khi Hữu đồng ý:
+
+```js
+import { seedNguyen } from './week4/seed-nguyen.mjs'
+// trong seed(ctx): await seedNguyen(ctx)
+```
+
+Kết quả seed ghi tại `.cache/acceptance-week2/<project>/week4-seed.json` (mã ví lệch, trạng
+thái KYC, thông báo, tổng số dư trừ ví lệch). Credential demo nằm trong `week4-accounts.json`
+cùng thư mục, chỉ giữ cục bộ và không commit.
+
+Kiểm thử thuần, không cần Docker:
+
+```powershell
+node --test tests/acceptance/week4/seed-nguyen.test.mjs
+```
+
+8 test: export/slot cố định, ảnh PNG 900×560 ≤ 5 MB và hai mặt khác nhau, chốt chặn
+production/thiếu cờ, planner idempotent, chỉ upload khi `NONE`, phân loại ví lệch, `eventId`
+ổn định, từ chối project sai. Chạy seed thật cần Docker/PostgreSQL/RabbitMQ: máy hiện tại
+không có nên ghi **NOT_RUN** trong `docs/evidence/N20/result.log`.
