@@ -92,9 +92,15 @@ export const AuthService = {
   signIn: async (input: SignInInput) => {
     const { username, password } = input
 
-    // Tìm kiếm user theo username
-    const user = await prisma.user.findUnique({
-      where: { username }
+    // Tìm kiếm user linh hoạt theo cả username hoặc email
+    const identifier = username.trim()
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { username: identifier },
+          { email: identifier }
+        ]
+      }
     })
 
     // Constant-Time Comparison: Luôn chạy bcrypt.compare kể cả khi user không tồn tại
