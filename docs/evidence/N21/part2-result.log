@@ -1,0 +1,35 @@
+N21 Part 2 — result and verification
+
+Environment
+- OS: Microsoft Windows 10.0.26200
+- Shell: Windows PowerShell 5.1.26100.9711
+- Node.js: v24.21.0
+- Branch: nguyen
+- Base SHA after the user-approved merge of origin/main: aa34e7ebfe28bd35bbe675284c6f98798675aedc
+- DOCX/evidence commit: 074fa19ea2a7ddeada6e5f24586fffdbcaf0376f
+
+Files in the DOCX/evidence commit
+- TaiLieu/FinVault_Tai_Lieu_Ky_Thuat_v2.docx
+- docs/evidence/N21/part2-changes.md
+
+Verification performed after the DOCX/evidence commit
+- Opened the committed DOCX as a ZIP and parsed word/document.xml with PowerShell XmlDocument.
+- Re-extracted all paragraphs from the committed DOCX and verified required text for all seven points.
+- Compared extracted text with the pre-edit baseline using a Node.js LCS comparison: 24 changed blocks; each reviewed block corresponds to the seven approved points. Paragraph count changed from 783 to 839 due to added rows within existing tables.
+- Verified table count remained 29 and drawing count remained 20.
+- Compared SHA-256 for each word/media entry with the pre-edit backup: all 20 media entries are byte-identical.
+- Original and backup DOCX SHA-256: 5ABA80ADD03A213957875ED75A3007C250657D26EB96E7732A638722E84442B4
+- Final DOCX SHA-256: 7071ED5179C8984165B9CED16C53C814C9EB702BF522FF06647B2B9A44A1CE2D
+- Final document opened and XML/content/structure checks completed by manual inspection; these are not an automated test and are not reported as a test PASS.
+
+Code/source checks used
+- Counted directories under services/ and packages/ with Get-ChildItem.
+- Used rg -n on gateway/src/app.ts, gateway/src/middlewares/authenticate.ts, gateway/src/config/services.ts, gateway/src/utils/gatewayToken.ts, services/payment-service/src/app.ts, services/payment-service/src/routes/, services/payment-service/src/funding/, services/admin-service/src/, services/user-service/src/config/env.ts, services/wallet-service/prisma/, packages/finvault-events/src/schemas.ts, and service event publisher/consumer files.
+- Read the relevant route, token, reconciliation, event schema/publisher/consumer, wallet enum/migration, and KYC config source files directly.
+- Searched TaiLieu/*.docx and docs/ for KYC_URL_TTL and TTL values; recorded out-of-scope 300-second references in part2-changes.md.
+- Reviewed text diff with git diff --no-index --word-diff=plain and independently compared the committed text against the validated working copy.
+
+Automated tests
+- No automated test exists for this DOCX-only task; no automated test was run.
+- No source code, environment file, Docker configuration, or other out-of-scope file was changed.
+- No push was performed.
