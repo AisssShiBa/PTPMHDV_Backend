@@ -34,7 +34,9 @@ export const internalConfirm = async (req: Request, res: Response) => {
 
 export const refund = async (req: Request, res: Response) => {
     // refund được gọi từ internal service (requireInternalAuth), không có req.auth
-    const result = await paymentService.refund(req.params.id as string);
+    const requesterId = (req as any).auth?.userId;
+    const requesterRole = (req as any).auth?.role;
+    const result = await paymentService.refund(req.params.id as string, requesterId, requesterRole);
     res.json({ success: true, data: result });
 };
 

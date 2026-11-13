@@ -93,7 +93,7 @@ async function runTestS9() {
 
   // --------------------------------------------------------------------------
   // BƯỚC 3: Kiểm tra định tuyến transferType trong getWalletIds
-  // Yêu cầu: TOPUP đối ứng ví CLEARING_TOPUP, PAYMENT đối ứng ví MAIN (hoặc merchant).
+  // Yêu cầu: TOPUP đối ứng ví CLEARING_TOPUP, PAYMENT đối ứng ví SETTLEMENT (hoặc merchant).
   // --------------------------------------------------------------------------
   console.log('\n[3] Kiểm tra giao dịch và định tuyến ví...');
   const topupAmount = '1000000.00';

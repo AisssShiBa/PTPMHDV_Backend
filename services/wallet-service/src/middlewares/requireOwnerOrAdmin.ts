@@ -25,8 +25,9 @@ export const requireOwnerOrAdmin = (req: RequestWithContext, res: Response, next
     const requesterId = auth.userId
     const requesterRole = auth.role
 
-    // Lấy target userId từ params hoặc body
-    const targetUserId = req.params.userId || (req.body && req.body.userId)
+    // Lấy target userId từ params hoặc body (với route /me và /me/ledger, luôn là chính người gọi)
+    const isMeRoute = req.path === '/me' || req.path === '/me/ledger' || req.path.startsWith('/me/');
+    const targetUserId = isMeRoute ? undefined : (req.params.userId || (req.body && req.body.userId))
 
     if (targetUserId && requesterId !== targetUserId && requesterRole !== 'ADMIN') {
         return res.status(403).json({

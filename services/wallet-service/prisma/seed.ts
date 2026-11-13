@@ -28,11 +28,13 @@ export async function seedLimitPolicies() {
   console.log('✅ Limit policies seeded successfully');
 }
 
-seedLimitPolicies()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+if (require.main === module) {
+  seedLimitPolicies()
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    })
+    .finally(async () => {
+      await prisma.$disconnect();
+    });
+}

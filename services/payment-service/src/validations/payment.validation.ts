@@ -17,7 +17,7 @@ export const checkoutSchema = z.object({
       }, {
         message: "amount chỉ được tối đa 2 chữ số thập phân"
       }),
-    type: z.enum(['CARD_TOPUP', 'BUS_TICKET', 'MOVIE_TICKET', 'TRAIN_TICKET', 'WALLET_TRANSFER']),
+    type: z.enum(['CARD_TOPUP', 'BUS_TICKET', 'MOVIE_TICKET', 'TRAIN_TICKET', 'WALLET_TRANSFER', 'PHONE_TOPUP', 'BILL_PAYMENT']),
     referenceId: z.string().optional(),
     destinationUserId: z.string().uuid({ message: "destinationUserId phải là UUID hợp lệ" }).optional(),
     destinationOwnerType: z.enum(['USER', 'MERCHANT', 'SYSTEM']).optional().default('USER'),

@@ -27,11 +27,18 @@ router.use(attachRequestId);
 router.use(requireOwnerOrAdmin);
 
 router.post('/', validate(schemas.createWalletSchema), walletController.create);
+router.get('/transactions/lookup', requireInternalOrAdmin, walletController.lookupTransaction);
+
+// K15: Endpoint /me và /me/ledger phải được đăng ký TRƯỚC mọi route /:userId/* để tránh bị nuốt thành params.userId
+router.get('/me/ledger', walletController.getMeLedger);
+router.get('/me', walletController.getMe);
+
 router.get('/:userId/balance', validate(schemas.ownerIdParamSchema.merge(schemas.ownerTypeQuerySchema)), walletController.getBalance);
 router.post('/:userId/hold', requireInternalOrAdmin, validate(schemas.holdSchema), walletController.hold);
 router.post('/:userId/hold/extend', requireInternalOrAdmin, validate(schemas.extendSchema), walletController.extend);
 router.post('/:userId/capture', requireInternalOrAdmin, validate(schemas.referenceSchema), walletController.capture);
 router.post('/:userId/release', requireInternalOrAdmin, validate(schemas.referenceSchema), walletController.release);
+router.post('/:userId/refund', requireInternalOrAdmin, validate(schemas.refundSchema), walletController.refund);
 router.post('/:userId/transfer', requireInternalOrAdmin, validate(schemas.transferSchema), walletController.transfer);
 
 // credit và debit chỉ dành cho internal service call hoặc ADMIN (không phải USER thông thường)

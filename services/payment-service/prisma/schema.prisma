@@ -13,6 +13,8 @@ enum PaymentType {
   MOVIE_TICKET
   TRAIN_TICKET
   WALLET_TRANSFER
+  PHONE_TOPUP
+  BILL_PAYMENT
 }
 
 enum PaymentStatus {
@@ -21,6 +23,8 @@ enum PaymentStatus {
   SUCCESS
   FAILED
   REFUNDED
+  REFUNDING
+  REFUND_FAILED
   CANCELLED
   EXPIRED
 }
@@ -53,15 +57,25 @@ model Payment {
   idempotencyStatus    IdempotencyStatus  @default(PROCESSING)
   idempotencyExpiresAt DateTime           @db.Timestamp(3)
   status         PaymentStatus    @default(PENDING)
-  failureReason  String?          @db.Text
-  holdId         String?          @db.VarChar(255)
+  failureReason        String?            @db.Text
+  failureCode          String?            @db.VarChar(50)
+  refundAttempts       Int                @default(0)
+  nextRefundAttemptAt  DateTime?          @db.Timestamp(3)
+  refundRequestedAt    DateTime?          @db.Timestamp(3)
+  refundedAt           DateTime?          @db.Timestamp(3)
+  needsAttention       Boolean            @default(false)
+  holdId               String?            @db.VarChar(255)
   holdExpiresAt  DateTime?        @db.Timestamp()
+  workerLeaseUntil     DateTime?          @db.Timestamp(3)
+  attempt              Int                @default(0)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   histories      PaymentHistory[]
 
   @@index([userId, createdAt])
   @@index([status])
+  @@index([status, nextRefundAttemptAt])
+  @@index([workflow, workerLeaseUntil])
   @@unique([userId, idempotencyKey])
   @@index([idempotencyExpiresAt])
 }

@@ -4,6 +4,7 @@ import { LedgerService } from '../services/ledger.service';
 import { WalletHoldService } from '../services/wallet-hold.service';
 import { decimalToString, walletView } from '../utils/wallet.helpers';
 import { OwnerType } from '@prisma/client';
+import { DomainException } from '../utils/domain.exception';
 
 const walletService = new WalletService();
 const ledgerService = new LedgerService();
@@ -12,6 +13,97 @@ const walletHoldService = new WalletHoldService(ledgerService);
 export const create = async (req: Request, res: Response) => {
   const result = await walletService.createWallet(req.body);
   res.status(result.created ? 201 : 200).json({ success: true, data: { ...walletView(result.wallet), created: result.created } });
+};
+
+export const getMe = async (req: Request, res: Response) => {
+  const auth = (req as any).auth;
+  if (!auth?.userId) {
+    console.warn(JSON.stringify({
+      route: '/me',
+      errorCode: 'UNAUTHORIZED',
+      message: 'Missing authentication context',
+    }));
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'Missing authentication context' },
+    });
+  }
+
+  try {
+    const wallet = await walletService.getBalance(auth.userId, OwnerType.USER);
+    return res.json({
+      success: true,
+      data: {
+        id: wallet.id,
+        userId: wallet.userId,
+        balance: decimalToString(wallet.balance),
+        heldBalance: decimalToString(wallet.heldBalance),
+        availableBalance: decimalToString(wallet.balance.sub(wallet.heldBalance)),
+        currency: wallet.currency,
+        status: wallet.status,
+        createdAt: wallet.createdAt.toISOString(),
+        updatedAt: wallet.updatedAt.toISOString(),
+      },
+    });
+  } catch (err: any) {
+    console.warn(JSON.stringify({
+      route: '/me',
+      userId: auth.userId,
+      errorCode: err.code || 'UNKNOWN_ERROR',
+      message: err.message,
+    }));
+    throw err;
+  }
+};
+
+export const getMeLedger = async (req: Request, res: Response) => {
+  const auth = (req as any).auth;
+  if (!auth?.userId) {
+    console.warn(JSON.stringify({
+      route: '/me/ledger',
+      errorCode: 'UNAUTHORIZED',
+      message: 'Missing authentication context',
+    }));
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'Missing authentication context' },
+    });
+  }
+
+  let limit = 20;
+  if (req.query.limit !== undefined) {
+    const rawLimit = Number(req.query.limit);
+    if (!Number.isInteger(rawLimit) || rawLimit <= 0) {
+      console.warn(JSON.stringify({
+        route: '/me/ledger',
+        userId: auth.userId,
+        errorCode: 'INVALID_LIMIT',
+        message: 'Limit must be a positive integer',
+      }));
+      throw new DomainException(400, 'INVALID_LIMIT', 'Limit phải là số nguyên dương');
+    }
+    limit = Math.min(rawLimit, 100);
+  }
+
+  const cursor = typeof req.query.cursor === 'string' && req.query.cursor.trim() !== ''
+    ? req.query.cursor.trim()
+    : undefined;
+
+  try {
+    const result = await walletService.getMeLedger(auth.userId, { cursor, limit });
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err: any) {
+    console.warn(JSON.stringify({
+      route: '/me/ledger',
+      userId: auth.userId,
+      errorCode: err.code || 'UNKNOWN_ERROR',
+      message: err.message,
+    }));
+    throw err;
+  }
 };
 
 export const getBalance = async (req: Request, res: Response) => {
@@ -152,4 +244,27 @@ export const history = async (req: Request, res: Response) => {
       to: result.to.toISOString(),
     }
   });
+};
+
+export const refund = async (req: Request, res: Response) => {
+  const userId = req.params.userId as string;
+  const ownerType = (req.query.ownerType as string as OwnerType) || OwnerType.USER;
+  const { referenceId, originalReferenceId, amount } = req.body;
+  const result = await walletHoldService.refundCapture(userId, { referenceId, originalReferenceId, amount }, ownerType);
+  res.json({
+    success: true,
+    data: result,
+  });
+};
+
+export const lookupTransaction = async (req: Request, res: Response) => {
+  const referenceId = req.query.referenceId as string;
+  if (!referenceId) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_INPUT', message: 'referenceId query param is required' },
+    });
+  }
+  const result = await ledgerService.lookupByReferenceId(referenceId);
+  res.json({ success: true, data: result });
 };

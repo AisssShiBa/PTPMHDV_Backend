@@ -155,7 +155,7 @@ export class LimitService {
   /**
    * refundUsage
    * Caller chịu trách nhiệm đảm bảo tính idempotent trước khi gọi hàm này.
-   * Trừ spentDay đúng row usageDay, clamp để không bao giờ âm.
+   * Trừ spentDay đúng row usageDay. Không clamp im lặng: nếu sắp âm thì ném lỗi và rollback transaction.
    */
   async refundUsage(
     tx: Prisma.TransactionClient,
@@ -163,9 +163,33 @@ export class LimitService {
     amount: Prisma.Decimal,
     usageDay: string
   ): Promise<void> {
+    const rows = await tx.$queryRaw<Array<{ spentDay: Prisma.Decimal }>>`
+      SELECT "spentDay"
+      FROM "UserDailyUsage"
+      WHERE "userId" = ${userId} AND "day" = ${usageDay}
+      FOR UPDATE
+    `;
+
+    if (!rows || rows.length === 0) {
+      throw new DomainException(
+        400,
+        'USAGE_ROW_NOT_FOUND',
+        `No usage record found for user ${userId} on day ${usageDay}`
+      );
+    }
+
+    const currentSpent = new Prisma.Decimal(rows[0].spentDay);
+    if (currentSpent.lt(amount)) {
+      throw new DomainException(
+        400,
+        'NEGATIVE_SPENT_DAY',
+        `spentDay (${currentSpent.toString()}) would become negative if amount (${amount.toString()}) is refunded`
+      );
+    }
+
     await tx.$executeRaw`
       UPDATE "UserDailyUsage"
-      SET "spentDay" = GREATEST(0, "spentDay" - ${amount}), "updatedAt" = NOW()
+      SET "spentDay" = "spentDay" - ${amount}, "updatedAt" = NOW()
       WHERE "userId" = ${userId} AND "day" = ${usageDay}
     `;
   }

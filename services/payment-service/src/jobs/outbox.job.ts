@@ -85,7 +85,7 @@ async function processClaimedEvent(id: string, lockToken: string): Promise<void>
   try {
     sent = await publish(
       'payment.events',
-      event.eventType === 'PAYMENT_EXPIRED' ? 'payment.expired' : legacyRoutingKey,
+      (event.eventType === 'PAYMENT_EXPIRED' || event.eventType === 'payment.expired') ? 'payment.expired' : legacyRoutingKey,
       legacyPayload,
       { messageId: event.id }
     )

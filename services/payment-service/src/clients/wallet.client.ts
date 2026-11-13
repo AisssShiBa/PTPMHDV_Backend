@@ -1,6 +1,10 @@
 import { DomainException } from '../utils/domain.exception';
 import { internalKey } from '../config/secrets';
 
+function getInternalKey(): string {
+  return process.env.INTERNAL_KEY?.trim() || internalKey || '';
+}
+
 export type TopupCreditResult =
   | { outcome: 'success'; transactionId: string | null; replayed: boolean }
   | { outcome: 'rejected'; status: number; code: string; message: string }
@@ -17,7 +21,7 @@ export class WalletClient {
     let response: Response;
     try {
       response = await fetch(this.baseUrl + '/api/wallets/' + userId + '/' + action, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-internal-key': internalKey! },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-internal-key': getInternalKey() },
         body: JSON.stringify(body), signal: AbortSignal.timeout(5000)
       });
     } catch { throw new DomainException(503, 'WALLET_UNAVAILABLE', 'Wallet temporarily unavailable'); }
@@ -42,12 +46,36 @@ export class WalletClient {
     return this.request(userId, 'release', { referenceId });
   }
 
+  async refundCapture(userId: string, originalReferenceId: string, referenceId: string, amount: string) {
+    return this.request(userId, 'refund', { originalReferenceId, referenceId, amount });
+  }
+
+  async lookupTransaction(referenceId: string) {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/api/wallets/transactions/lookup?referenceId=${encodeURIComponent(referenceId)}`, {
+        method: 'GET',
+        headers: { 'x-internal-key': getInternalKey() },
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch {
+      throw new DomainException(503, 'WALLET_UNAVAILABLE', 'Wallet temporarily unavailable');
+    }
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const { code, message, details, ...metadata } = json.error || {};
+      throw new DomainException(response.status, code || 'WALLET_ERROR', message || 'Wallet rejected operation',
+        details ?? (Object.keys(metadata).length ? metadata : undefined));
+    }
+    return json.data;
+  }
+
   async refundCredit(userId: string, amount: string, referenceId: string) {
     const response = await fetch(`${this.baseUrl}/api/wallets/${userId}/credit`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-internal-key': internalKey!
+        'x-internal-key': getInternalKey()
       },
       body: JSON.stringify({ amount, referenceId })
     });
@@ -75,7 +103,7 @@ export class WalletClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-internal-key': internalKey!
+          'x-internal-key': getInternalKey()
         },
         body: JSON.stringify({ amount, referenceId, transferType: 'TOPUP' }),
         signal: AbortSignal.timeout(5000)
@@ -137,7 +165,7 @@ export class WalletClient {
       const response = await fetch(`${this.baseUrl}/api/wallets/${userId}/balance`, {
         method: 'GET',
         headers: {
-          'x-internal-key': internalKey!
+          'x-internal-key': getInternalKey()
         }
       });
 
