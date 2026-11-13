@@ -48,7 +48,7 @@ export class TopupService {
     this.walletClient = deps.walletClient ?? defaultWalletClient;
   }
 
-  async createTopup(userId: string, amount: number, ipAddr: string) {
+  async createTopup(userId: string, amount: string | number, ipAddr: string, idempotencyKey?: string) {
     const tmnCode = this.requireConfig('VNP_TMN_CODE');
     const secretKey = this.requireConfig('VNP_HASH_SECRET');
     const vnpUrl = this.requireConfig('VNP_URL');
@@ -64,23 +64,6 @@ export class TopupService {
 
     const createDate = this.formatDate(new Date());
     const expireDate = this.formatDate(expiresAt);
-
-    const topup = await this.store.topupRequest.create({
-      data: {
-        userId,
-        amount: amountDecimal,
-        code,
-        expiresAt,
-        status: TopupStatus.PENDING,
-        auditLogs: {
-          create: {
-            actorId: userId,
-            action: 'CREATE',
-            toStatus: TopupStatus.PENDING,
-          }
-        }
-      }
-    });
 
     const vnpParams: Record<string, string> = {
       vnp_Version: '2.1.0',
@@ -102,12 +85,42 @@ export class TopupService {
     const signed = this.sign(sorted, secretKey);
     const paymentUrl = vnpUrl + '?' + new URLSearchParams({ ...sorted, vnp_SecureHash: signed }).toString();
 
-    await this.store.topupRequest.update({
-      where: { id: topup.id },
-      data: { paymentUrl }
-    });
-
-    return { topupId: topup.id, paymentUrl };
+    // Persist the signed URL and intent together: a lost response cannot create
+    // a second order, and concurrent requests never observe a half-created URL.
+    const replay = async () => {
+      const existing = await this.store.topupRequest.findUnique({
+        where: { userId_idempotencyKey: { userId, idempotencyKey } },
+      });
+      if (!existing) return null;
+      if (!existing.amount.eq(amountDecimal)) {
+        throw new DomainException(422, 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD', 'Idempotency key has a different payload');
+      }
+      if (!existing.paymentUrl) {
+        throw new DomainException(409, 'TOPUP_CREATION_IN_PROGRESS', 'Topup creation is still pending');
+      }
+      return { topupId: existing.id, paymentUrl: existing.paymentUrl };
+    };
+    if (idempotencyKey) {
+      const previous = await replay();
+      if (previous) return previous;
+    }
+    try {
+      const topup = await this.store.topupRequest.create({
+        data: {
+          userId, amount: amountDecimal, code, expiresAt, paymentUrl,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          status: TopupStatus.PENDING,
+          auditLogs: { create: { actorId: userId, action: 'CREATE', toStatus: TopupStatus.PENDING } },
+        },
+      });
+      return { topupId: topup.id, paymentUrl: topup.paymentUrl };
+    } catch (error) {
+      if (idempotencyKey && (error as { code?: string }).code === 'P2002') {
+        const previous = await replay();
+        if (previous) return previous;
+      }
+      throw error;
+    }
   }
 
   async handleVnpayIpn(queryArgs: unknown) {

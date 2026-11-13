@@ -35,9 +35,8 @@ const PUBLIC_ROUTES: PublicRoute[] = [
     { method: 'POST', path: '/api/auth/qr-login/init' },
     { method: 'GET', path: /^\/api\/auth\/qr-login\/[a-zA-Z0-9_-]+\/status$/ },
     { method: '*', path: '/health' },
-    // Thu hẹp Whitelist: Chỉ mở công khai đúng IPN / Return URL của cổng thanh toán VNPAY
-    { method: '*', path: /^\/api\/payments\/topups\/vnpay\/.*/ },
-    { method: '*', path: /^\/api\/funding\/vnpay\/.*/ },
+    { method: 'GET', path: /^\/api\/payments\/topups\/vnpay\/(ipn|return)$/ },
+    { method: 'GET', path: /^\/api\/funding\/vnpay\/(ipn|return)$/ },
     { method: '*', path: /^\/socket\.io(\/.*)?$/ },    // Whitelist WebSocket handshake (notification-service tự xác thực)
 ]
 
