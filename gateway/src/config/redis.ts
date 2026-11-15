@@ -8,7 +8,7 @@ import { env } from './services'
 export const redisClient = new Redis(env.redisUrl, {
   maxRetriesPerRequest: 3,
   enableReadyCheck: true,
-  lazyConnect: true, // Chỉ kết nối khi có request thực tế, giúp chạy test nhẹ và không crash
+  lazyConnect: process.env.NODE_ENV === 'test', // Chỉ lazyConnect khi chạy unit test, khi chạy server thật sẽ kết nối ngay lập tức
   retryStrategy: (times) => {
     if (times > 10) return null // Dừng thử lại sau 10 lần nếu Redis gặp sự cố
     return Math.min(times * 100, 2000)
@@ -17,6 +17,15 @@ export const redisClient = new Redis(env.redisUrl, {
 
 // Biến cờ theo dõi trạng thái sống/chết của Redis (phục vụ chính sách Fail-Closed / Fail-Open)
 export let isRedisReady = false
+
+// Chủ động kết nối ngay khi khởi động nếu đang ở trạng thái wait
+if (process.env.NODE_ENV !== 'test' && redisClient.status === 'wait') {
+  redisClient.connect().catch((err) => {
+    if (process.env.NODE_ENV !== 'test') {
+      console.error('[Redis Gateway] Lỗi khởi động kết nối Redis:', err.message)
+    }
+  })
+}
 
 redisClient.on('connect', () => {
   if (process.env.NODE_ENV !== 'test') {
