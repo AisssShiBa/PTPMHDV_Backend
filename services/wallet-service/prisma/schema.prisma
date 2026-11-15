@@ -153,9 +153,15 @@ enum AnomalyType {
   TRANSACTION_UNBALANCED
 }
 
+enum AnomalyStatus {
+  OPEN
+  RESOLVED
+}
+
 model ReconciliationReport {
   id                    Int      @id @default(autoincrement())
   runAt                 DateTime @default(now())
+  mode                  String   @default("QUICK") @db.VarChar(10)
   totalWallets          Int
   anomaliesFound        Int
   systemBalanceExpected Decimal  @db.Decimal(20, 2)
@@ -165,19 +171,45 @@ model ReconciliationReport {
   anomalies ReconciliationAnomaly[]
 
   @@index([runAt])
+  @@index([runAt(sort: Desc), id(sort: Desc)])
 }
 
 model ReconciliationAnomaly {
-  id            BigInt      @id @default(autoincrement())
-  reportId      Int
-  type          AnomalyType
-  walletId      Int?
-  transactionId String?     @db.Uuid
-  detail        Json
+  id                     BigInt        @id @default(autoincrement())
+  reportId               Int
+  type                   AnomalyType
+  walletId               Int?
+  transactionId          String?       @db.Uuid
+  expected               Decimal?      @db.Decimal(20, 2)
+  actual                 Decimal?      @db.Decimal(20, 2)
+  difference             Decimal?      @db.Decimal(20, 2)
+  status                 AnomalyStatus @default(OPEN)
+  detectedAt             DateTime      @default(now())
+  resolvedAt             DateTime?
+  resolvedBy             String?       @db.VarChar(50)
+  resolutionNote         String?       @db.Text
+  adjustmentReferenceId  String?       @unique @db.VarChar(255)
+  detail                 Json
 
-  report ReconciliationReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  report     ReconciliationReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  adjustment AnomalyAdjustment?
 
   @@index([reportId])
   @@index([type])
   @@index([walletId])
+  @@index([status])
 }
+
+model AnomalyAdjustment {
+  id           BigInt   @id @default(autoincrement())
+  anomalyId    BigInt   @unique
+  walletId     Int
+  delta        Decimal  @db.Decimal(20, 2)
+  reason       String   @db.Text
+  adminId      String   @db.VarChar(50)
+  referenceId  String   @unique @db.VarChar(255)
+  createdAt    DateTime @default(now())
+
+  anomaly      ReconciliationAnomaly @relation(fields: [anomalyId], references: [id], onDelete: Cascade)
+}
+

@@ -1,0 +1,56 @@
+N19 - Bind funding cashout notifications (Backend) - evidence
+=============================================================
+Date: 2026-11-12 (Asia/Ho_Chi_Minh)
+Repo: PTPMHDV_Backend, branch: nguyen
+Service: services/notification-service
+OS: Microsoft Windows 11 Home Single Language (NT 10.0.26200.0)
+Node: v24.21.0
+npm: 11.19.0
+Code SHA (HEAD at test time): 56502b4
+Base SHA (merge-base with origin/main): dedd8c4e5d4b9ab741d0db86045b03df3b729ca2
+
+Scope of change
+---------------
+- financeEventsConsumer.ts now binds all 8 registered finance event types:
+  6 legacy (payment.succeeded, payment.failed, payment.refunded,
+  funding.topup_succeeded, utility.paid, utility.failed/refunded as already
+  registered) plus funding.cashout_completed and funding.cashout_failed.
+- New cashout mapping: funding.cashout_completed -> CASHOUT_SUCCEEDED with a
+  vi-VN formatted BigInt amount; funding.cashout_failed -> CASHOUT_FAILED and
+  never copies the upstream reason into the notification message.
+- Mapping TypeError failures are wrapped as NonRetryableError(
+  'INVALID_EVENT_PAYLOAD') so a permanently malformed payload is not retried.
+- EVENTS.md binding table updated; docs/evidence/N19/inventory.md added.
+
+Commands and actual results
+---------------------------
+1) npm run typecheck   (tsc --noEmit)
+   PASS - exited 0.
+
+2) npx tsx --test --test-force-exit tests/fundingCashoutNotifications.test.ts
+   PASS - tests 8, pass 8, fail 0, skipped 0, duration ~1.2s.
+   Covers: exact 8 bindings, event types registered in packages/finvault-events,
+   each binding handled or intentionally ignored, success message + vi-VN amount,
+   failed hides reason, malformed payload non-retryable, missing userId
+   non-retryable, duplicate eventId processed once.
+
+3) npx tsx --test --test-force-exit <non-DB test files>
+   Files: financeEventMapping, financeEventsConsumerRetry, finvaultEvents,
+   fundingCashoutNotifications, pushProvider, socket, userLookup,
+   financeEvents.integration.
+   PASS - tests 45, pass 44, fail 0, skipped 1 (integration test skips itself:
+   "requires a dedicated local PostgreSQL database whose name ends in _test").
+
+4) Full `npm test` (tsx --test tests/*.test.ts)
+   NOT RUN / BLOCKED - this environment has no PostgreSQL at localhost:5433 and
+   no Docker/RabbitMQ. DB-backed files (auth, notificationInbox,
+   notificationRoutes, socketDevice, userDevice) cannot reach the database and
+   Prisma retries make the combined run hang; they were attempted earlier and
+   failed with "Can't reach database server at localhost:5433".
+
+Summary
+-------
+PASS: typecheck, N19 cashout suite 8/8, non-DB suite 44 pass / 0 fail / 1 skip.
+BLOCKED: DB-backed integration tests (no local PostgreSQL/RabbitMQ).
+SKIP: 1 (financeEvents.integration, environment-gated by design).
+FAIL: none in the runnable suites.

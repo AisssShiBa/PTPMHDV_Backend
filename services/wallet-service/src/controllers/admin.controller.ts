@@ -49,10 +49,66 @@ export const list = async (req: Request, res: Response) => {
 };
 
 export const reconciliation = async (req: Request, res: Response) => {
-  const isFull = req.query.isFull === 'true';
-  const report = await reconciliationService.runReconciliation(isFull);
-  res.json({ 
+  let mode: 'quick' | 'full' = 'quick';
+  if (req.query.mode !== undefined) {
+    const qMode = String(req.query.mode).toLowerCase();
+    if (qMode !== 'quick' && qMode !== 'full') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_MODE',
+          message: "mode must be 'quick' or 'full'",
+        },
+      });
+    }
+    mode = qMode as 'quick' | 'full';
+  } else if (req.query.isFull === 'true') {
+    mode = 'full';
+  }
+
+  const report = await reconciliationService.runReconciliation(mode);
+  return res.json({ 
     success: true, 
     data: report 
+  });
+};
+
+export const listReports = async (req: Request, res: Response) => {
+  const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+  const limit = req.query.limit ? Number(req.query.limit) : undefined;
+  const page = req.query.page ? Number(req.query.page) : undefined;
+  const includeAnomalies = req.query.includeAnomalies === 'true';
+
+  const result = await reconciliationService.listReports({
+    cursor,
+    limit,
+    page,
+    includeAnomalies,
+  });
+
+  return res.json({
+    success: true,
+    data: result,
+  });
+};
+
+export const getReport = async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const report = await reconciliationService.getReportById(id);
+  return res.json({
+    success: true,
+    data: report,
+  });
+};
+
+export const adjustAnomaly = async (req: Request, res: Response) => {
+  const anomalyId = req.params.id as string;
+  const reason = req.body?.reason;
+  const adminId = (req as any).auth?.userId || (req.headers['x-user-id'] as string) || 'ADMIN';
+
+  const result = await reconciliationService.adjustAnomaly(anomalyId, reason, adminId);
+  return res.json({
+    success: true,
+    data: result,
   });
 };

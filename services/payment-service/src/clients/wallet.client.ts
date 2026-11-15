@@ -1,6 +1,10 @@
 import { DomainException } from '../utils/domain.exception';
 import { internalKey } from '../config/secrets';
 
+function getInternalKey(): string {
+  return process.env.INTERNAL_KEY?.trim() || internalKey || '';
+}
+
 export type TopupCreditResult =
   | { outcome: 'success'; transactionId: string | null; replayed: boolean }
   | { outcome: 'rejected'; status: number; code: string; message: string }
@@ -17,7 +21,7 @@ export class WalletClient {
     let response: Response;
     try {
       response = await fetch(this.baseUrl + '/api/wallets/' + userId + '/' + action, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-internal-key': internalKey! },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-internal-key': getInternalKey() },
         body: JSON.stringify(body), signal: AbortSignal.timeout(5000)
       });
     } catch { throw new DomainException(503, 'WALLET_UNAVAILABLE', 'Wallet temporarily unavailable'); }
@@ -51,7 +55,7 @@ export class WalletClient {
     try {
       response = await fetch(`${this.baseUrl}/api/wallets/transactions/lookup?referenceId=${encodeURIComponent(referenceId)}`, {
         method: 'GET',
-        headers: { 'x-internal-key': internalKey! },
+        headers: { 'x-internal-key': getInternalKey() },
         signal: AbortSignal.timeout(5000),
       });
     } catch {
@@ -71,7 +75,7 @@ export class WalletClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-internal-key': internalKey!
+        'x-internal-key': getInternalKey()
       },
       body: JSON.stringify({ amount, referenceId })
     });
@@ -99,7 +103,7 @@ export class WalletClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-internal-key': internalKey!
+          'x-internal-key': getInternalKey()
         },
         body: JSON.stringify({ amount, referenceId, transferType: 'TOPUP' }),
         signal: AbortSignal.timeout(5000)
@@ -161,7 +165,7 @@ export class WalletClient {
       const response = await fetch(`${this.baseUrl}/api/wallets/${userId}/balance`, {
         method: 'GET',
         headers: {
-          'x-internal-key': internalKey!
+          'x-internal-key': getInternalKey()
         }
       });
 

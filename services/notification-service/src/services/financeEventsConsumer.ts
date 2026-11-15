@@ -1,4 +1,10 @@
-import { createConsumer, type EventConsumer, type FinvaultEvent } from 'finvault-events'
+import {
+  createConsumer,
+  NonRetryableError,
+  type EventConsumer,
+  type EventHandler,
+  type FinvaultEvent
+} from 'finvault-events'
 import type { Notification } from '@prisma/client'
 import { env } from '../config/env'
 import { prisma } from '../config/prisma'
@@ -18,7 +24,9 @@ export const financeEventBindings = [
   'merchant.status_updated',
   'payment.succeeded',
   'payment.failed',
-  'payment.expired'
+  'payment.expired',
+  'funding.cashout_completed',
+  'funding.cashout_failed'
 ] as const
 
 const ignoredEventTypes = ['user.registered', 'merchant.status_updated']
@@ -134,12 +142,45 @@ const userLookup = createUserLookupClient({
   }
 })
 
+// A malformed payload is not going to become valid on a retry, so map it to a
+// non-retryable failure instead of burning the retry budget and re-ordering
+// later messages.
+const mapEventDrafts = (
+  event: FinvaultEvent,
+  userNames?: ReadonlyMap<string, string>
+): FinanceNotificationDraft[] => {
+  try {
+    return mapFinanceEventToNotifications(event, userNames)
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new NonRetryableError(error.message, 'INVALID_EVENT_PAYLOAD')
+    }
+    throw error
+  }
+}
+
 export interface FinanceEventsConsumerDependencies {
   userLookup?: UserLookupClient
   updateNotification?(
     id: string,
     message: string
   ): Promise<Notification>
+}
+
+export function createFinanceEventHandlers(
+  lookup: UserLookupClient,
+  updateNotification: (id: string, message: string) => Promise<Notification>
+): Record<string, EventHandler> {
+  const persist = (event: FinvaultEvent, context: { tx: unknown }) =>
+    persistEventNotifications(event, context, lookup, updateNotification)
+  return {
+    'user.kyc_updated': persist,
+    'payment.succeeded': persist,
+    'payment.failed': persist,
+    'payment.expired': persist,
+    'funding.cashout_completed': persist,
+    'funding.cashout_failed': persist
+  }
 }
 
 export function createFinanceEventsConsumer(
@@ -161,16 +202,7 @@ export function createFinanceEventsConsumer(
       info: (message, context) => console.info(`[FinVault events] ${message}`, context)
     },
     inbox: createFinanceEventsInbox(prisma),
-    handlers: {
-      'user.kyc_updated': (event, context) =>
-        persistEventNotifications(event, context, lookup, updateNotification),
-      'payment.succeeded': (event, context) =>
-        persistEventNotifications(event, context, lookup, updateNotification),
-      'payment.failed': (event, context) =>
-        persistEventNotifications(event, context, lookup, updateNotification),
-      'payment.expired': (event, context) =>
-        persistEventNotifications(event, context, lookup, updateNotification)
-    }
+    handlers: createFinanceEventHandlers(lookup, updateNotification)
   })
 }
 
@@ -181,7 +213,7 @@ async function persistEventNotifications(
   updateNotification: (id: string, message: string) => Promise<Notification>
 ): Promise<void> {
   const transaction = context.tx as FinanceTransactionContext
-  const drafts = mapFinanceEventToNotifications(event)
+  const drafts = mapEventDrafts(event)
   const created: Array<{ draft: FinanceNotificationDraft; notification: Notification }> = []
 
   for (const draft of drafts) {
@@ -205,7 +237,7 @@ async function persistEventNotifications(
       fullNames.forEach((fullName, index) => {
         if (fullName) names.set(ids[index], fullName)
       })
-      const enriched = mapFinanceEventToNotifications(event, names)
+      const enriched = mapEventDrafts(event, names)
       notifications = await Promise.all(created.map(async item => {
         const replacement = enriched.find(draft => draft.userId === item.draft.userId)
         if (!replacement || replacement.message === item.notification.message) return item.notification

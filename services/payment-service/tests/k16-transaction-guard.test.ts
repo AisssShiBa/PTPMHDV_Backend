@@ -1,5 +1,6 @@
-const paymentDbUrl = process.env.PAYMENT_DATABASE_URL || 'postgresql://postgres:8932ce4c6b28dba8c13430d3317b1e51e4f8838c6b02824423f9b57b69d56d4a@localhost:5432/payment_service?schema=public';
-const walletDbUrl = process.env.WALLET_DATABASE_URL || 'postgresql://postgres:8932ce4c6b28dba8c13430d3317b1e51e4f8838c6b02824423f9b57b69d56d4a@localhost:5432/wallet_service?schema=public';
+const defaultPassword = process.env.POSTGRES_PASSWORD || '404897ba313a20d9a166a1db0625276a77186fc0160c690a5e6e93ee09e06720';
+const paymentDbUrl = process.env.PAYMENT_DATABASE_URL || `postgresql://postgres:${defaultPassword}@localhost:5432/payment_service?schema=public`;
+const walletDbUrl = process.env.WALLET_DATABASE_URL || `postgresql://postgres:${defaultPassword}@localhost:5432/wallet_service?schema=public`;
 
 process.env.PAYMENT_DATABASE_URL = paymentDbUrl;
 process.env.DATABASE_URL = walletDbUrl;
@@ -18,6 +19,9 @@ import { seedLimitPolicies } from '../../wallet-service/prisma/seed';
 import { P2pService } from '../src/services/p2p.service';
 import { WalletClient } from '../src/clients/wallet.client';
 import { prisma as paymentPrismaClient } from '../src/utils/prisma';
+import { sweepExpiredPayments } from '../src/jobs/payment-expiry.job';
+import { processRefundEvent } from '../src/jobs/refund.worker';
+import { OutboxEventStatus, PaymentType } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import path from 'path';
 
@@ -42,7 +46,7 @@ before(async () => {
   await new Promise<void>((resolve) => walletServer.listen(0, resolve));
   const port = (walletServer.address() as any).port;
   process.env.WALLET_SERVICE_URL = `http://127.0.0.1:${port}`;
-  process.env.INTERNAL_KEY = 'f6f2f278e1bddbc7d16c19851cc828ce455015504709b35d232383543d6c1e68';
+  process.env.INTERNAL_KEY = process.env.INTERNAL_KEY || 'e33caedf3f0c0417c80adfd683c06753a53c8f5c50ac1e8d6a3344685de9332f';
 
   walletClient = new WalletClient();
   p2pService = new P2pService(walletClient);
@@ -131,6 +135,106 @@ describe('K16-1: Transaction Guard & Acceptance Baseline Suite', () => {
 
     const confirmResult = await guardedP2pService.confirm(checkoutResult.payment.id, userId, token);
     assert.equal(confirmResult.status, 'SUCCESS');
+  });
+
+  test('expire không gọi walletClient trong transaction (sweepExpiredPayments)', async () => {
+    const { userId } = await createWallet(100000);
+    const holdRef = `hold-expire-${randomUUID()}`;
+    const holdExpiresAtWallet = new Date(Date.now() + 60000); // Ví chấp nhận hạn tương lai
+    const pastExpiresAt = new Date(Date.now() - 5000); // Payment DB ghi nhận đã quá hạn
+
+    // Tạo hold ở ví
+    await guardedWalletClient.createHold(userId, '20000', holdRef, holdExpiresAtWallet.toISOString());
+
+    // Tạo payment trong DB ở trạng thái PENDING với holdId và hạn đã qua
+    const payment = await pPrisma.payment.create({
+      data: {
+        id: randomUUID(),
+        userId,
+        amount: new Prisma.Decimal(20000),
+        status: PaymentStatus.PENDING,
+        workflow: 'IDLE',
+        type: PaymentType.WALLET_TRANSFER,
+        referenceId: holdRef,
+        idempotencyKey: `idemp-exp-${randomUUID()}`,
+        idempotencyStatus: 'COMPLETED',
+        idempotencyExpiresAt: new Date(Date.now() + 86400000),
+        holdId: holdRef,
+        holdExpiresAt: pastExpiresAt,
+        callbackTopic: 'payment.status.changed',
+        requestHash: `hash-${randomUUID()}`,
+      }
+    });
+
+    // Chạy sweepExpiredPayments với guardedWalletClient
+    const result = await sweepExpiredPayments({
+      prismaClient: pPrisma as any,
+      walletClient: guardedWalletClient,
+    });
+
+    assert.ok(result.expired >= 1, 'Phải quét và xử lý ít nhất 1 payment hết hạn');
+    const updatedPayment = await pPrisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    assert.equal(updatedPayment.status, PaymentStatus.EXPIRED, 'Payment phải chuyển sang EXPIRED');
+  });
+
+  test('refund không gọi walletClient trong transaction (processRefundEvent)', async () => {
+    const { userId } = await createWallet(100000);
+    const dest = await createWallet(0);
+    const paymentId = randomUUID();
+    const holdId = `ref-pay-${randomUUID()}`;
+
+    // 1. Tạo và capture payment thật ở ví
+    await guardedWalletClient.createHold(userId, '30000', holdId, new Date(Date.now() + 60000).toISOString(), dest.userId);
+    await guardedWalletClient.captureHold(userId, holdId);
+
+    // 2. Tạo payment SUCCESS trong payment DB
+    const payment = await pPrisma.payment.create({
+      data: {
+        id: paymentId,
+        userId,
+        destinationUserId: dest.userId,
+        amount: new Prisma.Decimal(30000),
+        status: PaymentStatus.SUCCESS,
+        type: PaymentType.WALLET_TRANSFER,
+        idempotencyKey: `idemp-ref-${randomUUID()}`,
+        idempotencyStatus: 'COMPLETED',
+        idempotencyExpiresAt: new Date(Date.now() + 86400000),
+        holdId,
+        referenceId: holdId,
+        callbackTopic: 'payment.status.changed',
+        requestHash: `hash-${randomUUID()}`,
+      }
+    });
+
+    // 3. Tạo OutboxEvent PAYMENT_REFUND_REQUESTED ở trạng thái PROCESSING và có lockToken
+    const refundRef = `refund-${randomUUID()}`;
+    const lockToken = randomUUID();
+    const event = await pPrisma.outboxEvent.create({
+      data: {
+        id: randomUUID(),
+        aggregateId: paymentId,
+        eventType: 'PAYMENT_REFUND_REQUESTED',
+        topic: 'payment.refund.requested',
+        status: OutboxEventStatus.PROCESSING,
+        lockToken,
+        lockedUntil: new Date(Date.now() + 60000),
+        payload: {
+          paymentId,
+          referenceId: refundRef,
+          amount: '30000.00',
+        }
+      }
+    });
+
+    // 4. Xử lý refund event bằng processRefundEvent với guardedWalletClient
+    const refundOutcome = await processRefundEvent({ id: event.id, lockToken }, {
+      prismaClient: pPrisma as any,
+      walletClient: guardedWalletClient,
+    });
+
+    assert.equal(refundOutcome.status, 'COMPLETED', 'Refund worker phải hoàn thành thành công');
+    const updatedPayment = await pPrisma.payment.findUniqueOrThrow({ where: { id: paymentId } });
+    assert.equal(updatedPayment.status, PaymentStatus.REFUNDED, 'Payment phải ở trạng thái REFUNDED');
   });
 
   test('Mốc A1: Chuyển tiền song song 20 request x 60k trên ví 100k -> 1 thành công, 19 từ chối, số dư 40.000đ', async () => {

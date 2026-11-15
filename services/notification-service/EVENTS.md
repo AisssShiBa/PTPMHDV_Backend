@@ -22,8 +22,10 @@ Its notification type enum is defined in
 | `payment-service` outbox | `payment.succeeded` on `finvault.events` | `PAYMENT_SUCCESS` | Envelope event ID is the Outbox row ID; optional `note` is included when present |
 | `payment-service` outbox | `payment.failed` on `finvault.events` | `PAYMENT_FAILED` | Envelope event ID is the Outbox row ID |
 | `payment-service` outbox | `payment.expired` on `finvault.events` | `PAYMENT_EXPIRED` | Envelope event ID is the Outbox row ID |
+| `payment-service` outbox | `funding.cashout_completed` on `finvault.events` | `CASHOUT_SUCCEEDED` | Bound in N19; written by `cashout.service.ts` when a cash-out reaches `SUCCEEDED` |
+| `payment-service` outbox | `funding.cashout_failed` on `finvault.events` | `CASHOUT_FAILED` | Bound in N19; the upstream `reason` is deliberately ignored |
 
-The new consumer binds only these six exact event types. Payment outbox rows
+The new consumer binds only these eight exact event types. Payment outbox rows
 are claimed with `FOR UPDATE SKIP LOCKED`, drained after the state transaction
 commits, and retried by a one-second fallback scheduler. The legacy payment
 publisher remains active for refund/cancel events. Wallet outbox rows are
@@ -37,21 +39,33 @@ consumer does not bind
 does it use broad user or merchant wildcards. Legacy exchange consumption
 remains active during the migration.
 
+## Bound in N19
+
+N19 binds `funding.cashout_completed` and `funding.cashout_failed`. Both
+schemas (`fundingCashoutCompletedSchema`, `fundingCashoutFailedSchema`) are
+registered in `packages/finvault-events/src/schemas.ts` (event version 1) and
+were already published by `payment-service` before this task, so no shared
+package change was needed. Both bindings use the same transactional handler as
+`payment.succeeded`: the Inbox deduplicates by `eventId`, the notification row
+is written inside the inbox transaction, and the Socket.IO emit happens
+after commit. A payload that fails mapping validation (missing `userId`,
+non-integer or negative `amount`) is raised as `NonRetryableError` with code
+`INVALID_EVENT_PAYLOAD`, so it is dead-lettered immediately instead of
+consuming the retry budget. `funding.cashout_failed` never copies the upstream
+`reason` into the notification message.
+
 ## Proposed mappings added in N14a (mapping only, not bound)
 
 N14a adds the notification enum values and pure mapping cases below. **These
 event names are proposals and are not registered in
 `packages/finvault-events/src/schemas.ts`**, so they are deliberately absent
 from `financeEventBindings` and from the consumer handlers. Binding an
-unregistered event would make the consumer dead-letter every message (N14b is
-blocked until the schemas exist on `main`).
+unregistered event would make the consumer dead-letter every message.
 
 | Proposed event | Notification enum | Message |
 | --- | --- | --- |
 | `funding.topup_succeeded` | `TOPUP_SUCCEEDED` | `Bạn đã nạp <amount> vào ví thành công.` |
 | `payment.refunded` | `PAYMENT_REFUNDED` | `Bạn được hoàn <amount> vào ví.` (`amount` may be `"50000.00"`; a non-zero fraction is rejected) |
-| `funding.cashout_completed` | `CASHOUT_SUCCEEDED` | `Lệnh rút <amount> của bạn đã thành công.` |
-| `funding.cashout_failed` | `CASHOUT_FAILED` | `Lệnh rút <amount> của bạn không thành công.` (upstream reason is ignored) |
 | `utility.order_succeeded` | `UTILITY_SUCCEEDED` | `Giao dịch tiện ích <amount> đã thành công.` |
 | `utility.order_failed` | `UTILITY_FAILED` | `Giao dịch tiện ích <amount> không thành công.` |
 | `utility.order_refunded` | `UTILITY_REFUNDED` | `Giao dịch tiện ích <amount> đã được hoàn tiền.` |

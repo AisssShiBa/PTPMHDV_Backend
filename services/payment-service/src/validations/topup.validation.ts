@@ -1,8 +1,11 @@
 import { z } from 'zod';
 
 export const createTopupSchema = z.object({
+  headers: z.object({ 'idempotency-key': z.uuid().optional() }),
   body: z.object({
-    amount: z.number().positive().min(10000, 'Tối thiểu 10,000 VND').max(100000000, 'Tối đa 100,000,000 VND')
+    // Retain bounded legacy integers while normalizing all service input to strings.
+    amount: z.union([z.string().regex(/^[1-9]\d{0,8}$/), z.number().int().min(10000).max(100000000).transform(String)])
+      .refine(value => /^[1-9]\d{0,8}$/.test(value) && BigInt(value) >= 10000n && BigInt(value) <= 100000000n, 'Số tiền từ 10.000 đến 100.000.000 VND')
   }),
 });
 

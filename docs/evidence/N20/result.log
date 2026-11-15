@@ -1,0 +1,136 @@
+N20 - Week-4 acceptance seed (Backend) - evidence
+=================================================
+Date: 2026-11-13 (Asia/Ho_Chi_Minh)
+Repo: PTPMHDV_Backend, branch: nguyen
+OS: Microsoft Windows 11 Home Single Language (NT 10.0.26200.0)
+Node: v24.21.0
+npm: 11.19.0
+Code SHA (HEAD at test time): 9342a2e5cdb2801f72fb9881072f37fab93e0851
+Base SHA (merge-base with origin/main): dedd8c4e5d4b9ab741d0db86045b03df3b729ca2
+
+Scope of change
+---------------
+- New module tests/acceptance/week4/seed-nguyen.mjs exporting seedNguyen(ctx)
+  and contextFromProject(project) + a --project CLI. It does not modify
+  tests/acceptance/seed.mjs or week2/seed.mjs: wiring the call into Huu's seed
+  needs Huu's agreement (plan N20), so the exact line is documented instead.
+- New pure helper module tests/acceptance/week4/seed-lib.mjs:
+  5 deterministic KYC slots, drift gate, idempotency planners, BigInt drift
+  classifier and the synthetic PNG generator.
+- New tests tests/acceptance/week4/seed-nguyen.test.mjs (node --test).
+- tests/acceptance/README.md: new "Tuan 4 / N20" section with command, flag,
+  ordering (RC1 before, A8 after), idempotency and evidence paths.
+
+What the seed creates on a running acceptance stack
+---------------------------------------------------
+1) 5 pending KYC profiles (week4.kyc01..05@demo.vn):
+   - signup through POST /api/auth/signup (real Gateway path);
+   - front and back uploaded ONCE through POST /api/users/kyc/documents,
+     expected 202, PNG/JPEG <= 5 MB;
+   - images are synthetic 900x560 PNG built from an SVG that says
+     "SYNTHETIC IMAGE - NOT AN ID DOCUMENT" (no real person, no real ID);
+   - deterministic idNumber per slot (000000000401..405);
+   - no direct DB insert and no review/approval, so they stay PENDING.
+2) 5 sample notifications, type WALLET_CREDITED, created through the internal
+   route POST /api/notifications of notification-service with x-internal-key
+   read from /run/secrets/internal_key inside the container (the port is not
+   published to the host). Deterministic eventId
+   week4-seed-<slot>-wallet-credited -> Inbox dedupe on rerun. Message contains
+   only the demo credit amount, no secrets.
+   Each account receives a REAL 50.000 VND ledger credit with a fixed
+   referenceId (week4-kyc-<slot>-credit), so the notification is truthful and
+   the credit replays instead of duplicating.
+3) Exactly 1 deliberate drift wallet (week4.drift@demo.vn):
+   - real 200.000 VND ledger credit (referenceId week4-drift-credit);
+   - then UPDATE "Wallet".balance += 5000 for that wallet id only;
+   - no ledger entry is updated or deleted, no other wallet is touched.
+   - The wallet id is printed and stored in week4-seed.json for A8.
+
+Guard rails
+-----------
+- assertDriftAllowed refuses NODE_ENV=production and refuses any run without
+  SEED_ALLOW_DRIFT=1, before the drift account is created. Unit-tested.
+- The drift wallet is the dedicated week4.drift@demo.vn account, asserted not
+  to be an/binh/chi/highlands/admin nor a SYSTEM wallet.
+- Conservation: SUM(balance) over every wallet EXCEPT the drift wallet must be
+  0 and is asserted after the run (all credits move money from a SYSTEM wallet,
+  so ledger-backed balances net to zero). The drift wallet differs from its
+  ledger by exactly 5.000 VND.
+- Nothing is written to production data: the module only runs inside a
+  finvault-acceptance-<12 hex> project.
+
+Idempotency (run twice -> no duplicates)
+----------------------------------------
+- Accounts: found by fixed email in auth_service; existing email -> no signup.
+- KYC: upload only when the profile row is absent or kyc_status = NONE; PENDING,
+  APPROVED and REJECTED are preserved (a rerun never resets a review).
+- Credits: deterministic referenceId; the ledger replays the same operation.
+- Notifications: deterministic eventId; the notification Inbox returns
+  duplicate=true instead of inserting a second row.
+- Drift: classifyDrift compares wallet.balance with the signed ledger sum using
+  BigInt: equal -> apply, +5000 -> skip, anything else -> throw.
+
+Commands and actual results
+---------------------------
+1) node --check tests/acceptance/week4/seed-nguyen.mjs
+   node --check tests/acceptance/week4/seed-lib.mjs
+   PASS - both exited 0 (ESM syntax valid).
+
+2) node --test tests/acceptance/week4/seed-nguyen.test.mjs
+   PASS - tests 8, pass 8, fail 0, skipped 0, duration ~0.25-1.6s.
+   Test names:
+   - seed module exports the Week-4 entry points (5 unique KYC slots, reserved
+     demo emails excluded);
+   - synthetic documents are PNG, 900x560, under 5 MB and side-specific
+     (verified with sharp metadata; front != back);
+   - drift gate refuses production and any run without the explicit flag
+     (4 rejection/allow cases);
+   - idempotency planner creates only missing slots and converges to empty
+     (all, partial with mixed case, full rerun);
+   - KYC upload happens once: only NONE/absent state is uploadable;
+   - drift classifier applies once, skips on rerun and rejects unknown states
+     (including "200000.00" decimals);
+   - notification event ids are deterministic and unique per slot;
+   - contextFromProject rejects malformed or unknown projects without Docker.
+   No Docker, PostgreSQL, RabbitMQ or Gateway is needed for these tests.
+
+3) npm run check (Backend root)
+   NOT_APPLICABLE - there is no root package.json in PTPMHDV_Backend; each
+   service owns its own scripts. This change only adds .mjs acceptance files
+   and README text, so no service typecheck/build is affected.
+
+Summary
+-------
+PASS: node --check (2 files), node --test 8/8.
+FAIL: none.
+SKIP: none.
+NOT_RUN: real seed execution against a live acceptance stack (Compose,
+      PostgreSQL, MinIO, RabbitMQ, notification-service) and therefore also:
+      - five PENDING KYC rows visible in Admin after the seed;
+      - five notifications visible in the N15 notification UI;
+      - RC1 isBalanced=true before the drift, and the A8 drift anomaly after it.
+      Reason: this machine has no Docker/PostgreSQL/RabbitMQ and no acceptance
+      project. Nothing above is claimed as PASS.
+
+Open items / hand-off
+---------------------
+- H15 coordination: tests/acceptance/seed.mjs (Huu's file) is intentionally NOT
+  modified. To run the Week-4 seed as part of the shared command, Huu must agree
+  to add:
+    import { seedNguyen } from './week4/seed-nguyen.mjs'
+    // inside seed(ctx): await seedNguyen(ctx)
+  Until then the module runs via
+    $env:SEED_ALLOW_DRIFT = '1'
+    node tests/acceptance/week4/seed-nguyen.mjs --project finvault-acceptance-<id>
+  after the base seed created accounts.json.
+- SEED_ALLOW_DRIFT must only be set for deliberate A8 runs. Without it the seed
+  refuses to create the drift wallet. NODE_ENV=production always refuses.
+- Ordering: run RC1 before this seed if isBalanced=true is expected; run A8
+  after. The drift makes every later reconciliation report show one
+  BALANCE_DRIFT_QUICK/FULL anomaly on that wallet by design.
+- Credentials for the five demo accounts are generated randomly and stored in
+  .cache/acceptance-week2/<project>/week4-accounts.json (mode 0600, ignored, not
+  committed, never logged).
+- If a KYC account exists in auth_service but its stored password file is lost
+  and its profile is still NONE, the seed stops with an explicit message rather
+  than guessing a password.

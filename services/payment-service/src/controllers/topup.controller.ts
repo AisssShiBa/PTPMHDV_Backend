@@ -17,7 +17,7 @@ export const createTopup = async (req: Request, res: Response, next: NextFunctio
             ipAddr = '127.0.0.1'; // VNPAY sandbox thường reject IPv6
         }
 
-        const result = await topupService.createTopup(userId, amount, ipAddr as string);
+        const result = await topupService.createTopup(userId, amount, ipAddr as string, req.get('Idempotency-Key'));
         res.status(201).json({ success: true, data: result });
     } catch (error) {
         next(error);
