@@ -533,7 +533,7 @@
       "post": {
         "operationId": "adjustReconciliationAnomaly",
         "summary": "Điều chỉnh một bất thường đối soát (BALANCE_DRIFT)",
-        "description": "Chỉ ADMIN. Đồng bộ số dư ví về tổng sổ cái (nguồn sự thật duy nhất), bảo toàn bất biến LedgerEntry và ghi nhận vết kiểm toán.",
+        "description": "Chỉ ADMIN. Đồng bộ số dư ví về tổng sổ cái (nguồn sự thật duy nhất), bảo toàn bất biến LedgerEntry và ghi nhận vết kiểm toán. Hỗ trợ direction, amount, referenceId và lý do 5-500 ký tự.",
         "parameters": [
           {
             "name": "id",
@@ -567,7 +567,7 @@
             }
           },
           "400": {
-            "description": "Lý do bắt buộc (tối thiểu 10 ký tự) hoặc ID không hợp lệ",
+            "description": "Lý do bắt buộc (5 đến 500 ký tự) hoặc tham số không hợp lệ",
             "content": {
               "application/json": {
                 "schema": {
@@ -1089,8 +1089,25 @@
         "properties": {
           "reason": {
             "type": "string",
-            "minLength": 10,
-            "description": "Lý do điều chỉnh (bắt buộc, tối thiểu 10 ký tự)"
+            "minLength": 5,
+            "maxLength": 500,
+            "description": "Lý do điều chỉnh (bắt buộc, 5 đến 500 ký tự sau khi trim)"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "CREDIT",
+              "DEBIT"
+            ],
+            "description": "Hướng điều chỉnh ví (CREDIT để tăng, DEBIT để giảm về số dư sổ cái)"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Số tiền chênh lệch cần điều chỉnh (chuỗi số dương)"
+          },
+          "referenceId": {
+            "type": "string",
+            "description": "Mã tham chiếu điều chỉnh (mặc định adjust-anomaly-<id>)"
           }
         }
       },
@@ -1171,6 +1188,10 @@
           "transactionId": {
             "type": "string",
             "nullable": true
+          },
+          "referenceId": {
+            "type": "string",
+            "description": "Mã tham chiếu điều chỉnh"
           },
           "adjustment": {
             "$ref": "#/components/schemas/AnomalyAdjustmentDetail",
