@@ -103,10 +103,14 @@ export const getReport = async (req: Request, res: Response) => {
 
 export const adjustAnomaly = async (req: Request, res: Response) => {
   const anomalyId = req.params.id as string;
-  const reason = req.body?.reason;
+  const { reason, direction, amount, referenceId } = req.body || {};
   const adminId = (req as any).auth?.userId || (req.headers['x-user-id'] as string) || 'ADMIN';
 
-  const result = await reconciliationService.adjustAnomaly(anomalyId, reason, adminId);
+  const result = await reconciliationService.adjustAnomaly(
+    anomalyId,
+    { reason, direction, amount, referenceId },
+    adminId
+  );
   return res.json({
     success: true,
     data: result,

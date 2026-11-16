@@ -44,6 +44,11 @@
                     "availableBalance": "500000.00",
                     "currency": "VND",
                     "status": "ACTIVE",
+                    "kycTier": 1,
+                    "dailyLimit": "20000000.00",
+                    "dailyUsed": "0.00",
+                    "monthlyLimit": "50000000.00",
+                    "monthlyUsed": "0.00",
                     "createdAt": "2026-11-01T00:00:00.000Z",
                     "updatedAt": "2026-11-06T12:00:00.000Z"
                   }
@@ -164,6 +169,57 @@
             "description": "Opaque cursor dạng chuỗi base64url đại diện cho mốc bản ghi cuối của trang trước",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": false,
+            "description": "Lọc từ thời điểm (định dạng YYYY-MM-DD hoặc ISO-8601 theo giờ UTC/UTC+7)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": false,
+            "description": "Lọc đến thời điểm (định dạng YYYY-MM-DD hoặc ISO-8601 theo giờ UTC/UTC+7)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "description": "Loại giao dịch cần lọc",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ALL",
+                "TRANSFER",
+                "P2P_TRANSFER",
+                "TOPUP",
+                "WITHDRAW",
+                "PAYMENT",
+                "REFUND",
+                "ADJUSTMENT"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "description": "Hướng dòng tiền (CREDIT: tiền vào, DEBIT: tiền ra)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ALL",
+                "CREDIT",
+                "DEBIT"
+              ]
             }
           }
         ],
@@ -533,7 +589,7 @@
       "post": {
         "operationId": "adjustReconciliationAnomaly",
         "summary": "Điều chỉnh một bất thường đối soát (BALANCE_DRIFT)",
-        "description": "Chỉ ADMIN. Đồng bộ số dư ví về tổng sổ cái (nguồn sự thật duy nhất), bảo toàn bất biến LedgerEntry và ghi nhận vết kiểm toán.",
+        "description": "Chỉ ADMIN. Đồng bộ số dư ví về tổng sổ cái (nguồn sự thật duy nhất), bảo toàn bất biến LedgerEntry và ghi nhận vết kiểm toán. Hỗ trợ direction, amount, referenceId và lý do 5-500 ký tự.",
         "parameters": [
           {
             "name": "id",
@@ -567,7 +623,7 @@
             }
           },
           "400": {
-            "description": "Lý do bắt buộc (tối thiểu 10 ký tự) hoặc ID không hợp lệ",
+            "description": "Lý do bắt buộc (5 đến 500 ký tự) hoặc tham số không hợp lệ",
             "content": {
               "application/json": {
                 "schema": {
@@ -693,6 +749,30 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "kycTier": {
+            "type": "integer",
+            "description": "Cấp độ KYC của người dùng (0: Chưa KYC, 1: Cơ bản, 2: Nâng cao)"
+          },
+          "dailyLimit": {
+            "type": "string",
+            "example": "20000000.00",
+            "description": "Hạn mức giao dịch tối đa trong ngày theo KYC policy"
+          },
+          "dailyUsed": {
+            "type": "string",
+            "example": "0.00",
+            "description": "Số tiền đã chi tiêu trong ngày hôm nay"
+          },
+          "monthlyLimit": {
+            "type": "string",
+            "example": "50000000.00",
+            "description": "Hạn mức giao dịch tối đa trong tháng theo KYC policy"
+          },
+          "monthlyUsed": {
+            "type": "string",
+            "example": "0.00",
+            "description": "Tổng số tiền đã chi tiêu trong tháng hiện tại"
           }
         }
       },
@@ -1089,8 +1169,25 @@
         "properties": {
           "reason": {
             "type": "string",
-            "minLength": 10,
-            "description": "Lý do điều chỉnh (bắt buộc, tối thiểu 10 ký tự)"
+            "minLength": 5,
+            "maxLength": 500,
+            "description": "Lý do điều chỉnh (bắt buộc, 5 đến 500 ký tự sau khi trim)"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "CREDIT",
+              "DEBIT"
+            ],
+            "description": "Hướng điều chỉnh ví (CREDIT để tăng, DEBIT để giảm về số dư sổ cái)"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Số tiền chênh lệch cần điều chỉnh (chuỗi số dương)"
+          },
+          "referenceId": {
+            "type": "string",
+            "description": "Mã tham chiếu điều chỉnh (mặc định adjust-anomaly-<id>)"
           }
         }
       },
@@ -1171,6 +1268,10 @@
           "transactionId": {
             "type": "string",
             "nullable": true
+          },
+          "referenceId": {
+            "type": "string",
+            "description": "Mã tham chiếu điều chỉnh"
           },
           "adjustment": {
             "$ref": "#/components/schemas/AnomalyAdjustmentDetail",

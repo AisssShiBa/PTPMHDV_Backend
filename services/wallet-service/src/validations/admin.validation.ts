@@ -19,3 +19,27 @@ export const listWalletsSchema = z.object({
     limit: z.string().transform(Number).optional(),
   }),
 });
+
+export const adjustAnomalySchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^[1-9]\d*$/, "Anomaly id must be a positive integer"),
+  }),
+  body: z.object({
+    reason: z.string({ message: "reason is required and must contain 5 to 500 characters" })
+      .trim()
+      .min(5, "reason is required and must contain 5 to 500 characters")
+      .max(500, "reason must contain 5 to 500 characters"),
+    direction: z.enum(['CREDIT', 'DEBIT'], {
+      message: "direction must be 'CREDIT' or 'DEBIT'",
+    }).optional(),
+    amount: z.string()
+      .regex(/^[1-9]\d*(\.\d{1,2})?$/, "amount must be a positive integer or decimal string")
+      .refine(val => BigInt(val.split('.')[0]) <= 999_999_999_999_999_999n, "amount is out of range")
+      .optional(),
+    referenceId: z.string()
+      .trim()
+      .min(1, "referenceId must be a non-empty string")
+      .max(255, "referenceId must not exceed 255 characters")
+      .optional(),
+  }),
+});

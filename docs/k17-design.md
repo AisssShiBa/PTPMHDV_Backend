@@ -84,26 +84,42 @@ Bổ sung các trường vào bảng hiện có mà không làm mất dữ liệ
 
 ### 4. Tính Lũy Đẳng (Idempotency) & Tương Tranh (Concurrency)
 - Khóa hàng: Transaction sử dụng `SELECT ... FOR UPDATE` trên hàng Anomaly và hàng Wallet theo thứ tự tăng dần của ID (`id ASC`) để triệt tiêu hoàn toàn nguy cơ Deadlock.
-- Khóa lũy đẳng: Sử dụng `referenceId = "adjust_<anomalyId>"` duy nhất.
+- Khóa lũy đẳng: Sử dụng `referenceId = "adjust-anomaly-<anomalyId>"` duy nhất (hoặc `referenceId` do Admin client chỉ định).
 - Trạng thái Anomaly:
   - Chỉ xử lý khi `status == 'OPEN'`.
   - Cập nhật có điều kiện `UPDATE "ReconciliationAnomaly" SET status = 'RESOLVED', ... WHERE id = $1 AND status = 'OPEN'`.
-  - Nếu `status == 'RESOLVED'` từ trước: Trả về kết quả điều chỉnh ban đầu (200 OK kèm `replayed: true` hoặc 409 `ANOMALY_ALREADY_RESOLVED` tùy trường hợp request trùng).
-  - Khi có 10 request song song: Duy nhất 1 request chiếm được khóa và thực thi điều chỉnh, 9 request còn lại nhận `replayed: true` hoặc `ANOMALY_ALREADY_RESOLVED`.
+  - Nếu `status == 'RESOLVED'` từ trước: Trả về kết quả điều chỉnh ban đầu (200 OK kèm `replayed: true`, `transactionId: null`). Nếu gửi kèm `referenceId` khác với lần điều chỉnh đã chốt -> 409 `ALREADY_ADJUSTED`.
+  - Khi có nhiều request song song: Duy nhất 1 request chiếm được khóa và thực thi điều chỉnh (`replayed: false`), các request còn lại nhận kết quả tái hiện (`replayed: true`).
 
-### 5. Ràng Buộc Lý Do Điều Chỉnh (Reason Validation)
-- Bắt buộc phải có `reason` trong request body.
-- Độ dài tối thiểu: 10 ký tự sau khi `trim()` (chống chuỗi toàn dấu cách, ký tự vô nghĩa).
-- Nếu thiếu hoặc `< 10` ký tự -> Trả về lỗi `400 REASON_REQUIRED`.
+### 5. Ràng Buộc Tham Số Điều Chỉnh (Adjustment Validation)
+- **Lý do điều chỉnh (`reason`)**:
+  - Bắt buộc phải có `reason` trong request body.
+  - Độ dài hợp lệ: từ 5 đến 500 ký tự sau khi `trim()` (chống chuỗi rỗng, toàn dấu cách hoặc spam quá dài).
+  - Thiếu, rỗng hoặc `< 5` ký tự -> Trả về lỗi `400 REASON_REQUIRED`.
+  - Vượt quá `> 500` ký tự -> Trả về lỗi `400 INVALID_REASON`.
+- **Hướng điều chỉnh (`direction`)**:
+  - Tùy chọn; nếu truyền bắt buộc phải là `'CREDIT'` hoặc `'DEBIT'` (sai trả về `400 INVALID_DIRECTION`).
+  - Được kiểm tra tương thích ngữ nghĩa với drift thực tế: Nếu số dư ví cao hơn sổ cái (drift > 0), hệ thống yêu cầu `DEBIT`. Nếu truyền ngược chiều -> Trả về `400 DIRECTION_MISMATCH`.
+- **Số tiền điều chỉnh (`amount`)**:
+  - Tùy chọn; nếu truyền bắt buộc là chuỗi số nguyên hoặc số thập phân dương tối đa 2 chữ số thập phân, không vượt 18 chữ số nguyên (`DECIMAL(20,2)`). Sai trả về `400 INVALID_AMOUNT`.
+  - Kiểm tra đối soát với độ lệch thực tế: Nếu không khớp với lượng delta cần điều chỉnh -> Trả về `400 AMOUNT_MISMATCH`.
+- **Mã tham chiếu (`referenceId`)**:
+  - Tùy chọn; mặc định sinh `adjust-anomaly-<id>`, tối đa 255 ký tự (sai trả về `400 INVALID_REFERENCE_ID`).
 
 ### 6. Danh Mục Mã Lỗi & HTTP Status
-- `400 REASON_REQUIRED`: Thiếu lý do hoặc lý do dưới 10 ký tự.
+- `400 REASON_REQUIRED`: Thiếu lý do hoặc lý do dưới 5 ký tự.
+- `400 INVALID_REASON`: Lý do vượt quá 500 ký tự.
+- `400 INVALID_DIRECTION`: Hướng không phải `'CREDIT'` hoặc `'DEBIT'`.
+- `400 INVALID_AMOUNT`: Số tiền không hợp lệ hoặc ngoài phạm vi.
+- `400 INVALID_REFERENCE_ID`: Mã tham chiếu không hợp lệ hoặc quá 255 ký tự.
+- `400 DIRECTION_MISMATCH`: Hướng điều chỉnh không khớp với chiều lệch thực tế của sổ cái.
+- `400 AMOUNT_MISMATCH`: Số tiền điều chỉnh không khớp với lượng chênh lệch thực tế của sổ cái.
 - `400 INVALID_CURSOR`: Cursor phân trang keyset không hợp lệ.
 - `401 INVALID_GATEWAY_TOKEN`: Không có token hoặc token không hợp lệ.
 - `403 FORBIDDEN`: Không có quyền ADMIN (`req.auth.role !== 'ADMIN'`).
 - `404 ANOMALY_NOT_FOUND`: Không tìm thấy bản ghi bất thường với ID tương ứng.
 - `404 REPORT_NOT_FOUND`: Không tìm thấy báo cáo đối soát với ID tương ứng.
-- `409 ANOMALY_ALREADY_RESOLVED`: Bất thường đã được giải quyết từ trước.
+- `409 ALREADY_ADJUSTED`: Bất thường đã được giải quyết từ trước với mã tham chiếu khác.
 - `409 STALE_ANOMALY_DATA`: Số liệu ví đã biến động so với thời điểm phát hiện bất thường.
 - `422 ADJUST_NOT_SUPPORTED`: Loại bất thường không hỗ trợ điều chỉnh tự động.
 
@@ -113,15 +129,23 @@ Bổ sung các trường vào bảng hiện có mà không làm mất dữ liệ
    - Xử lý: Thực hiện quét, tạo bản ghi `ReconciliationReport` và các `ReconciliationAnomaly` tương ứng.
    - Trả về: Toàn bộ thông tin báo cáo kèm danh sách `anomalies`, `isBalanced`, `totalWallets`, `systemBalanceExpected`, `systemBalanceActual`.
 2. **W2: `GET /api/wallets/admin/reconciliation/reports`**
-   - Query: `cursor` (opaque base64url keyset `runAt + id`), `limit` (mặc định 20, tối đa 100).
+   - Query: `cursor` (opaque base64url keyset `runAt + id`), `limit` (mặc định 20, tối đa 100), `page` (tùy chọn).
    - Xử lý: Lấy danh sách báo cáo mới nhất trước (`runAt DESC, id DESC`).
-   - Trả về: `{ items: [...], nextCursor: string | null }`.
+   - Trả về: `{ items: [...], nextCursor: string | null, total: number, page: number, limit: number }`.
 3. **W3: `GET /api/wallets/admin/reconciliation/reports/:id`**
    - Params: `id` (int).
    - Xử lý: Lấy chi tiết báo cáo và toàn bộ anomalies của báo cáo đó.
    - Trả về: Thông tin báo cáo đầy đủ. Nếu không có -> 404 `REPORT_NOT_FOUND`.
 4. **W4: `POST /api/wallets/admin/reconciliation/anomalies/:id/adjust`**
    - Params: `id` (bigint/string).
-   - Body: `{ "reason": "Dieu chinh lech so du theo bien ban kiem toan" }`.
+   - Body:
+     ```json
+     {
+       "reason": "Dieu chinh lech so du theo bien ban kiem toan",
+       "direction": "DEBIT",
+       "amount": "50000",
+       "referenceId": "adjust-anomaly-123"
+     }
+     ```
    - Xử lý: Khóa anomaly, đồng bộ số dư `Wallet.balance`, ghi `AnomalyAdjustment`, đánh dấu `RESOLVED`.
-   - Trả về: `{ "success": true, "data": { "anomalyId": "...", "status": "RESOLVED", "walletId": 5, "delta": "20000.00", "replayed": false } }`.
+   - Trả về: `{ "success": true, "data": { "anomalyId": "...", "status": "RESOLVED", "walletId": 5, "delta": "50000.00", "replayed": false, "transactionId": null, "referenceId": "adjust-anomaly-123" } }`.
