@@ -8,10 +8,10 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
 import { setTimeout as delay } from 'node:timers/promises'
+import { initialize } from '../../../scripts/init-secrets.js'
 
 export const root = fileURLToPath(new URL('../../../', import.meta.url))
 const require = createRequire(import.meta.url)
-const { initialize } = require('../../../scripts/init-secrets.js')
 export const uuid = randomUUID
 export const pause = delay
 

@@ -1,14 +1,18 @@
-const fs = require('node:fs')
-const path = require('node:path')
-const crypto = require('node:crypto')
-const { parseEnv } = require('node:util')
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import { parseEnv } from 'node:util'
+import { fileURLToPath } from 'node:url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 const DEV_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEniLUK7gZ7ZSYyWBnm3SiPUedQHwt
 aeFpVr9DWDOaA02OcsSGq1K+pmzspers77x41nFYSqe/bQgOL9XONKkRwQ==
 -----END PUBLIC KEY-----`
 
-function initialize(root = path.resolve(__dirname, '..')) {
+export function initialize(root = path.resolve(__dirname, '..')) {
   const secretDir = path.join(root, 'secrets')
   const envPath = path.join(root, '.env')
   const exists = fs.existsSync(envPath)
@@ -111,9 +115,9 @@ function initialize(root = path.resolve(__dirname, '..')) {
   console.log('Local environment ready. Existing credentials preserved; Gateway keys validated.')
 }
 
-module.exports = { initialize }
-if (require.main === module) {
+export default { initialize }
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   try { initialize(); console.log('Run: docker compose up -d --build --wait') }
   catch (error) { console.error(error.message); process.exitCode = 1 }
 }
-
