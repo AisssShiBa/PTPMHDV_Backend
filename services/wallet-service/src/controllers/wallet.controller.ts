@@ -4,7 +4,7 @@ import { LedgerService } from '../services/ledger.service';
 import { WalletHoldService } from '../services/wallet-hold.service';
 import { LimitService } from '../services/limit.service';
 import { decimalToString, walletView } from '../utils/wallet.helpers';
-import { OwnerType } from '@prisma/client';
+import { OwnerType, TransferType, LedgerDirection } from '@prisma/client';
 import { DomainException } from '../utils/domain.exception';
 
 const walletService = new WalletService();
@@ -66,6 +66,65 @@ export const getMe = async (req: Request, res: Response) => {
   }
 };
 
+function parseStartDate(raw: unknown): Date | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const str = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    const d = new Date(`${str}T00:00:00.000+07:00`);
+    if (isNaN(d.getTime())) {
+      throw new DomainException(400, 'INVALID_DATE_FORMAT', 'startDate không đúng định dạng YYYY-MM-DD hoặc ISO-8601');
+    }
+    return d;
+  }
+  const d = new Date(str);
+  if (isNaN(d.getTime())) {
+    throw new DomainException(400, 'INVALID_DATE_FORMAT', 'startDate không đúng định dạng YYYY-MM-DD hoặc ISO-8601');
+  }
+  return d;
+}
+
+function parseEndDate(raw: unknown): Date | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const str = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    const d = new Date(`${str}T23:59:59.999+07:00`);
+    if (isNaN(d.getTime())) {
+      throw new DomainException(400, 'INVALID_DATE_FORMAT', 'endDate không đúng định dạng YYYY-MM-DD hoặc ISO-8601');
+    }
+    return d;
+  }
+  const d = new Date(str);
+  if (isNaN(d.getTime())) {
+    throw new DomainException(400, 'INVALID_DATE_FORMAT', 'endDate không đúng định dạng YYYY-MM-DD hoặc ISO-8601');
+  }
+  return d;
+}
+
+function parseTransferType(raw: unknown): TransferType | 'WITHDRAW' | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const upper = raw.trim().toUpperCase();
+  if (upper === 'ALL') return undefined;
+  if (upper === 'TRANSFER' || upper === 'P2P_TRANSFER') {
+    return TransferType.P2P_TRANSFER;
+  }
+  if (upper === 'WITHDRAW') {
+    return 'WITHDRAW';
+  }
+  if (Object.values(TransferType).includes(upper as TransferType)) {
+    return upper as TransferType;
+  }
+  throw new DomainException(400, 'INVALID_TYPE', `Loại giao dịch không hợp lệ: ${raw}`);
+}
+
+function parseDirection(raw: unknown): LedgerDirection | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const upper = raw.trim().toUpperCase();
+  if (upper === 'ALL') return undefined;
+  if (upper === 'CREDIT' || upper === 'IN') return LedgerDirection.CREDIT;
+  if (upper === 'DEBIT' || upper === 'OUT') return LedgerDirection.DEBIT;
+  throw new DomainException(400, 'INVALID_DIRECTION', 'Direction phải là CREDIT hoặc DEBIT');
+}
+
 export const getMeLedger = async (req: Request, res: Response) => {
   const auth = (req as any).auth;
   if (!auth?.userId) {
@@ -99,8 +158,24 @@ export const getMeLedger = async (req: Request, res: Response) => {
     ? req.query.cursor.trim()
     : undefined;
 
+  const startDate = parseStartDate(req.query.startDate);
+  const endDate = parseEndDate(req.query.endDate);
+  if (startDate && endDate && startDate.getTime() > endDate.getTime()) {
+    throw new DomainException(400, 'INVALID_DATE_RANGE', 'startDate không thể lớn hơn endDate');
+  }
+
+  const type = parseTransferType(req.query.type);
+  const direction = parseDirection(req.query.direction);
+
   try {
-    const result = await walletService.getMeLedger(auth.userId, { cursor, limit });
+    const result = await walletService.getMeLedger(auth.userId, {
+      cursor,
+      limit,
+      startDate,
+      endDate,
+      type,
+      direction,
+    });
     return res.json({
       success: true,
       data: result,

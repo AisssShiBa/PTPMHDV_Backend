@@ -170,6 +170,57 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": false,
+            "description": "Lọc từ thời điểm (định dạng YYYY-MM-DD hoặc ISO-8601 theo giờ UTC/UTC+7)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": false,
+            "description": "Lọc đến thời điểm (định dạng YYYY-MM-DD hoặc ISO-8601 theo giờ UTC/UTC+7)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "description": "Loại giao dịch cần lọc",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ALL",
+                "TRANSFER",
+                "P2P_TRANSFER",
+                "TOPUP",
+                "WITHDRAW",
+                "PAYMENT",
+                "REFUND",
+                "ADJUSTMENT"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "description": "Hướng dòng tiền (CREDIT: tiền vào, DEBIT: tiền ra)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ALL",
+                "CREDIT",
+                "DEBIT"
+              ]
+            }
           }
         ],
         "responses": {

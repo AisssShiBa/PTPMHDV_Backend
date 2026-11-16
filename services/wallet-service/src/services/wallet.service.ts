@@ -1,4 +1,4 @@
-import { OwnerType, Prisma, PrismaClient, SystemWalletCode, WalletStatus } from "@prisma/client";
+import { OwnerType, Prisma, PrismaClient, SystemWalletCode, WalletStatus, TransferType, LedgerDirection } from "@prisma/client";
 import { DomainException } from "../utils/domain.exception";
 import { CreateWalletDto, HistoryQueryDto, ListWalletsDto } from "../dtos/wallet.dto";
 import { decimalToString } from "../utils/wallet.helpers";
@@ -6,6 +6,15 @@ import { decodeCursor, encodeCursor, KeysetCursor } from "../utils/cursor.helper
 
 const HttpStatus = { NOT_FOUND: 404, BAD_REQUEST: 400, INTERNAL_SERVER_ERROR: 500 };
 const prisma = new PrismaClient();
+
+export interface GetMeLedgerOptions {
+  cursor?: string;
+  limit?: number;
+  startDate?: Date;
+  endDate?: Date;
+  type?: TransferType | 'WITHDRAW';
+  direction?: LedgerDirection;
+}
 
 export class WalletService {
   constructor() {
@@ -110,12 +119,19 @@ export class WalletService {
     return { wallets, total, page, limit };
   }
 
-  async getMeLedger(userId: string, options: { cursor?: string; limit?: number }) {
+  async getMeLedger(userId: string, options: GetMeLedgerOptions) {
     const wallet = await prisma.wallet.findFirst({
       where: { userId, ownerType: OwnerType.USER },
     });
     if (!wallet) {
       throw new DomainException(HttpStatus.NOT_FOUND, "WALLET_NOT_FOUND", "Wallet was not found");
+    }
+
+    if (options.type === 'WITHDRAW') {
+      return {
+        items: [],
+        nextCursor: null,
+      };
     }
 
     let parsedCursor: KeysetCursor | undefined;
@@ -125,21 +141,45 @@ export class WalletService {
 
     const limit = options.limit ?? 20;
 
-    const where: Prisma.LedgerEntryWhereInput = {
-      walletId: wallet.id,
-      ...(parsedCursor
-        ? {
-            OR: [
-              { createdAt: { lt: parsedCursor.createdAt } },
-              {
-                AND: [
-                  { createdAt: parsedCursor.createdAt },
-                  { id: { lt: parsedCursor.id } },
-                ],
-              },
+    const whereConditions: Prisma.LedgerEntryWhereInput[] = [
+      { walletId: wallet.id }
+    ];
+
+    if (options.direction) {
+      whereConditions.push({ direction: options.direction });
+    }
+
+    if (options.type) {
+      whereConditions.push({ transferType: options.type });
+    }
+
+    if (options.startDate || options.endDate) {
+      const dateFilter: Prisma.DateTimeFilter = {};
+      if (options.startDate) {
+        dateFilter.gte = options.startDate;
+      }
+      if (options.endDate) {
+        dateFilter.lte = options.endDate;
+      }
+      whereConditions.push({ createdAt: dateFilter });
+    }
+
+    if (parsedCursor) {
+      whereConditions.push({
+        OR: [
+          { createdAt: { lt: parsedCursor.createdAt } },
+          {
+            AND: [
+              { createdAt: parsedCursor.createdAt },
+              { id: { lt: parsedCursor.id } },
             ],
-          }
-        : {}),
+          },
+        ],
+      });
+    }
+
+    const where: Prisma.LedgerEntryWhereInput = {
+      AND: whereConditions,
     };
 
     const entries = await prisma.ledgerEntry.findMany({
