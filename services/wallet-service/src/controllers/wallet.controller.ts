@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { WalletService } from '../services/wallet.service';
 import { LedgerService } from '../services/ledger.service';
 import { WalletHoldService } from '../services/wallet-hold.service';
+import { LimitService } from '../services/limit.service';
 import { decimalToString, walletView } from '../utils/wallet.helpers';
 import { OwnerType } from '@prisma/client';
 import { DomainException } from '../utils/domain.exception';
@@ -9,6 +10,7 @@ import { DomainException } from '../utils/domain.exception';
 const walletService = new WalletService();
 const ledgerService = new LedgerService();
 const walletHoldService = new WalletHoldService(ledgerService);
+const limitService = new LimitService();
 
 export const create = async (req: Request, res: Response) => {
   const result = await walletService.createWallet(req.body);
@@ -31,6 +33,9 @@ export const getMe = async (req: Request, res: Response) => {
 
   try {
     const wallet = await walletService.getBalance(auth.userId, OwnerType.USER);
+    const kycTier = typeof auth.kycTier === 'number' ? auth.kycTier : (wallet.kycTier ?? 0);
+    const limitInfo = await limitService.getUsageAndLimits(auth.userId, kycTier);
+
     return res.json({
       success: true,
       data: {
@@ -41,6 +46,11 @@ export const getMe = async (req: Request, res: Response) => {
         availableBalance: decimalToString(wallet.balance.sub(wallet.heldBalance)),
         currency: wallet.currency,
         status: wallet.status,
+        kycTier,
+        dailyLimit: limitInfo ? limitInfo.dailyLimit : undefined,
+        dailyUsed: limitInfo ? limitInfo.dailyUsed : undefined,
+        monthlyLimit: limitInfo ? limitInfo.monthlyLimit : undefined,
+        monthlyUsed: limitInfo ? limitInfo.monthlyUsed : undefined,
         createdAt: wallet.createdAt.toISOString(),
         updatedAt: wallet.updatedAt.toISOString(),
       },

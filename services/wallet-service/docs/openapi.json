@@ -44,6 +44,11 @@
                     "availableBalance": "500000.00",
                     "currency": "VND",
                     "status": "ACTIVE",
+                    "kycTier": 1,
+                    "dailyLimit": "20000000.00",
+                    "dailyUsed": "0.00",
+                    "monthlyLimit": "50000000.00",
+                    "monthlyUsed": "0.00",
                     "createdAt": "2026-11-01T00:00:00.000Z",
                     "updatedAt": "2026-11-06T12:00:00.000Z"
                   }
@@ -693,6 +698,30 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "kycTier": {
+            "type": "integer",
+            "description": "Cấp độ KYC của người dùng (0: Chưa KYC, 1: Cơ bản, 2: Nâng cao)"
+          },
+          "dailyLimit": {
+            "type": "string",
+            "example": "20000000.00",
+            "description": "Hạn mức giao dịch tối đa trong ngày theo KYC policy"
+          },
+          "dailyUsed": {
+            "type": "string",
+            "example": "0.00",
+            "description": "Số tiền đã chi tiêu trong ngày hôm nay"
+          },
+          "monthlyLimit": {
+            "type": "string",
+            "example": "50000000.00",
+            "description": "Hạn mức giao dịch tối đa trong tháng theo KYC policy"
+          },
+          "monthlyUsed": {
+            "type": "string",
+            "example": "0.00",
+            "description": "Tổng số tiền đã chi tiêu trong tháng hiện tại"
           }
         }
       },

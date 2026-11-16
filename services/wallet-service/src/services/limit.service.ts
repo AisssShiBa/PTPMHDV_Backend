@@ -44,6 +44,61 @@ export class LimitService {
   }
 
   /**
+   * getUsageAndLimits
+   * Lấy hạn mức và số tiền đã chi tiêu trong ngày/tháng của user.
+   */
+  async getUsageAndLimits(
+    userId: string,
+    kycTier: number,
+    now: Date = new Date()
+  ): Promise<{
+    kycTier: number;
+    dailyLimit: string;
+    dailyUsed: string;
+    monthlyLimit: string;
+    monthlyUsed: string;
+    perTxnLimit: string;
+  } | null> {
+    try {
+      const policy = await this.getPolicy(kycTier);
+      const day = getVnDay(now);
+      const monthKey = getVnMonthKey(now);
+
+      const todayUsage = await prisma.userDailyUsage.findUnique({
+        where: {
+          userId_day: {
+            userId,
+            day,
+          },
+        },
+        select: {
+          spentDay: true,
+        },
+      });
+
+      const monthSumResult = await prisma.$queryRaw<{ total: Prisma.Decimal | null }[]>`
+        SELECT COALESCE(SUM("spentDay"), 0) as total
+        FROM "UserDailyUsage"
+        WHERE "userId" = ${userId} AND "monthKey" = ${monthKey}
+      `;
+
+      const dailyUsed = todayUsage ? todayUsage.spentDay : new Prisma.Decimal(0);
+      const monthlyUsed = monthSumResult[0]?.total ?? new Prisma.Decimal(0);
+
+      return {
+        kycTier,
+        dailyLimit: decimalToString(policy.perDay),
+        dailyUsed: decimalToString(dailyUsed),
+        monthlyLimit: decimalToString(policy.perMonth),
+        monthlyUsed: decimalToString(monthlyUsed),
+        perTxnLimit: decimalToString(policy.perTxn),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * checkAndReserve
    * Runs within an existing caller transaction.
    * Lock order: Caller MUST have locked Wallet first, then checkAndReserve locks UserDailyUsage.
