@@ -191,7 +191,25 @@ async function ensureKyc(ctx, slot, account, accounts) {
     uploadedNow = true
   }
 
-  const profile = profileByAuthId(ctx, account.authId)
+  let profile
+  try {
+    await until(
+      () => {
+        profile = profileByAuthId(ctx, account.authId)
+        return profile
+      },
+      'Profile provisioning timed out for ' + slot.email,
+      60000
+    )
+  } catch (error) {
+    writeFileSync(resolve(ctx.directory, 'seed-profile-timeout.json'), JSON.stringify({
+      email: slot.email,
+      authId: account.authId,
+      profile: profile ?? null,
+      authRows: sql(ctx, 'auth_service', 'SELECT id || \'|\' || email FROM "User" WHERE id = \'' + requireSafeSqlValue(account.authId) + '\'')
+    }, null, 2))
+    throw error
+  }
   assert.ok(profile, 'Profile row is missing for ' + slot.email)
   const [profileId, status] = profile.split('|')
   if (uploadedNow) {
@@ -354,7 +372,9 @@ export async function seedNguyen(ctx, options = {}) {
     writeAccounts(ctx.directory, accounts)
   }
 
-  const drift = await seedDrift(ctx, adminToken, env, accounts)
+  const drift = options.includeDrift !== false
+    ? await seedDrift(ctx, adminToken, env, accounts)
+    : null
   writeAccounts(ctx.directory, accounts)
 
   const pending = pendingKycCount(ctx)
@@ -365,17 +385,20 @@ export async function seedNguyen(ctx, options = {}) {
     )
   }
 
-  const totalExcludingDrift = sql(
+  const totalBalance = sql(
     ctx,
     'wallet_service',
-    'SELECT (COALESCE(SUM(balance), 0)::bigint)::text FROM "Wallet" WHERE id <> \'' +
-      requireSafeSqlValue(drift.walletId) +
-      '\''
+    drift
+      ? 'SELECT (COALESCE(SUM(balance), 0)::bigint)::text FROM "Wallet" WHERE id <> \'' +
+        requireSafeSqlValue(drift.walletId) + '\''
+      : 'SELECT (COALESCE(SUM(balance), 0)::bigint)::text FROM "Wallet"'
   )
   assert.equal(
-    BigInt(totalExcludingDrift),
+    BigInt(totalBalance),
     0n,
-    'Balance conservation excluding the drift wallet must stay 0'
+    drift
+      ? 'Balance conservation excluding the drift wallet must stay 0'
+      : 'Balance conservation must stay 0 before drift'
   )
 
   const summary = {
@@ -385,7 +408,8 @@ export async function seedNguyen(ctx, options = {}) {
     missingBeforeRun: missing.map((slot) => slot.key),
     pendingKycProfiles: Number(pending),
     driftWallet: drift,
-    totalBalanceExcludingDrift: totalExcludingDrift,
+    totalBalance,
+    totalBalanceExcludingDrift: totalBalance,
     notifications: profiles.map((profile) => ({
       key: profile.key,
       type: 'WALLET_CREDITED',
@@ -407,10 +431,14 @@ export async function seedNguyen(ctx, options = {}) {
   console.log('Notifications created now: ' +
     profiles.filter((profile) => profile.notificationCreated).length + ', already present: ' +
     profiles.filter((profile) => profile.notificationDuplicate).length)
-  console.log('WARNING: drift wallet ' + drift.walletId + ' (' + drift.email + ') has +' +
-    DRIFT_AMOUNT + ' VND not backed by the ledger.')
-  console.log('Run RC1 BEFORE this seed and A8 AFTER it. Evidence: ' +
-    resolve(ctx.directory, 'week4-seed.json'))
+  if (drift) {
+    console.log('WARNING: drift wallet ' + drift.walletId + ' (' + drift.email + ') has +' +
+      DRIFT_AMOUNT + ' VND not backed by the ledger.')
+    console.log('Run RC1 BEFORE this seed and A8 AFTER it.')
+  } else {
+    console.log('Drift disabled; enable SEED_ALLOW_DRIFT=1 for the isolated A8 fixture.')
+  }
+  console.log('Evidence: ' + resolve(ctx.directory, 'week4-seed.json'))
   return summary
 }
 

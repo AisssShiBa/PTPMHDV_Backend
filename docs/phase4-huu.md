@@ -62,7 +62,7 @@ test reset chạy lên DB ứng dụng. Cách chạy test cũ không có biến
 - Bỏ fallback khóa nội bộ trong WalletClient và NotificationClient của Payment.
   Cả hai đọc config chung đã xử lý `_FILE`; thiếu khóa làm startup thất bại.
 - Compose không còn fallback mật khẩu DB `postgres`; bắt buộc giá trị URL encoded
-  do `init-secrets.js` sinh. Không đổi credential của volume đang tồn tại.
+  do `init-secrets.cjs` sinh. Không đổi credential của volume đang tồn tại.
   Env file cũ (kể cả harness deployment cũ) thiếu biến này cần bổ sung
   `POSTGRES_PASSWORD_URLENCODED` từ mật khẩu DB đang dùng trước khi chạy; không
   sinh mật khẩu mới cho volume cũ. Bộ Phase 4 tự sinh cấu hình cho volume mới.

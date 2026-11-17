@@ -2,7 +2,7 @@ import { DomainException } from '../utils/domain.exception';
 import { internalKey } from '../config/secrets';
 
 function getInternalKey(): string {
-  return process.env.INTERNAL_KEY?.trim() || internalKey || '';
+  return internalKey || process.env.INTERNAL_KEY?.trim() || '';
 }
 
 export type TopupCreditResult =

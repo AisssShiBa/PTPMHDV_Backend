@@ -11,7 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 
 export const root = fileURLToPath(new URL('../../../', import.meta.url))
 const require = createRequire(import.meta.url)
-const { initialize } = require('../../../scripts/init-secrets.js')
+const { initialize } = require('../../../scripts/init-secrets.cjs')
 export const uuid = randomUUID
 export const pause = delay
 
@@ -171,7 +171,11 @@ export async function call(ctx, path, { method = 'GET', body, token, cookie, hea
 }
 export async function until(check, message, timeout = 20000) {
   const deadline = Date.now() + timeout
-  while (Date.now() < deadline) { if (await check()) return; await delay(200) }
+  while (Date.now() < deadline) {
+    const value = await check()
+    if (value) return value
+    await delay(200)
+  }
   throw new Error(message)
 }
 export function broker(ctx, code) {

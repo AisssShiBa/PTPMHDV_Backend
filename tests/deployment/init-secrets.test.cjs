@@ -5,7 +5,7 @@ const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
 const { parseEnv } = require('node:util')
-const { initialize } = require('../../scripts/init-secrets')
+const { initialize } = require('../../scripts/init-secrets.cjs')
 
 function fixture(t) {
   const parent = path.resolve(os.tmpdir())
