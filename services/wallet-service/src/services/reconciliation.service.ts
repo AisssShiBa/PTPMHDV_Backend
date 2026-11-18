@@ -109,6 +109,13 @@ export const formatReport = (report: any): ReportView => {
   };
 };
 
+export interface AdjustAnomalyInput {
+  reason?: string;
+  direction?: 'CREDIT' | 'DEBIT' | string;
+  amount?: string;
+  referenceId?: string;
+}
+
 export class ReconciliationService {
   async runReconciliation(modeOrIsFull: 'quick' | 'full' | boolean = 'quick'): Promise<ReportView> {
     const isFull =
@@ -290,22 +297,112 @@ export class ReconciliationService {
     return formatReport(report);
   }
 
-  async adjustAnomaly(anomalyIdStr: string, reason: string, adminId: string) {
-    if (!reason || typeof reason !== 'string' || reason.trim().length < 10) {
+  async adjustAnomaly(
+    anomalyIdStr: string,
+    bodyOrReason: string | AdjustAnomalyInput,
+    adminId: string
+  ) {
+    const input: AdjustAnomalyInput =
+      typeof bodyOrReason === 'string' ? { reason: bodyOrReason } : bodyOrReason || {};
+
+    const rawReason = input.reason;
+    if (rawReason === undefined || rawReason === null || typeof rawReason !== 'string') {
       console.error(
         JSON.stringify({
           event: 'ANOMALY_ADJUST_ERROR',
           anomalyId: anomalyIdStr,
           adminId,
           code: 'REASON_REQUIRED',
-          message: 'reason is required and must contain at least 10 characters',
+          message: 'reason is required and must contain 5 to 500 characters',
         })
       );
       throw new DomainException(
         400,
         'REASON_REQUIRED',
-        'reason is required and must contain at least 10 characters'
+        'reason is required and must contain 5 to 500 characters'
       );
+    }
+
+    const trimmedReason = rawReason.trim();
+    if (trimmedReason.length === 0) {
+      console.error(
+        JSON.stringify({
+          event: 'ANOMALY_ADJUST_ERROR',
+          anomalyId: anomalyIdStr,
+          adminId,
+          code: 'REASON_REQUIRED',
+          message: 'reason is required and must contain 5 to 500 characters',
+        })
+      );
+      throw new DomainException(
+        400,
+        'REASON_REQUIRED',
+        'reason is required and must contain 5 to 500 characters'
+      );
+    }
+
+    if (trimmedReason.length < 5) {
+      console.error(
+        JSON.stringify({
+          event: 'ANOMALY_ADJUST_ERROR',
+          anomalyId: anomalyIdStr,
+          adminId,
+          code: 'REASON_REQUIRED',
+          message: 'reason must contain 5 to 500 characters',
+        })
+      );
+      throw new DomainException(
+        400,
+        'REASON_REQUIRED',
+        'reason must contain 5 to 500 characters'
+      );
+    }
+
+    if (trimmedReason.length > 500) {
+      console.error(
+        JSON.stringify({
+          event: 'ANOMALY_ADJUST_ERROR',
+          anomalyId: anomalyIdStr,
+          adminId,
+          code: 'INVALID_REASON',
+          message: 'reason must contain 5 to 500 characters',
+        })
+      );
+      throw new DomainException(
+        400,
+        'INVALID_REASON',
+        'reason must contain 5 to 500 characters'
+      );
+    }
+
+    const rawDirection = input.direction;
+    if (rawDirection !== undefined && rawDirection !== null) {
+      if (rawDirection !== 'CREDIT' && rawDirection !== 'DEBIT') {
+        throw new DomainException(400, 'INVALID_DIRECTION', "direction must be 'CREDIT' or 'DEBIT'");
+      }
+    }
+
+    const rawAmount = input.amount;
+    if (rawAmount !== undefined && rawAmount !== null) {
+      if (typeof rawAmount !== 'string' || !/^[1-9]\d*(\.\d{1,2})?$/.test(rawAmount.trim())) {
+        throw new DomainException(400, 'INVALID_AMOUNT', 'amount must be a positive integer or decimal string');
+      }
+      const intDigits = rawAmount.trim().split('.')[0];
+      if (intDigits.length > 18 || BigInt(intDigits) > 999_999_999_999_999_999n) {
+        throw new DomainException(400, 'INVALID_AMOUNT', 'amount is out of range');
+      }
+    }
+
+    const rawReferenceId = input.referenceId;
+    let effectiveReferenceId = `adjust-anomaly-${anomalyIdStr}`;
+    if (rawReferenceId !== undefined && rawReferenceId !== null) {
+      if (typeof rawReferenceId !== 'string' || rawReferenceId.trim().length === 0) {
+        throw new DomainException(400, 'INVALID_REFERENCE_ID', 'referenceId must be a non-empty string');
+      }
+      if (rawReferenceId.trim().length > 255) {
+        throw new DomainException(400, 'INVALID_REFERENCE_ID', 'referenceId must not exceed 255 characters');
+      }
+      effectiveReferenceId = rawReferenceId.trim();
     }
 
     let bigIntId: bigint;
@@ -321,7 +418,8 @@ export class ReconciliationService {
         event: 'ANOMALY_ADJUST_START',
         anomalyId: anomalyIdStr,
         adminId,
-        reason: reason.trim().substring(0, 100),
+        reason: trimmedReason.substring(0, 100),
+        referenceId: effectiveReferenceId,
       })
     );
 
@@ -347,13 +445,23 @@ export class ReconciliationService {
             const existingAdj = await tx.anomalyAdjustment.findUnique({
               where: { anomalyId: bigIntId },
             });
+            if (rawReferenceId && existingAdj && existingAdj.referenceId !== rawReferenceId.trim()) {
+              throw new DomainException(
+                409,
+                'ALREADY_ADJUSTED',
+                'This anomaly has already been adjusted with a different referenceId'
+              );
+            }
             return {
               anomalyId: anomaly.id.toString(),
               status: 'RESOLVED',
               walletId: anomaly.walletId,
               delta: existingAdj ? existingAdj.delta.toFixed(2) : (anomaly.difference?.toString() ?? '0.00'),
+              expectedBalance: anomaly.expected?.toString() ?? '0.00',
+              actualBalance: anomaly.expected?.toString() ?? '0.00',
               replayed: true,
               transactionId: null,
+              referenceId: existingAdj?.referenceId ?? anomaly.adjustmentReferenceId ?? effectiveReferenceId,
               adjustment: existingAdj
                 ? {
                     id: existingAdj.id.toString(),
@@ -410,6 +518,31 @@ export class ReconciliationService {
           const currentBalance = new Prisma.Decimal(wallet.balance.toString());
           const delta = currentBalance.minus(expectedBalance);
 
+          // Kiểm tra tính tương thích ngữ nghĩa của direction và amount nếu được truyền vào
+          const requiredDirection = delta.greaterThan(0) ? 'DEBIT' : 'CREDIT';
+          const requiredAmount = delta.abs();
+
+          if (rawDirection) {
+            if (rawDirection !== requiredDirection) {
+              throw new DomainException(
+                400,
+                'DIRECTION_MISMATCH',
+                `Adjustment direction '${rawDirection}' does not match required direction '${requiredDirection}' to resolve balance drift`
+              );
+            }
+          }
+
+          if (rawAmount) {
+            const parsedAmount = new Prisma.Decimal(rawAmount.trim());
+            if (!parsedAmount.equals(requiredAmount)) {
+              throw new DomainException(
+                400,
+                'AMOUNT_MISMATCH',
+                `Adjustment amount '${rawAmount.trim()}' does not match required drift amount '${requiredAmount.toFixed(2)}'`
+              );
+            }
+          }
+
           // 6. Đồng bộ Wallet.balance về số dư sổ cái (TUYỆT ĐỐI không sửa/xóa LedgerEntry)
           await tx.wallet.update({
             where: { id: wallet.id },
@@ -420,7 +553,6 @@ export class ReconciliationService {
 
           // 7. Cập nhật Anomaly sang trạng thái RESOLVED
           const now = new Date();
-          const referenceId = `adjust_${anomaly.id}`;
 
           await tx.reconciliationAnomaly.update({
             where: { id: bigIntId },
@@ -428,8 +560,8 @@ export class ReconciliationService {
               status: 'RESOLVED',
               resolvedAt: now,
               resolvedBy: adminId,
-              resolutionNote: reason.trim(),
-              adjustmentReferenceId: referenceId,
+              resolutionNote: trimmedReason,
+              adjustmentReferenceId: effectiveReferenceId,
             },
           });
 
@@ -439,9 +571,9 @@ export class ReconciliationService {
               anomalyId: bigIntId,
               walletId: wallet.id,
               delta,
-              reason: reason.trim(),
+              reason: trimmedReason,
               adminId,
-              referenceId,
+              referenceId: effectiveReferenceId,
               createdAt: now,
             },
           });
@@ -455,6 +587,7 @@ export class ReconciliationService {
             actualBalance: expectedBalance.toFixed(2),
             replayed: false,
             transactionId: null,
+            referenceId: effectiveReferenceId,
             adjustment: {
               id: adjustment.id.toString(),
               anomalyId: adjustment.anomalyId.toString(),
@@ -477,6 +610,7 @@ export class ReconciliationService {
           walletId: result.walletId,
           delta: result.delta,
           replayed: result.replayed,
+          referenceId: result.referenceId,
           adminId,
         })
       );

@@ -116,4 +116,3 @@ if (require.main === module) {
   try { initialize(); console.log('Run: docker compose up -d --build --wait') }
   catch (error) { console.error(error.message); process.exitCode = 1 }
 }
-

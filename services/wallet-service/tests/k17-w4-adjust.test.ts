@@ -59,7 +59,7 @@ test('K17-4: W4 Phân quyền - 401 khi thiếu token, 403 khi USER, 404 khi kh�
   }
 });
 
-test('K17-4: W4 Ràng buộc lý do - Thiếu, rỗng, chỉ khoảng trắng hoặc dưới 10 ký tự đều trả 400 REASON_REQUIRED', async () => {
+test('K17-4: W4 Ràng buộc lý do - Thiếu, rỗng, chỉ khoảng trắng hoặc dưới 5 ký tự trả 400 REASON_REQUIRED; trên 500 ký tự trả 400 INVALID_REASON', async () => {
   const appModule = await import('../src/app');
   const app = appModule.default;
   const server = app.listen(0);
@@ -71,8 +71,8 @@ test('K17-4: W4 Ràng buộc lý do - Thiếu, rỗng, chỉ khoảng trắng ho
       {},
       { reason: '' },
       { reason: '         ' },
-      { reason: 'quá ngắn' }, // 8 ký tự
-      { reason: '123456789' }, // 9 ký tự
+      { reason: 'quá' }, // 3 ký tự
+      { reason: 'abcd' }, // 4 ký tự
     ];
 
     for (const body of invalidBodies) {
@@ -87,6 +87,91 @@ test('K17-4: W4 Ràng buộc lý do - Thiếu, rỗng, chỉ khoảng trắng ho
       assert.equal(res.status, 400, `Body ${JSON.stringify(body)} phải trả 400`);
       const json = await res.json();
       assert.equal(json.error.code, 'REASON_REQUIRED');
+    }
+
+    // Kiểm tra biên 501 ký tự -> 400 INVALID_REASON
+    const resOver500 = await fetch(`${baseUrl}/api/wallets/admin/reconciliation/anomalies/1/adjust`, {
+      method: 'POST',
+      headers: {
+        'x-gateway-token': adminToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ reason: 'a'.repeat(501) }),
+    });
+    assert.equal(resOver500.status, 400);
+    const jsonOver500 = await resOver500.json();
+    assert.equal(jsonOver500.error.code, 'INVALID_REASON');
+
+    // Các giá trị biên hợp lệ (5, 9, 10, 500 ký tự) không bị lỗi REASON_REQUIRED/INVALID_REASON
+    // (chúng sẽ đi qua bước kiểm tra reason và chạm tới bước kiểm tra anomaly 404 ANOMALY_NOT_FOUND)
+    const validBoundaries = [
+      '12345',            // 5 ký tự (biên dưới)
+      '123456789',        // 9 ký tự (trước đây bị chặn >= 10, nay hợp lệ theo contract 5-500)
+      '1234567890',       // 10 ký tự
+      'a'.repeat(500),    // 500 ký tự (biên trên)
+    ];
+
+    for (const reason of validBoundaries) {
+      const res = await fetch(`${baseUrl}/api/wallets/admin/reconciliation/anomalies/99999999/adjust`, {
+        method: 'POST',
+        headers: {
+          'x-gateway-token': adminToken(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ reason }),
+      });
+      assert.equal(res.status, 404, `Reason độ dài ${reason.length} phải qua bước validate lý do và trả 404`);
+      const json = await res.json();
+      assert.equal(json.error.code, 'ANOMALY_NOT_FOUND');
+    }
+  } finally {
+    server.close();
+  }
+});
+
+test('K17-4: W4 Ràng buộc direction và amount - Kiểm tra cú pháp hợp lệ', async () => {
+  const appModule = await import('../src/app');
+  const app = appModule.default;
+  const server = app.listen(0);
+  const address = server.address() as any;
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    // 1. Direction không hợp lệ -> 400 INVALID_DIRECTION
+    for (const badDir of ['UP', 'DOWN', 'credit', 'debit', '123']) {
+      const res = await fetch(`${baseUrl}/api/wallets/admin/reconciliation/anomalies/1/adjust`, {
+        method: 'POST',
+        headers: {
+          'x-gateway-token': adminToken(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          reason: 'Lý do hợp lệ để test direction',
+          direction: badDir,
+        }),
+      });
+      assert.equal(res.status, 400);
+      const json = await res.json();
+      assert.equal(json.error.code, 'INVALID_DIRECTION');
+    }
+
+    // 2. Amount không hợp lệ -> 400 INVALID_AMOUNT
+    for (const badAmount of ['0', '-100', 'abc', 50000, '10.999']) {
+      const res = await fetch(`${baseUrl}/api/wallets/admin/reconciliation/anomalies/1/adjust`, {
+        method: 'POST',
+        headers: {
+          'x-gateway-token': adminToken(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          reason: 'Lý do hợp lệ để test amount',
+          direction: 'CREDIT',
+          amount: badAmount,
+        }),
+      });
+      assert.equal(res.status, 400);
+      const json = await res.json();
+      assert.equal(json.error.code, 'INVALID_AMOUNT');
     }
   } finally {
     server.close();
@@ -203,7 +288,49 @@ test('K17-4: W4 Điều chỉnh thành công BALANCE_DRIFT: ví về số dư k�
   const ledgerEntriesBefore = await prisma.ledgerEntry.findMany({ where: { walletId: wallet.id } });
 
   try {
-    // 4. Gọi W4 điều chỉnh bất thường
+    // 4.1. Kiểm tra mismatch semantic direction và amount trước khi điều chỉnh thành công
+    // 4.1a. Drift là +150.000đ (thực tế > sổ cái -> cần DEBIT), nếu gửi CREDIT -> 400 DIRECTION_MISMATCH
+    const dirMismatchRes = await fetch(
+      `${baseUrl}/api/wallets/admin/reconciliation/anomalies/${driftAnomaly.id}/adjust`,
+      {
+        method: 'POST',
+        headers: {
+          'x-gateway-token': adminToken(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          direction: 'CREDIT',
+          amount: '150000',
+          reason: 'Gửi sai hướng điều chỉnh',
+        }),
+      }
+    );
+    assert.equal(dirMismatchRes.status, 400);
+    const dirMismatchJson = await dirMismatchRes.json();
+    assert.equal(dirMismatchJson.error.code, 'DIRECTION_MISMATCH');
+
+    // 4.1b. Gửi sai số tiền (100.000 thay vì 150.000) -> 400 AMOUNT_MISMATCH
+    const amtMismatchRes = await fetch(
+      `${baseUrl}/api/wallets/admin/reconciliation/anomalies/${driftAnomaly.id}/adjust`,
+      {
+        method: 'POST',
+        headers: {
+          'x-gateway-token': adminToken(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          direction: 'DEBIT',
+          amount: '100000',
+          reason: 'Gửi sai số tiền cần điều chỉnh',
+        }),
+      }
+    );
+    assert.equal(amtMismatchRes.status, 400);
+    const amtMismatchJson = await amtMismatchRes.json();
+    assert.equal(amtMismatchJson.error.code, 'AMOUNT_MISMATCH');
+
+    // 4.2. Gọi W4 điều chỉnh bất thường chuẩn theo contract Admin (đầy đủ direction, amount, referenceId, reason)
+    const expectedRefId = `adjust-anomaly-${driftAnomaly.id}`;
     const adjustRes = await fetch(
       `${baseUrl}/api/wallets/admin/reconciliation/anomalies/${driftAnomaly.id}/adjust`,
       {
@@ -213,7 +340,10 @@ test('K17-4: W4 Điều chỉnh thành công BALANCE_DRIFT: ví về số dư k�
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          direction: 'DEBIT',
+          amount: '150000',
           reason: 'Đồng bộ lại số dư ví theo số liệu sổ cái kiểm toán',
+          referenceId: expectedRefId,
         }),
       }
     );
@@ -222,12 +352,15 @@ test('K17-4: W4 Điều chỉnh thành công BALANCE_DRIFT: ví về số dư k�
     assert.equal(adjustJson.success, true);
     assert.equal(adjustJson.data.status, 'RESOLVED');
     assert.equal(adjustJson.data.replayed, false);
+    assert.equal(adjustJson.data.transactionId, null);
+    assert.equal(adjustJson.data.referenceId, expectedRefId);
     assert.equal(adjustJson.data.walletId, wallet.id);
     assert.equal(adjustJson.data.expectedBalance, '200000.00');
     assert.equal(adjustJson.data.actualBalance, '200000.00');
     assert.equal(adjustJson.data.delta, '150000.00');
     assert.ok(adjustJson.data.adjustment);
     assert.equal(adjustJson.data.adjustment.adminId, ADMIN_ID);
+    assert.equal(adjustJson.data.adjustment.referenceId, expectedRefId);
 
     // 5. Kiểm tra ví: balance đã về đúng 200000.00
     const walletAfter = await prisma.wallet.findUniqueOrThrow({ where: { id: wallet.id } });
@@ -240,7 +373,7 @@ test('K17-4: W4 Điều chỉnh thành công BALANCE_DRIFT: ví về số dư k�
     assert.equal(anomalyInDb.status, 'RESOLVED');
     assert.equal(anomalyInDb.resolvedBy, ADMIN_ID);
     assert.ok(anomalyInDb.resolvedAt);
-    assert.equal(anomalyInDb.adjustmentReferenceId, `adjust_${driftAnomaly.id}`);
+    assert.equal(anomalyInDb.adjustmentReferenceId, expectedRefId);
 
     // 7. Kiểm tra AnomalyAdjustment trong DB
     const adjInDb = await prisma.anomalyAdjustment.findUniqueOrThrow({
@@ -248,7 +381,7 @@ test('K17-4: W4 Điều chỉnh thành công BALANCE_DRIFT: ví về số dư k�
     });
     assert.equal(adjInDb.walletId, wallet.id);
     assert.equal(adjInDb.delta.toFixed(2), '150000.00');
-    assert.equal(adjInDb.referenceId, `adjust_${driftAnomaly.id}`);
+    assert.equal(adjInDb.referenceId, expectedRefId);
 
     // 8. TUYỆT ĐỐI không có LedgerEntry nào bị UPDATE/DELETE/INSERT
     const ledgerCountAfter = await prisma.ledgerEntry.count({ where: { walletId: wallet.id } });
@@ -265,7 +398,7 @@ test('K17-4: W4 Điều chỉnh thành công BALANCE_DRIFT: ví về số dư k�
     const driftRescan = rescanJson.data.anomalies.find((a: any) => a.walletId === wallet.id);
     assert.equal(driftRescan, undefined, 'Đối soát lại sạch, không còn thấy anomaly trên ví');
 
-    // 10. Idempotency: Gọi lại cùng anomalyId -> trả kết quả cũ (replayed = true), không đổi số dư lần 2
+    // 10. Idempotency: Gọi lại cùng anomalyId và cùng referenceId -> trả kết quả cũ (replayed = true), không đổi số dư lần 2
     const replayRes = await fetch(
       `${baseUrl}/api/wallets/admin/reconciliation/anomalies/${driftAnomaly.id}/adjust`,
       {
@@ -275,7 +408,10 @@ test('K17-4: W4 Điều chỉnh thành công BALANCE_DRIFT: ví về số dư k�
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          direction: 'DEBIT',
+          amount: '150000',
           reason: 'Đồng bộ lại số dư ví theo số liệu sổ cái kiểm toán (gọi lại)',
+          referenceId: expectedRefId,
         }),
       }
     );
@@ -284,6 +420,8 @@ test('K17-4: W4 Điều chỉnh thành công BALANCE_DRIFT: ví về số dư k�
     assert.equal(replayJson.success, true);
     assert.equal(replayJson.data.replayed, true);
     assert.equal(replayJson.data.status, 'RESOLVED');
+    assert.equal(replayJson.data.transactionId, null);
+    assert.equal(replayJson.data.referenceId, expectedRefId);
 
     const walletAfterReplay = await prisma.wallet.findUniqueOrThrow({ where: { id: wallet.id } });
     assert.equal(walletAfterReplay.balance.toFixed(2), '200000.00', 'Số dư ví vẫn giữ nguyên');
@@ -291,6 +429,27 @@ test('K17-4: W4 Điều chỉnh thành công BALANCE_DRIFT: ví về số dư k�
       where: { anomalyId: BigInt(driftAnomaly.id) },
     });
     assert.equal(adjCount, 1, 'Không ghi thêm bản ghi điều chỉnh thứ hai');
+
+    // 11. Gọi lại với referenceId KHÁC trên anomaly đã RESOLVED -> 409 ALREADY_ADJUSTED
+    const diffRefRes = await fetch(
+      `${baseUrl}/api/wallets/admin/reconciliation/anomalies/${driftAnomaly.id}/adjust`,
+      {
+        method: 'POST',
+        headers: {
+          'x-gateway-token': adminToken(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          direction: 'DEBIT',
+          amount: '150000',
+          reason: 'Cố ý gửi referenceId khác',
+          referenceId: 'different-reference-id-12345',
+        }),
+      }
+    );
+    assert.equal(diffRefRes.status, 409);
+    const diffRefJson = await diffRefRes.json();
+    assert.equal(diffRefJson.error.code, 'ALREADY_ADJUSTED');
   } finally {
     await prisma.anomalyAdjustment.deleteMany({ where: { walletId: wallet.id } });
     await prisma.reconciliationAnomaly.deleteMany({ where: { walletId: wallet.id } });
