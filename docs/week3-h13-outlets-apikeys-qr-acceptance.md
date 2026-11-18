@@ -60,7 +60,7 @@ Các route cũ trước đây chưa có contract cũng đã được bổ sung �
 ## 4. Ghi chú thiết kế đã chốt
 
 - **Canonical QR** (pipe-delimited, có version): `1|<merchantId>|<outletId>|<outletCode>|<issuedAt>`; `token = base64url(canonical) + "." + base64url(HMAC-SHA256)`. Vì `code` bị ràng buộc `^[A-Za-z0-9_-]+$`, không field nào chứa `|` nên biên field luôn rõ ràng — không dựa vào escaping.
-- **Khóa ký** là `MERCHANT_QR_SECRET` (secret hệ thống riêng, ≥32 ký tự) đi qua `*_FILE` Docker secret; **không** dùng API key merchant. Đã nối: `scripts/init-secrets.js` → `.env`/`secrets/merchant_qr_secret.txt` (0600) → `docker-compose.yml` (`*merchant-env`, `secrets:` của `merchant-service` và `merchant-publisher`, top-level `secrets:`) → `src/config/env.ts` → `tests/setup.ts` → `tests/acceptance/week2/runtime.mjs`.
+- **Khóa ký** là `MERCHANT_QR_SECRET` (secret hệ thống riêng, ≥32 ký tự) đi qua `*_FILE` Docker secret; **không** dùng API key merchant. Đã nối: `scripts/init-secrets.cjs` → `.env`/`secrets/merchant_qr_secret.txt` (0600) → `docker-compose.yml` (`*merchant-env`, `secrets:` của `merchant-service` và `merchant-publisher`, top-level `secrets:`) → `src/config/env.ts` → `tests/setup.ts` → `tests/acceptance/week2/runtime.mjs`.
 - **Verify đặt tại** `src/services/qr.service.ts#verifyOutletQr(token, { merchantId, outletId })` — nơi checkout của Khoa phải gọi; hàm kiểm chữ ký constant-time **và** đối chiếu merchant/outlet mong đợi.
 - **`issuedAt`** là thời điểm phát, không phải hạn dùng; chính sách hết hạn (nếu có) do bên verify áp đặt.
 - **Outbox**: tạo outlet tái dùng event `merchant.profile_updated` đã được registry chấp nhận, tăng `Merchant.version` trong cùng transaction Serializable — giữ bất biến unique `(aggregateId, aggregateVersion)`. Không thêm `merchant.outlet_*` vì consumer registry chưa chấp nhận.
@@ -68,7 +68,7 @@ Các route cũ trước đây chưa có contract cũng đã được bổ sung �
 ## 5. Vấn đề phát hiện và đã sửa trong quá trình chạy
 
 - **Rò rỉ dữ liệu giữa các test file:** `tests/integration/merchant.test.ts` xoá `merchant` nhưng chưa xoá `merchant_api_keys`/`outlets`; FK `ON DELETE RESTRICT` khiến lần chạy liền sau fail với `merchant_api_keys_merchant_id_fkey`. Đã sửa hook dọn dẹp của `merchant.test.ts` để xoá api-key → outlet → outbox → merchant. Đây là lỗi cô lập test thật, không phải lỗi nghiệp vụ.
-- **Secret thiếu trên máy:** `docker compose up` sẽ fail vì `secrets/merchant_qr_secret.txt` chưa tồn tại. Đã chạy `node scripts/init-secrets.js` (giữ nguyên mọi credential cũ, chỉ thêm secret mới); xác nhận file 64 hex, khớp giá trị trong `.env`, các secret cũ không đổi.
+- **Secret thiếu trên máy:** `docker compose up` sẽ fail vì `secrets/merchant_qr_secret.txt` chưa tồn tại. Đã chạy `node scripts/init-secrets.cjs` (giữ nguyên mọi credential cũ, chỉ thêm secret mới); xác nhận file 64 hex, khớp giá trị trong `.env`, các secret cũ không đổi.
 
 ## 6. Nghiệm thu trên Compose cô lập (kế hoạch §10)
 

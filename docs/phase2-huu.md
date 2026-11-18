@@ -45,7 +45,7 @@ trên RabbitMQ thật. Không tuyên bố đã cập nhật tier của Wallet.
 
 ## B2
 
-`node scripts/init-secrets.js` giữ nguyên credential hiện có, tạo thêm
+`node scripts/init-secrets.cjs` giữ nguyên credential hiện có, tạo thêm
 `secrets/internal_key.txt`, `secrets/access_token_secret.txt` và SQL khởi tạo
 `secrets/init-db.sql` từ template `init-db.sql`. Password trong SQL lấy từ mật
 khẩu đã sinh, escape dấu nháy; file có credential nằm trong thư mục bị Git bỏ qua.

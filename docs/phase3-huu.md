@@ -79,7 +79,7 @@ rtk npm run typecheck
 Từ root, kiểm tra project `finvault-full-check` chạy từ Compose chính:
 
 ```powershell
-rtk proxy node scripts/init-secrets.js
+rtk proxy node scripts/init-secrets.cjs
 rtk proxy docker compose -p finvault-full-check up -d --build --wait --wait-timeout 180
 rtk proxy node tests/deployment/huu-smoke.mjs
 ```

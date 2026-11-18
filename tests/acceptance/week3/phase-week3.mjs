@@ -83,7 +83,7 @@ export async function runWeek3() {
 
   // The synthetic VNPAY terminal must exist before containers are created: the
   // Compose environment section reads VNP_TMN_CODE at container-create time and
-  // scripts/init-secrets.js intentionally does not generate one.
+  // scripts/init-secrets.cjs intentionally does not generate one.
   const envPath = resolve(ctx.directory, '.env')
   const envText = readFileSync(envPath, 'utf8')
   const patched = /^VNP_TMN_CODE=.*$/m.test(envText)

@@ -96,7 +96,7 @@ function initialize(root = path.resolve(__dirname, '..')) {
     const pair = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1',
       privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } })
     fs.writeFileSync(txnPrivate, pair.privateKey, { mode: 0o600, flag: 'wx' })
-    fs.writeFileSync(txnPublic, pair.publicKey)
+    fs.writeFileSync(txnPublic, pair.publicKey, { flag: 'wx' })
   }
   const txnKey = crypto.createPrivateKey(fs.readFileSync(txnPrivate))
   if (txnKey.asymmetricKeyType !== 'ec' || txnKey.asymmetricKeyDetails?.namedCurve !== 'prime256v1' ||

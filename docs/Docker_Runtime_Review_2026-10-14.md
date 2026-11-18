@@ -7,7 +7,7 @@ Các lỗi cấu hình chung từng ghi là “cần Đạt xử lý” đã đ�
 - Compose: bỏ khóa `secrets` trùng ở Gateway; sửa build context User/Notification; đưa migration, worker và service vào cùng mạng; bổ sung public key, URL database, S3 và healthcheck. Gateway chờ các API healthy.
 - PostgreSQL chờ sẵn sàng; RabbitMQ kiểm tra cả listener để tránh broker-init chạy trước khi cổng AMQP mở. Wallet/Payment có endpoint `/health`.
 - MinIO chạy đúng server, dùng volume riêng; `storage-init` tạo bucket private và account giới hạn prefix `kyc/`. Script shell giữ LF trên Windows.
-- `init-secrets.js` tạo credentials ngẫu nhiên và cặp ES256 P-256, giữ cấu hình hợp lệ khi chạy lại, phát hiện mật khẩu/cặp khóa mâu thuẫn và sao lưu khóa dev mẫu trước khi thay thế. Secret được loại khỏi Git/build context.
+- `init-secrets.cjs` tạo credentials ngẫu nhiên và cặp ES256 P-256, giữ cấu hình hợp lệ khi chạy lại, phát hiện mật khẩu/cặp khóa mâu thuẫn và sao lưu khóa dev mẫu trước khi thay thế. Secret được loại khỏi Git/build context.
 - Admin Dockerfile cài đủ dependency để build thư viện chung; Docker ignore của Auth tránh đưa node_modules trên host vào image.
 - Gateway không gắn khóa nội bộ vào request của client. Notification xác thực token ES256 qua thư viện chung thay cho marker tĩnh; route nội bộ vẫn dùng khóa service. Đã bỏ guard cũ khiến request Gateway hợp lệ bị trả 401.
 - README dùng script nghiệm thu có thật; tài liệu đợt đầu đã được đánh dấu là lịch sử.

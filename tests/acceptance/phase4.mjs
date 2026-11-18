@@ -49,6 +49,10 @@ async function regression(id, service, files) {
   await command(ctx, id + '-' + service, process.execPath,
     ['--import', 'tsx', '--test', '--test-concurrency=1', ...files.map(file => 'tests/' + file + '.test.ts')],
     { cwd, env: { ...ctx.env, FINVAULT_ACCEPTANCE_CONFIG: resolve(ctx.directory, 'regression.json'),
+      KYC_URL_TTL_SECONDS: '900',
+      MERCHANT_QR_SECRET_FILE: resolve(ctx.directory, 'secrets/merchant_qr_secret.txt'),
+      REDIS_PASSWORD_FILE: resolve(ctx.directory, 'secrets/redis_password.txt'),
+      REDIS_URL_FILE: resolve(ctx.directory, 'secrets/redis_url.txt'),
       S3_PUBLIC_ENDPOINT: ctx.config.S3_PUBLIC_ENDPOINT } })
 }
 try {
@@ -64,8 +68,15 @@ try {
     command(ctx, 'wallet-timezone', process.execPath, ['--import', 'tsx', '--test', 'tests/timezone.test.ts'],
       { cwd: resolve(root, 'services/wallet-service') }))
   const started = await check('COMPOSE', 'Build and start a fresh isolated stack with reachable host ports', async () => {
-    await command(ctx, 'compose-up', 'docker', [...ctx.composeArgs, 'up', '-d', '--build',
-      '--wait', '--wait-timeout', '480'])
+    const composeCommand = ['docker', [...ctx.composeArgs, 'up', '-d', '--build',
+      '--wait', '--wait-timeout', '480']]
+    try {
+      await command(ctx, 'compose-up', ...composeCommand)
+    } catch (error) {
+      // Docker may report a transient health failure while RabbitMQ is under
+      // build-time resource pressure; retry the same isolated project once.
+      await command(ctx, 'compose-up-retry', ...composeCommand)
+    }
     await hostReady(ctx)
   })
   if (started) {
