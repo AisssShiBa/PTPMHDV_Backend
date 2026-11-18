@@ -40,13 +40,13 @@ function Write-Warn {
 
 # 1. Khoi tao Secrets va .env
 Write-Step "BUOC 1: Kiem tra cau hinh Secrets va .env"
-if (Test-Path (Join-Path $BackendDir "scripts\init-secrets.js")) {
+if (Test-Path (Join-Path $BackendDir "scripts\init-secrets.cjs")) {
     Push-Location $BackendDir
     try {
-        node scripts/init-secrets.js
+        node scripts/init-secrets.cjs
         Write-Success "Da tao hoac kiem tra .env va khoa ES256 thanh cong."
     } catch {
-        Write-Warn "init-secrets.js gap loi: $_"
+        Write-Warn "init-secrets.cjs gap loi: $_"
     } finally {
         Pop-Location
     }

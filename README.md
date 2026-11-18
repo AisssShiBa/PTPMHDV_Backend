@@ -31,7 +31,7 @@ Dùng Node.js 22 trở lên và Docker Compose. Cụm gồm 8 API (Gateway và 7
 ### 🔹 Bước 1: Khởi tạo Bí mật & Biến môi trường
 Mở Terminal tại thư mục `Backend/` và chạy lệnh:
 ```bash
-node scripts/init-secrets.js
+node scripts/init-secrets.cjs
 ```
 Script tạo `.env`, mật khẩu ngẫu nhiên cho Postgres/RabbitMQ/Redis và cặp khóa ES256 mới trong `secrets/`. Chạy lại giữ nguyên credentials và kiểm tra cặp khóa. Mật khẩu Redis được ghi vào `secrets/redis_password.txt` và export thành `REDIS_URL`.
 
@@ -199,7 +199,7 @@ Kịch bản `tests/deployment/full-smoke.mjs` kiểm chứng cụm thật từ 
 ```bash
 npm ci --prefix packages/finvault-internal-auth
 npm ci --prefix services/user-service
-node scripts/init-secrets.js
+node scripts/init-secrets.cjs
 docker compose -p finvault-full-check up -d --build --wait --wait-timeout 180
 node tests/deployment/full-smoke.mjs
 ```

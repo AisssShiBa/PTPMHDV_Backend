@@ -24,14 +24,14 @@ Package build ra JavaScript/declaration trong `dist`; dependency local cần pac
 ## Compose chính
 
 ```powershell
-rtk proxy node scripts/init-secrets.js
+rtk proxy node scripts/init-secrets.cjs
 rtk proxy docker compose config --quiet
 rtk proxy docker compose up -d --build --wait --wait-timeout 180
 ```
 
 Script tạo key/credential cục bộ khi chưa tồn tại, không ghi đè credential đã có. Với môi trường đang dùng volume RabbitMQ/MinIO cũ, cấu hình credential phù hợp với volume hiện tại trước khi chạy; không xóa volume để xử lý lỗi xác thực. Môi trường thật dùng secret manager và quy trình triển khai của nhóm.
 
-Quick Start dùng `.env` và `secrets/`. `prepare-deployment.mjs` cùng `.cache/deployment/runtime.env` chỉ dành cho bộ kiểm chứng image biệt lập bên dưới. Khóa dev mẫu được `init-secrets.js` sao lưu và thay bằng khóa mới để các service production chấp nhận.
+Quick Start dùng `.env` và `secrets/`. `prepare-deployment.mjs` cùng `.cache/deployment/runtime.env` chỉ dành cho bộ kiểm chứng image biệt lập bên dưới. Khóa dev mẫu được `init-secrets.cjs` sao lưu và thay bằng khóa mới để các service production chấp nhận.
 
 User/Merchant migration là job riêng; HTTP và worker chờ migration thành công. Consumer/publisher là container riêng. Bucket private; account S3 của User chỉ có ListBucket prefix `kyc/` và Get/Put/DeleteObject trong prefix này. `S3_ENDPOINT` phục vụ truy cập nội bộ; `S3_PUBLIC_ENDPOINT` dùng lúc ký URL để browser đọc được (mặc định `http://localhost:19002`). Không thay hostname sau khi ký.
 

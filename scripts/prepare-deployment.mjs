@@ -33,4 +33,4 @@ writeFileSync(resolve(directory, 'init-db.sql'), readFileSync(resolve(root, 'ini
   .replaceAll('{{DB_ROLE_PASSWORD}}', randomBytes(32).toString('hex')), { mode: 0o600 })
 if (!config.RABBITMQ_URL) appendFileSync(env, '\nRABBITMQ_URL=amqp://' +
   encodeURIComponent(config.RABBITMQ_USER) + ':' + encodeURIComponent(config.RABBITMQ_PASS) + '@rabbitmq:5672\n')
-console.log('Isolated runtime-test configuration ready in .cache/deployment; existing credentials preserved. Main Quick Start uses node scripts/init-secrets.js.')
+console.log('Isolated runtime-test configuration ready in .cache/deployment; existing credentials preserved. Main Quick Start uses node scripts/init-secrets.cjs.')

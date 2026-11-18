@@ -19,7 +19,7 @@ npm run build
 npm start
 ```
 
-Cấu hình service: `DATABASE_URL`, `INTERNAL_KEY` (ít nhất 32 ký tự), `MERCHANT_QR_SECRET` (ít nhất 32 ký tự, khóa HMAC riêng của hệ thống để ký QR outlet), `PORT`, `CLIENT_URL`. Production cần `GATEWAY_PUBLIC_KEY_FILE` hoặc `GATEWAY_PUBLIC_KEY`, và `MERCHANT_QR_SECRET_FILE` thay vì giá trị inline. User/Merchant không đọc access-token secret. Sinh secret bằng `node ../../scripts/init-secrets.js` (ghi `.env` và `secrets/merchant_qr_secret.txt`, quyền 0600); thiếu file secret thì service dừng khi khởi động.
+Cấu hình service: `DATABASE_URL`, `INTERNAL_KEY` (ít nhất 32 ký tự), `MERCHANT_QR_SECRET` (ít nhất 32 ký tự, khóa HMAC riêng của hệ thống để ký QR outlet), `PORT`, `CLIENT_URL`. Production cần `GATEWAY_PUBLIC_KEY_FILE` hoặc `GATEWAY_PUBLIC_KEY`, và `MERCHANT_QR_SECRET_FILE` thay vì giá trị inline. User/Merchant không đọc access-token secret. Sinh secret bằng `node ../../scripts/init-secrets.cjs` (ghi `.env` và `secrets/merchant_qr_secret.txt`, quyền 0600); thiếu file secret thì service dừng khi khởi động.
 
 Migration thêm unique `ownerId`, `version`, bảng `merchant_outbox_events`. Một chủ chỉ có một merchant, kể cả hồ sơ đã soft delete. Migration dừng và báo lỗi khi có owner trùng; không tự xóa/ghép dữ liệu. Kiểm tra trước khi áp dụng:
 
