@@ -48,12 +48,15 @@ export const initQr = asyncHandler(async (_req: Request, res: Response): Promise
  */
 export const getQrStatus = asyncHandler(async (req: Request, res: Response): Promise<Response> => {
   const qrId = req.params.id
+  if (typeof qrId !== 'string' || !qrId.trim()) {
+    throw new AppError(400, 'BAD_REQUEST', 'Mã QR không hợp lệ')
+  }
 
   // Đọc pollSecret từ Header x-poll-secret hoặc Query parameter ?pollSecret=...
   const pollSecret = (
     req.headers['x-poll-secret'] ||
     req.query.pollSecret
-  ) as string | undefined
+  )
 
   if (!pollSecret || typeof pollSecret !== 'string') {
     throw new AppError(400, 'BAD_REQUEST', 'Thiếu pollSecret để kiểm tra trạng thái mã QR')
