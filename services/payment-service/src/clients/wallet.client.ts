@@ -17,6 +17,13 @@ export class WalletClient {
     this.baseUrl = process.env.WALLET_SERVICE_URL || 'http://wallet-service:3004';
   }
 
+  // Gọi HTTP POST với định tuyến động và Header bảo mật:
+  // - action: 
+  //    + hold -> /api/wallets/{userId}/hold.
+  //    + capture -> /api/wallets/{userId}/capture.
+  //    + release -> /api/wallets/{userId}/release.
+  // - header x-internal-key để xác thực.
+  // - giới hạn thời gian chờ: 5s, tránh trường hợp bị treo mạng.
   private async request(userId: string, action: string, body: unknown) {
     let response: Response;
     try {
@@ -24,7 +31,10 @@ export class WalletClient {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-internal-key': getInternalKey() },
         body: JSON.stringify(body), signal: AbortSignal.timeout(5000)
       });
-    } catch { throw new DomainException(503, 'WALLET_UNAVAILABLE', 'Wallet temporarily unavailable'); }
+    } catch { 
+      // Báo lỗi không gọi được wallet-service để P2pSerive có thể gọi lại (retry)
+      throw new DomainException(503, 'WALLET_UNAVAILABLE', 'Wallet temporarily unavailable'); 
+    }
     const json = await response.json().catch(() => ({}));
     if (!response.ok) {
       const { code, message, details, ...metadata } = json.error || {};
