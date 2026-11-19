@@ -1,9 +1,14 @@
-# BÁO CÁO REVIEW CHÉO K16 VÀ SỬA LỖI TÍCH HỢP (K21)
+# BÁO CÁO REVIEW CHÉO K16 VÀ SỬA LỖI TÍCH HỢP (K22 / ÁNH XẠ K21)
 
-> **Mã nhiệm vụ:** K21 – Review chéo K16 và sửa lỗi tích hợp Payment / Wallet  
-> **Nhánh thực hiện:** `feat/k21-k16-review`  
-> **Thời điểm bắt đầu:** 2026-11-11  
-> **Reviewer:** Antigravity Independent Reviewer  
+> **Mã nhiệm vụ hiện tại:** K22 – Review chéo K16 và biên giao dịch DB/HTTP  
+> **Ánh xạ lịch sử (Mapping):** Báo cáo này ban đầu được soạn thảo dưới mã K21 trong giai đoạn draft. Theo bảng phân chia nhiệm vụ mới:
+> - **K21:** Nghiệm thu A1/A2/A8/A9 và rollback migration K12 (Đã hoàn tất tại commit `cd4f6bf`).
+> - **K22:** Review chéo K16 và biên giao dịch DB/HTTP (Nội dung tài liệu này, được đồng bộ với `docs/k22-review-report.md`).  
+> **Người chủ trì review (Peer Reviewer):** Khoa  
+> **Revision SHA đối chiếu:** `cd4f6bfb485e72bfa43014cc49e9814f226b1bc1` trên nhánh `feature/wallet-payment`  
+> **Thời điểm nghiệm thu mới:** 2026-11-16  
+> **Checklist tương ứng:** [docs/k16-review-checklist.md](file:///d:/PTPMHDV_Backend/docs/k16-review-checklist.md)  
+> **Báo cáo chính thức K22:** [docs/k22-review-report.md](file:///d:/PTPMHDV_Backend/docs/k22-review-report.md)  
 
 ---
 

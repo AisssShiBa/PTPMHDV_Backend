@@ -9,6 +9,7 @@ export interface RequestWithContext extends Request {
     requestId?: string
 }
 
+// Dùng để truy vết phân tán 
 export function attachRequestId(req: RequestWithContext, res: Response, next: NextFunction) {
     const incomingId = req.headers['x-request-id'] as string
     const requestId  = incomingId || randomUUID()

@@ -33,12 +33,15 @@ export class PaymentService {
     const destUserId = dto.destinationUserId || (dto.type === PaymentType.WALLET_TRANSFER ? dto.referenceId : undefined);
     const destOwnerType = dto.destinationOwnerType || (destUserId ? 'USER' : undefined);
 
+    // Kiểm loại giao dịch
     if (dto.type === PaymentType.WALLET_TRANSFER) {
+      // Kiểm tra người nhận 
       if (!destUserId) throw new DomainException(400, 'DESTINATION_REQUIRED', 'A destination wallet is required');
+      // Chuyển giao toàn bộ cho P2P checkout
       return new P2pService(this.walletClient).checkout({ ...dto, destinationUserId: destUserId, destinationOwnerType: destOwnerType });
     }
 
-    // Kiểm tra nghiệp vụ người nhận: khác người gửi, tồn tại, ví ACTIVE
+    // Kiểm tra nghiệp vụ người nhận: khác người gửi (không gửi cho chính mình), tồn tại, ví ACTIVE
     if (destUserId) {
       if (destUserId === dto.userId) {
         throw new DomainException(400, 'SELF_TRANSFER_NOT_ALLOWED', 'Không thể chuyển tiền cho chính mình');
@@ -826,6 +829,7 @@ export class PaymentService {
     idempotencyKey: string;
     note?: string;
   }) {
+    // Kiểm tra tính hợp lệ của số tiền.
     const amountNum = Number(dto.amount);
     if (isNaN(amountNum) || amountNum <= 0) {
       throw new DomainException(400, 'INVALID_AMOUNT', 'Số tiền không hợp lệ');

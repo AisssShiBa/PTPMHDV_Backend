@@ -1,7 +1,14 @@
 # BẢNG CHECKLIST REVIEW CHÉO K16: TÁCH HTTP KHỎI TRANSACTION TRONG P2PSERVICE
 
-> **Mục đích tài liệu:** Dành cho kỹ sư Review chéo (Peer Reviewer) độc lập kiểm chứng và đối soát toàn bộ thay đổi kiến trúc của nhiệm vụ K16 trước khi hòa vào nhánh chính.
-> **Trạng thái K21:** Đã hoàn thành rà soát độc lập, mở rộng phạm vi quét toàn bộ `payment-service`, sửa lỗi môi trường test runner và nghiệm thu toàn diện (100% PASS).
+> **Mã nhiệm vụ chính thức:** K22 – Review chéo K16 và biên giao dịch DB/HTTP  
+> **Ánh xạ lịch sử (Mapping):** Nhiệm vụ này ban đầu được đánh mã tạm K21 trong bản thảo sơ bộ. Theo bảng phân công hiện tại:
+> - **K21:** Nghiệm thu A1/A2/A8/A9 và rollback migration K12 (Đã hoàn tất tại commit `cd4f6bf`).
+> - **K22:** Review chéo K16 và biên giao dịch DB/HTTP (Nội dung checklist này).  
+> **Người review chéo (Reviewer):** Khoa (Peer Reviewer)  
+> **Revision SHA đối chiếu:** `cd4f6bfb485e72bfa43014cc49e9814f226b1bc1` trên nhánh `feature/wallet-payment`  
+> **Ngày đánh giá & nghiệm thu:** 2026-11-16  
+> **Báo cáo chi tiết K22:** [docs/k22-review-report.md](file:///d:/PTPMHDV_Backend/docs/k22-review-report.md) & [docs/k21-review-report.md](file:///d:/PTPMHDV_Backend/docs/k21-review-report.md)  
+> **Trạng thái:** ĐÃ HOÀN THÀNH & ĐÃ PHÊ DUYỆT (100% PASS)  
 
 ---
 
@@ -116,18 +123,18 @@
 
 ## 3. Chữ Ký Xác Nhận Của Người Review Chéo
 
-| Vai trò | Họ và tên | Chữ ký / Trạng thái | Ngày đánh giá |
-|---|---|---|---|
-| **Tác giả refactor (Author)** | Antigravity AI Pair Programmer | *Đã hoàn tất & Đạt 100% test* | 2026-11-06 |
-| **Người review chéo (Reviewer)** | ___________________________ | ___________________________ | _____/_____/2026 |
+| Vai trò | Họ và tên | Chữ ký / Trạng thái | Ngày đánh giá | Revision SHA |
+|---|---|---|---|---|
+| **Tác giả refactor (Author)** | Antigravity AI Pair Programmer | *Đã hoàn tất & Đạt 100% test* | 2026-11-06 | `8aad8f9` / `301fe60` |
+| **Người review chéo (Reviewer)** | Khoa (Peer Reviewer K22) | **ĐÃ PHÊ DUYỆT (VERIFIED PASS)** | 2026-11-16 | `cd4f6bfb485e72bfa43014cc49e9814f226b1bc1` |
 
-**Ý kiến / Nhận xét của Reviewer:**
+**Ý kiến / Nhận xét của Reviewer (Nhiệm vụ K22):**
 ```text
-Báo cáo đánh giá độc lập K21:
-1. Đã kiểm tra tĩnh AST toàn diện trên 46 file .ts của payment-service: 0 vi phạm trên toàn bộ 29 khối transaction.
-2. Đã kiểm tra động qua GuardedWalletClient với AsyncLocalStorage trên 4 luồng: checkout, resume, expire, refund: 100% PASS.
-3. Toàn bộ 70 unit test của wallet-service và 35 test của payment-service (6 suites K16) đều xanh 100%.
-4. Bộ kịch bản nghiệm thu K20 (A1 10 lần lặp, A2) chạy thực tế trên docker compose sạch đều đạt kết quả mong đợi.
-5. Kiểm tra bảo toàn tài chính toàn hệ thống đạt Delta = 0 VND tuyệt đối, không có số dư âm hay lệch sổ cái.
-Khuyến nghị: Chấp thuận nghiệm thu và cho phép hòa nhánh feat/k21-k16-review vào nhánh chính.
+Báo cáo đánh giá độc lập K22 (đồng bộ từ bản draft K21):
+1. Đã kiểm tra tĩnh AST: Quét toàn bộ 46 file .ts của payment-service: 0 vi phạm trên toàn bộ 29 khối transaction (trong đó riêng P2pService có 9 khối transaction ngắn đã được phân tách 3 pha hoàn chỉnh).
+2. Đã kiểm tra động qua GuardedWalletClient với AsyncLocalStorage trên 4 luồng: checkout, resume, expire, refund: 100% PASS (k16-transaction-guard.test.ts 8/8 pass).
+3. Đã chạy lại toàn bộ các bộ kiểm thử runtime K16: crash-slow-wallet (8/8 pass), complete-hold (6/6 pass), resume-decoupled (6/6 pass), workflow-schema (2/2 pass).
+4. Xác nhận cơ chế lease phân tán, jti duy nhất, lookupTransaction trước khi capture giúp triệt tiêu hoàn toàn nguy cơ capture kép khi thử lại.
+5. Kiểm tra bảo toàn tài chính toàn hệ thống đạt Delta Balance = 0 VND tuyệt đối, không có số dư âm hay lệch sổ cái.
+Khuyến nghị: Chấp thuận nghiệm thu hoàn tất K22.
 ```

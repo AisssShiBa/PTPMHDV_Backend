@@ -145,14 +145,17 @@ export class WalletService {
       { walletId: wallet.id }
     ];
 
+    // Lọc theo hướng
     if (options.direction) {
       whereConditions.push({ direction: options.direction });
     }
 
+    // Lọc theo loại hình giao dịch: ALL, TRANSFER, 2P2_TRANSFER, TOPUP, WITHDRAW, PAYMENT, REFUND, ADJUSTMENT.
     if (options.type) {
       whereConditions.push({ transferType: options.type });
     }
 
+    // Lọc theo thời điểm bắt và kết thúcđầu 
     if (options.startDate || options.endDate) {
       const dateFilter: Prisma.DateTimeFilter = {};
       if (options.startDate) {
@@ -182,6 +185,7 @@ export class WalletService {
       AND: whereConditions,
     };
 
+    // Kiểm tra xem phía sau có còn bảng ghi không.
     const entries = await prisma.ledgerEntry.findMany({
       where,
       orderBy: [

@@ -67,15 +67,27 @@ export const list = async (req: Request, res: Response) => {
 };
 
 export const p2pQuote = async (req: Request, res: Response) => {
+    // Lấy userI ccủ người gửi từ req.auth do requireGateway giải mã từ x-gateway-token.
+    // Không lấy từ body để chống giả mạo.
     const senderId = req.auth!.userId;
+
     const { destinationUserId, amount } = req.body;
+
+    // Kiểm tính hợp lệ và lấy thông tin báo giá
     const result = await paymentService.p2pQuote(senderId, destinationUserId, String(amount));
+    
     res.json({ success: true, data: result });
 };
 
+// Khi người dùng bấm nút chuyển tiền P2P.
 export const p2pCheckout = async (req: Request, res: Response) => {
+    // Lấy userI ccủ người gửi từ req.auth do requireGateway giải mã từ x-gateway-token.
+    // Không lấy từ body để chống giả mạo.
     const senderId = req.auth!.userId;
+
+    // Thiết lập idempotencyKey từ Header chống trùng lặp do lỗi mạng hoặc người dùng ấn hai lần.
     const idempotencyKey = (req.headers['idempotency-key'] || req.headers['Idempotency-Key']) as string;
+    
     const { destinationUserId, destinationOwnerType, amount, note } = req.body;
 
     const { payment, replayed } = await paymentService.p2pCheckout({

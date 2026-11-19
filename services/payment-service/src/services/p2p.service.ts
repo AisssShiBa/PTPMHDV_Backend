@@ -36,16 +36,23 @@ async function finish(tx: Prisma.TransactionClient, payment: Payment, status: Pa
 export class P2pService {
   constructor(private wallet: WalletClient) {}
   async checkout(dto: Checkout) {
+    //Kiểm tra các ràng buộc nghiệp vụ: type, userId, amount.
     if (dto.type !== 'WALLET_TRANSFER') throw new DomainException(422, 'UNSUPPORTED_PAYMENT_TYPE', 'Checkout supports wallet transfers');
     if (dto.userId === dto.destinationUserId) throw new DomainException(400, 'SAME_WALLET_TRANSFER', 'Wallets must differ');
     const amount = new Prisma.Decimal(dto.amount);
     if (!amount.isInteger() || !amount.isPositive()) throw new DomainException(400, 'INVALID_AMOUNT', 'Amount must be a positive whole VND value');
     const ownerType = dto.destinationOwnerType || 'USER';
+    
     // Preserve the existing USER request hash while distinguishing other wallet owners.
+    // Tạo mã băm an toàn
+    // Gom các dữ liệu: số tiền, người nhận, loại ví => băm thành chuỗi SHA-256.
+    // Mục đích nếu người dùng gửi lại một idempotencyKey nhưng cố tính thay đổi số tiền hoặc người nhận thì hệ thoóng sẽ phát hiện.
     const hashData = [amount.toFixed(0), dto.type, dto.destinationUserId, dto.referenceId || ''];
     if (ownerType !== 'USER') hashData.push(ownerType);
     const hash = createHash('sha256').update(JSON.stringify(hashData)).digest('hex');
     let payment: Payment;
+
+    // Lưu database
     try {
       payment = await prisma.payment.create({ data: {
         userId: dto.userId, destinationUserId: dto.destinationUserId, destinationOwnerType: ownerType, amount, type: dto.type,
@@ -55,15 +62,21 @@ export class P2pService {
         histories: { create: { toStatus: 'PENDING', note: 'Checkout requested' } }
       } });
     } catch (error: any) {
+      // Không phải lỗi P2002 (trùng unique thì ném lỗi).
       if (error.code !== 'P2002') throw error;
+      // Xử lý khi bị trùng idempotencyKey.
       const previous = await prisma.payment.findUniqueOrThrow({ where: { userId_idempotencyKey: {
         userId: dto.userId, idempotencyKey: dto.idempotencyKey } } });
+      // Cùng key nhưng sửa dữ liệu.
       if (previous.requestHash !== hash) throw new DomainException(422, 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD', 'Idempotency key has a different payload');
+      // Giao dịch trước đó đã hoàn thành, không gọi trừ/ giữ tiền lần 2.
       if (previous.idempotencyStatus === 'COMPLETED') return { payment: previous, replayed: true };
+      // Giao dịch key này đã thất bại yêu cầu dùng key mới.
       if (previous.idempotencyStatus === 'FAILED') throw new DomainException(409, 'CHECKOUT_FAILED', 'Previous checkout failed; use a new key');
       payment = previous;
     }
     // The original hold ID survives ambiguous HTTP failures and process restarts.
+    // Gọi compeleteHold để tạm giữ tiền.
     const result = await this.completeHold(payment.id);
     if (result.error) throw result.error;
     return { payment: result.payment!, replayed: false };
@@ -75,8 +88,12 @@ export class P2pService {
     // ghi ý định "chuẩn bị gọi ví" (claim việc) bằng UPDATE có điều kiện, commit.
     // -------------------------------------------------------------
     const claimResult = await prisma.$transaction(async tx => {
+      // Khóa hàng không cho bất kì ai thay đổi.
       const payment = await locked(tx, id);
 
+      // Kiểm tra xem đơn đã kết thúc chưa. 
+      // FAILED: báo 409
+      // COMPLETED và IDLE: đơn đã gọi ví thành công => ALREADY_COMPLETED để không gọi giữ tiền lần 2.
       if (payment.idempotencyStatus === 'FAILED') {
         return { status: 'PREVIOUS_FAILED' as const, error: new DomainException(409, 'CHECKOUT_FAILED', 'Previous checkout failed') };
       }
@@ -84,6 +101,7 @@ export class P2pService {
         return { status: 'ALREADY_COMPLETED' as const, payment };
       }
 
+      // Tranh chấp "Nhận quyền xử lý"
       const now = new Date();
       const leaseUntil = new Date(Date.now() + 30000);
 
@@ -93,19 +111,21 @@ export class P2pService {
           status: 'PENDING',
           workflow: { in: ['HOLDING', 'HOLD_CALLING'] },
           OR: [
-            { workerLeaseUntil: null },
-            { workerLeaseUntil: { lte: now } },
-            { workflow: 'HOLDING' }
+            { workerLeaseUntil: null },         // TH1: Chưa có ai nhận xử lý.
+            { workerLeaseUntil: { lte: now } }, // TH2: Có người nhận nhưng bị crash quá 30s.
+            { workflow: 'HOLDING' }             // TH3: Đơn tạo mới.
           ]
         },
         data: {
-          workflow: 'HOLD_CALLING',
-          workerLeaseUntil: leaseUntil,
-          attempt: { increment: 1 }
+          workflow: 'HOLD_CALLING',             // Đánh dấu: "Đang gọi wallet-service", không được can thiệp. 
+          workerLeaseUntil: leaseUntil,         // Giữu tiền độc quyền trong 30s.
+          attempt: { increment: 1 }             // Tăng sô lần thử lên 1.
         }
       });
 
+      // Kiểm tra xem mình có giành được quyền hay không.
       if (updateResult.count === 0) {
+        // Không update được dòng nào => Đã có một worker khác đang xử lý đơn này!
         const current = await tx.payment.findUniqueOrThrow({ where: { id } });
         if (current.idempotencyStatus === 'COMPLETED') {
           return { status: 'ALREADY_COMPLETED' as const, payment: current };
@@ -114,14 +134,16 @@ export class P2pService {
           return { status: 'PREVIOUS_FAILED' as const, error: new DomainException(409, 'CHECKOUT_FAILED', 'Previous checkout failed') };
         }
         return { status: 'BUSY' as const, payment: current };
-      }
+      } // Worker khác đang bận gọi ví.
 
+      // Update thành công 1 dòng => Giành được quyền xử lý!
       const claimedPayment = await tx.payment.findUniqueOrThrow({ where: { id } });
       return { status: 'CLAIMED' as const, payment: claimedPayment };
     }, transactionOptions);
 
     if (claimResult.status === 'PREVIOUS_FAILED') return { error: claimResult.error };
     if (claimResult.status === 'ALREADY_COMPLETED') return { payment: claimResult.payment };
+    // Báo lỗi 503 nếu đang có worker khác xử lý đơn này.
     if (claimResult.status === 'BUSY') {
       return { error: new DomainException(503, 'WALLET_UNAVAILABLE', 'Payment checkout in progress by another worker') };
     }
@@ -132,6 +154,8 @@ export class P2pService {
 
     // -------------------------------------------------------------
     // PHA 2 (NGOÀI Transaction): Gọi ví HTTP với referenceId lũy đẳng ổn định
+    // referenceId = payment.holdId - một mã UUID được sinh ra duy nhất 1 lần ngay từ lúc tạo đơn hàng.
+    // Giúp hệ thống có thể tự do thử lại (retry) khi mạng lag/timeout mà không sợ bị trừ hay khóa tiền 2 lần.
     // -------------------------------------------------------------
     let walletOk = false;
     let deterministicError: DomainException | null = null;
@@ -150,9 +174,11 @@ export class P2pService {
     } catch (error: any) {
       const durationMs = Date.now() - startTime;
       if (error instanceof DomainException && error.status < 500) {
+        // Lỗi xác định (hết tiền, sai ví) dừng hẳn. 
         deterministicError = error;
         console.warn(`[P2pService] completeHold 4xx deterministic error for payment ${payment.id} ref=${referenceId} code=${error.code} duration=${durationMs}ms`);
       } else {
+        // Lỗi không rõ (rớt mạng) giữ trạng thái để retry.
         indeterminateError = error instanceof DomainException
           ? error
           : new DomainException(503, 'WALLET_UNAVAILABLE', 'Wallet unavailable; retry with the same key');

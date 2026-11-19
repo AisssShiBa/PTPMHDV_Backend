@@ -298,7 +298,10 @@ describe('K16-1: Transaction Guard & Acceptance Baseline Suite', () => {
 
   test('Mốc A1-P2P (Bổ sung): 20 checkout song song x 60k trên ví 100k qua P2pService -> tối đa 1 thành công, số dư bảo toàn', async () => {
     const { userId: senderId, wallet: senderWallet } = await createWallet(100000);
-    const destUsers = await Promise.all(Array.from({ length: 20 }, () => createWallet(0)));
+    const destUsers = [];
+    for (let i = 0; i < 20; i++) {
+      destUsers.push(await createWallet(0));
+    }
 
     const beforeSnap = await getFinancialSnapshot(wPrisma);
 
