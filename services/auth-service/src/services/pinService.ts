@@ -54,7 +54,7 @@ export const PinService = {
    * Ngay khi chạm ngưỡng 5 lần sai, tài khoản bị khóa 30 phút và các request tiếp theo bị chặn lập tức.
    */
   verifyPin: async (userId: string, input: VerifyPinInput) => {
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       // 1. SELECT ... FOR UPDATE để khóa dòng UserPin của user này lại.
       // Tất cả các request song song khác của cùng userId sẽ PHẢI xếp hàng chờ tuần tự!
       const userPins = await tx.$queryRaw<Array<{
@@ -107,7 +107,8 @@ export const PinService = {
             }
           })
 
-          throw new AppError(
+          // Return expected failures so Prisma commits the attempt and lock.
+          return { error: new AppError(
             423,
             'PIN_LOCKED',
             `Bạn đã nhập sai mã PIN ${MAX_FAILED_ATTEMPTS} lần liên tiếp. Chức năng giao dịch bị tạm khóa 30 phút.`,
@@ -115,7 +116,7 @@ export const PinService = {
               lockedUntil,
               remainingSeconds: 30 * 60
             }
-          )
+          ) }
         } else {
           // Cập nhật số lần nhập sai
           await tx.userPin.update({
@@ -127,14 +128,14 @@ export const PinService = {
           })
 
           const remainingAttempts = MAX_FAILED_ATTEMPTS - nextAttempts
-          throw new AppError(
+          return { error: new AppError(
             400,
             'INVALID_PIN',
             `Mã PIN không chính xác. Bạn còn ${remainingAttempts} lần thử.`,
             {
               remainingAttempts
             }
-          )
+          ) }
         }
       }
 
@@ -159,6 +160,10 @@ export const PinService = {
         message: 'Xác thực mã PIN thành công'
       }
     })
+
+    // Throw only after the transaction commits the failed-attempt state.
+    if ('error' in result) throw result.error
+    return result
   },
 
   /**
