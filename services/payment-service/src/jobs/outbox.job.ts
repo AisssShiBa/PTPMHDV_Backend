@@ -18,6 +18,7 @@ const getFinvaultPublisher = () => {
   return finvaultPublisher
 }
 
+// Xử lý thanh toán đã được hoàn tiền, hoặc đã được hủy.
 function legacyMessage(eventType: string, payload: Record<string, unknown>): string | undefined {
   if (eventType === 'PAYMENT_REFUNDED') {
     return `Thanh toán đã được hoàn tiền ${String(payload.amount ?? '')} VND.`
@@ -37,6 +38,7 @@ async function updateClaimed(
   })
 }
 
+// Hàm xử lý một sư kiện, gửi tin nhắn sự kiện này sang RabbitMQ (để thông báo notification-service) kịp thời gửi thông báo cho user
 async function processClaimedEvent(id: string, lockToken: string): Promise<void> {
   const event = await prisma.outboxEvent.findFirst({
     where: { id, status: OutboxEventStatus.PROCESSING, lockToken }
@@ -45,14 +47,18 @@ async function processClaimedEvent(id: string, lockToken: string): Promise<void>
 
   const payload = event.payload as Record<string, unknown>
   const finvaultResult = await processPaymentOutboxEvent(event, {
+    // Gọi publisher đẩy sự kiện lên RabbitMQ.
     publish: finvaultEvent => getFinvaultPublisher().publish(finvaultEvent),
+    // Thành công
     markSent: () => updateClaimed(id, lockToken, {
       status: OutboxEventStatus.SENT,
       sentAt: new Date()
     }),
+    // Thất bại vĩnh viễn
     markFailed: () => updateClaimed(id, lockToken, {
       status: OutboxEventStatus.FAILED
     }),
+    // Thất bại tạm thời thử lại (retry)
     scheduleRetry: delayMs => updateClaimed(id, lockToken, {
       status: OutboxEventStatus.PENDING,
       retryCount: { increment: 1 },
@@ -61,6 +67,7 @@ async function processClaimedEvent(id: string, lockToken: string): Promise<void>
   })
   if (finvaultResult !== 'unhandled') return
 
+  // Thanh toán đã được hoàn tiền hoặc đã được hủy thì bỏ qua không trả message
   const message = legacyMessage(event.eventType, payload)
   if (!message) {
     await updateClaimed(id, lockToken, {

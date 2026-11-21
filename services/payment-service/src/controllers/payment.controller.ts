@@ -12,6 +12,7 @@ const paymentService = new PaymentService(walletClient);
 export const checkout = async (req: Request, res: Response) => {
     const userId = req.auth!.userId;
     const headerKey = req.get('Idempotency-Key');
+    // Kiểm tra sự xung đột giữa Header và Body
     if (headerKey && req.body.idempotencyKey && headerKey !== req.body.idempotencyKey)
       throw new DomainException(400, 'IDEMPOTENCY_KEY_MISMATCH', 'Header and body keys differ');
     const idempotencyKey = headerKey || req.body.idempotencyKey;
@@ -45,6 +46,7 @@ export const cancel = async (req: Request, res: Response) => {
     res.json({ success: true, data: result });
 };
 
+// Tra cứu thông tin chi tiết và lịch sử trạng thái của một giao dịch thông qua id
 export const getById = async (req: Request, res: Response) => {
     const result = await paymentService.getById(req.params.id as string, req.auth!.userId, req.auth!.role);
     if (!result) {
@@ -81,7 +83,7 @@ export const p2pQuote = async (req: Request, res: Response) => {
 
 // Khi người dùng bấm nút chuyển tiền P2P.
 export const p2pCheckout = async (req: Request, res: Response) => {
-    // Lấy userI ccủ người gửi từ req.auth do requireGateway giải mã từ x-gateway-token.
+    // Lấy userId của người gửi từ req.auth do requireGateway giải mã từ x-gateway-token.
     // Không lấy từ body để chống giả mạo.
     const senderId = req.auth!.userId;
 

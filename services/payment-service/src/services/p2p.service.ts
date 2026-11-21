@@ -194,12 +194,12 @@ export class P2pService {
         await tx.payment.updateMany({
           where: {
             id,
-            workflow: 'HOLD_CALLING'
+            workflow: 'HOLD_CALLING'        // Chỉ cập nhật nếu đơn vẫn đang trong trạng thái chờ kết quả gọi ví.
           },
           data: {
-            workflow: 'IDLE',
-            idempotencyStatus: 'COMPLETED',
-            workerLeaseUntil: null
+            workflow: 'IDLE',               // Đưa máy trạng thái về nghỉ 
+            idempotencyStatus: 'COMPLETED', // Đóng dấu thành công khi user bấm lại trả về kết quả cữ
+            workerLeaseUntil: null          // Xóa hạn giữ quyền, giải phóng hoàn toàn.
           }
         });
 
@@ -207,9 +207,10 @@ export class P2pService {
         return { payment: updated };
       }, transactionOptions);
 
-      return { payment: finalResult.payment };
+      return { payment: finalResult.payment }; // Trả về đơn hàng thành công sẵn sàng nhận OTP.
     }
 
+    // Trường hợp ví từ chối dứt khoát.
     if (deterministicError) {
       const finalResult = await prisma.$transaction(async tx => {
         const updateResult = await tx.payment.updateMany({
@@ -218,9 +219,9 @@ export class P2pService {
             workflow: 'HOLD_CALLING'
           },
           data: {
-            status: 'FAILED',
-            workflow: 'IDLE',
-            idempotencyStatus: 'FAILED',
+            status: 'FAILED',                       // Đơn hàng chính thức thất bại.
+            workflow: 'IDLE',                       // Đưa máy trạng thái về nghỉ.
+            idempotencyStatus: 'FAILED',            // Khóa key này vĩnh viễn.
             failureReason: deterministicError!.code,
             failureCode: deterministicError!.code,
             workerLeaseUntil: null
@@ -496,10 +497,16 @@ export class P2pService {
 
     // Pha 1: Transaction ngắn kiểm tra điều kiện và claim CANCEL_CALLING
     const claimResult = await prisma.$transaction(async tx => {
+      // Khóa hàng bằng FOR UPDATE
       const payment = await locked(tx, id);
+
+      // Kiểm tra quyền: Người dùng không được hủy đơn của người khác.
       if (userId !== undefined && payment.userId !== userId) {
         throw new DomainException(403, 'FORBIDDEN', 'Payment belongs to another user');
       }
+      
+      // Kiểm tra trạng thái: chỉ được hủy đơn đang PENDING.
+      // Nếu đơn đang bận gọi ví trừ tiền tiền (CAPTURE_CALLING) thì cấm hủy.
       if (payment.status !== 'PENDING' || !['IDLE', 'HOLDING', 'CANCEL_CALLING'].includes(payment.workflow)) {
         throw new DomainException(409, 'CONFLICT', 'Payment cannot be cancelled');
       }
@@ -507,6 +514,7 @@ export class P2pService {
         return { status: 'NOT_YET_EXPIRED' as const, payment };
       }
 
+      // Đánh dấu nhận quyền hủy đơn (Lease = 30s)
       await tx.payment.update({
         where: { id },
         data: {
@@ -525,8 +533,10 @@ export class P2pService {
     // Pha 2: Gọi ví releaseHold NGOÀI transaction
     if (payment.holdId) {
       try {
+        // Gọi sang wallet-service để giải phóng tiền tạm giữ về lại số dư khả dụng.
         await this.wallet.releaseHold(payment.userId, payment.holdId);
       } catch (err: any) {
+        // Xử lý an toàn: Nếu ví bảo tiền đã được nhả trước đó rồi thì bỏ qua, coi như thành công.
         const isHandled = err instanceof DomainException &&
           ['HOLD_EXPIRED', 'HOLD_NOT_CAPTURABLE', 'HOLD_ALREADY_RELEASED'].includes(err.code);
         if (!isHandled) {
@@ -537,9 +547,11 @@ export class P2pService {
 
     // Pha 3: Transaction ngắn chốt kết quả và OutboxEvent
     const finalResult = await prisma.$transaction(async tx => {
+      // Chuyển trạng thái đơn thành 'CANCELLED' (người hủy) hoặc 'EXPIRED' (hết hạn)
       return finish(tx, payment, expired ? 'EXPIRED' : 'CANCELLED');
     }, transactionOptions);
 
+    // Kích hoạt sự kiện ngay lập tức sang RabbitMQ
     void drainOutbox().catch(() => {});
     return finalResult;
   }
