@@ -23,6 +23,7 @@ declare global {
   }
 }
 
+// Nạp Public Key của Auth Service.
 export function getAuthTxnPublicKey(): string {
   const fileEnv = process.env.AUTH_TXN_PUBLIC_KEY_FILE;
   if (fileEnv && fs.existsSync(fileEnv)) {
@@ -52,6 +53,7 @@ export function getAuthTxnPublicKey(): string {
 }
 
 export const requireTransactionToken = (req: Request, res: Response, next: NextFunction) => {
+  // 1. Lấy token từ header và body kiểm ra với nhau.
   const headerToken = req.headers['x-transaction-token'];
   const bodyToken = req.body?.transactionToken;
   if (headerToken && bodyToken && headerToken !== bodyToken) {
@@ -71,6 +73,7 @@ export const requireTransactionToken = (req: Request, res: Response, next: NextF
 
   let publicKey: string;
   try {
+    //2. Lấy khóa Public Key
     publicKey = getAuthTxnPublicKey();
   } catch (err: any) {
     console.error('Failed to load AUTH_TXN_PUBLIC_KEY:', err);
@@ -84,8 +87,14 @@ export const requireTransactionToken = (req: Request, res: Response, next: NextF
   }
 
   try {
+    //3. Xác thực mật mã bất đối xứng.
     const claims = verifyPaymentToken(token, publicKey);
 
+    //4. Kiểm tra cấu trúc PayLoad (Claims) phải đủ 4 thông tin định danh:
+    // - sub: UUID của người dùng.
+    // - paymentId: UUID của giao dịch cần thanh toán.
+    // - amount: Số tiền thanh toán.
+    // - jti: Mã định danh duy nhất của token
     if (!claims.sub || !claims.paymentId || !claims.amount || !claims.jti) {
       return res.status(403).json({
         success: false,
@@ -96,6 +105,7 @@ export const requireTransactionToken = (req: Request, res: Response, next: NextF
       });
     }
 
+    // Gắn vào Request Context và chuyển tiếp
     req.transactionToken = { ...claims, iss: 'finvault-auth-service', aud: 'finvault-payment-service' };
     return next();
   } catch (error: any) {

@@ -55,6 +55,8 @@ export class PaymentService {
       }
     }
 
+
+    // Băng thông tin nội bộ nội dung đơn hàng tránh trường hợp client dùng lại idempotencyKey cũ nhưng thay đổi số tiền.
     const hashData = `${dto.amount}|${dto.type}|${dto.referenceId || ''}|${destUserId || ''}|${dto.callbackTopic}`;
     const requestHash = crypto.createHash('sha256').update(hashData).digest('hex');
 
@@ -99,6 +101,7 @@ export class PaymentService {
           where: { userId_idempotencyKey: { userId: dto.userId, idempotencyKey: dto.idempotencyKey } }
         });
 
+        // Kiểm tra cùng key nhưng đổi nội dung => Lỗi 422.
         if (!existing) throw new DomainException(500, 'INTERNAL_ERROR', 'Idempotency conflict but record missing');
 
         // Kiểm tra tính toàn vẹn Payload
@@ -106,21 +109,23 @@ export class PaymentService {
           throw new DomainException(422, 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD', 'Idempotency key reused with different payload');
         }
 
-        // Xử lý State Machine
+        // Xử lý State Machine, đơn hàng trước đó đang chạy dở => Báo bận 409.
         if (existing.idempotencyStatus === IdempotencyStatus.PROCESSING) {
           throw new DomainException(409, 'IDEMPOTENCY_REQUEST_IN_PROGRESS', 'Request in progress. Please retry later.');
         }
 
+        // Nếu đơn hàng trước đã hoàn tất => Trả về kết quả cũ ngay (không trừ tiền lần 2)
         if (existing.idempotencyStatus === IdempotencyStatus.COMPLETED) {
           return { payment: existing, replayed: true };
         }
 
+        // Nếu đơn truóc đó bị FAILED => Cho phép thử lại.
         if (existing.idempotencyStatus === IdempotencyStatus.FAILED) {
           // Retry an toàn
           const updateRes = await prisma.payment.updateMany({
             where: { id: existing.id, idempotencyStatus: IdempotencyStatus.FAILED },
             data: {
-              idempotencyStatus: IdempotencyStatus.PROCESSING,
+              idempotencyStatus: IdempotencyStatus.PROCESSING, // Cập nhật lại thành PROCESSING và cấp holdId mới.
               requestHash,
               holdId,
               holdExpiresAt,
@@ -161,7 +166,7 @@ export class PaymentService {
     // 3. Hoàn tất Idempotency Lock
     const finalizedPayment = await prisma.payment.update({
       where: { id: payment.id! },
-      data: { idempotencyStatus: IdempotencyStatus.COMPLETED }
+      data: { idempotencyStatus: IdempotencyStatus.COMPLETED } // Đóng dấu hoàn tất việc tạo đơn.
     });
 
     return { payment: finalizedPayment, replayed: false };
@@ -721,22 +726,29 @@ export class PaymentService {
   async cancel(id: string, requesterId: string, requesterRole?: string) {
     const payment = await prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+    
+    // Kiểm tra loại này có phải là WALLET_TRANSFER không ?
     if (payment.type === PaymentType.WALLET_TRANSFER) {
       const result = await new P2pService(this.walletClient).cancel(id, requesterRole === 'ADMIN' ? undefined : requesterId);
       triggerOutboxDrain();
       return result;
     }
+
+    // 1. Kiểm tra quyền sở hữu, chỉ admin hoặc chủ đơn hàng mới có quyền hủy
     if (requesterRole !== 'ADMIN' && payment.userId !== requesterId) {
       throw new DomainException(403, 'FORBIDDEN', 'Payment belongs to another user');
     }
+    //2. Trạng thái giao dịch phải hợp lệ.
     if (payment.status !== PaymentStatus.PENDING) {
       throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot cancel.`);
     }
 
+    //3. Mở khóa tiền tạm giữ bên Wallet Service
     if (payment.holdId) {
       await this.walletClient.releaseHold(payment.userId, payment.holdId);
     }
 
+    // Cập nhật trạng thái và ghi log lịch sử giao dịch
     return await prisma.payment.update({
       where: { id },
       data: {
@@ -760,12 +772,14 @@ export class PaymentService {
       include: { histories: true }
     });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+    // Kiểm tra người dùng có phải là Admin hoặc chính user đó gọi không ?
     if (requesterRole !== 'ADMIN' && payment.userId !== requesterId) {
       throw new DomainException(403, 'FORBIDDEN', 'Payment belongs to another user');
     }
     return payment;
   }
 
+  // Lấy danh sách các giao dịch thanh toán (có hỗ trợ lọc theo trạng thái và loại thanh toán)
   async list(userId?: string, type?: string, status?: string) {
     return await prisma.payment.findMany({
       where: {

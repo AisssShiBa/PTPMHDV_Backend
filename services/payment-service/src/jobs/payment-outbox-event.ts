@@ -12,6 +12,7 @@ export type PaymentEventActions = {
   scheduleRetry: (delayMs: number) => Promise<void>
 }
 
+// Tính toán thời gian thử lại 1, 2, 4, 8, 16, 30, 30 ...30, 30 (thời gian không quá 30 cho dù mấy lần đi nữa).
 export const paymentRetryDelayMs = (retryCount: number): number =>
   Math.min(30_000, 1000 * 2 ** Math.min(retryCount, 5))
 

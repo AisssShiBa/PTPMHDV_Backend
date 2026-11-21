@@ -15,11 +15,15 @@ export function transactionPublicKey() {
     throw new Error('Auth transaction public key must use ES256 P-256');
   return value;
 }
+
+// Kiểm tra tính hợp lệ và giải mã Transaction Token.
 export function verifyPaymentToken(token: string, publicKey = transactionPublicKey()) {
   try {
+    // Dùng thuật toán ES256, đảm bảo token do auth-service ký, đích đến phải dành tiền cho payment-service
     const result = claims.parse(jwt.verify(token, publicKey, {
       algorithms: ['ES256'], issuer: 'finvault-auth-service', audience: 'finvault-payment-service'
     }));
+    // Kiểm soát thời gian sống của Token (sống trong 60s, thời điểm tạo token không được nằm ở tương lai).
     if (result.exp - result.iat > 60 || result.iat > Math.floor(Date.now() / 1000)) throw new Error('Invalid token lifetime');
     return result;
   } catch (error: any) {
