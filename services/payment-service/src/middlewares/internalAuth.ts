@@ -11,9 +11,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { timingSafeEqual } from 'crypto';
 
+// Middleware dùng để xác thực các lời gọi Service to Service thông qua X-Internal-Key.
 export const requireInternalAuth = (req: Request, res: Response, next: NextFunction) => {
     const expectedRaw = process.env.INTERNAL_KEY;
 
+    // 1. Kiểm tra cấu hình hệ thống:
     // Fail-closed: biến môi trường chưa được cấu hình
     if (!expectedRaw) {
         return res.status(500).json({
@@ -25,6 +27,7 @@ export const requireInternalAuth = (req: Request, res: Response, next: NextFunct
         });
     }
 
+    // 2. Kiểm tra Header gửi lên
     const provided = req.headers['x-internal-key'];
 
     if (!provided || typeof provided !== 'string') {
@@ -37,7 +40,9 @@ export const requireInternalAuth = (req: Request, res: Response, next: NextFunct
         });
     }
 
-    // Dùng timingSafeEqual để chống timing-attack
+    // 3. Dùng timingSafeEqual để chống timing-attack
+    // toán tử === dừng khi gặp ký tự sai đầu tiên, hacker có tính toán thời gian phản hồi để dò từng chữ cái của mật khẩu.
+    // Dùng timingSafeEqual để so sánh các byte với thời gian chạy không đổi triệt tiêu nguy cơ.
     let isValid = false;
     try {
         const expected = Buffer.from(expectedRaw, 'utf-8');
@@ -57,5 +62,6 @@ export const requireInternalAuth = (req: Request, res: Response, next: NextFunct
         });
     }
 
+    // Các trường hợp đều pass mở cổng cho qua
     next();
 };
