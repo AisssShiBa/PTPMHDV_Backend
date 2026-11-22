@@ -172,6 +172,7 @@ export class PaymentService {
     return { payment: finalizedPayment, replayed: false };
   }
 
+  // Khác hàng confirm (yêu cầu thêm mã PIN).
   async confirm(id: string, requesterUserId: string, tokenPayload: TransactionTokenPayload) {
     const payment = await prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
@@ -208,8 +209,10 @@ export class PaymentService {
     // 4. Kiểm tra TTL giữ tiền (nếu còn ở PENDING)
     if (payment.status === PaymentStatus.PENDING && payment.holdExpiresAt && payment.holdExpiresAt.getTime() < Date.now()) {
       if (payment.holdId) {
+        // Nhả tiền.
         await this.walletClient.releaseHold(payment.userId, payment.holdId);
       }
+      // Cập nhật đã hết hạn
       await prisma.$transaction(async tx => {
         const updated = await tx.payment.update({
           where: { id },
@@ -225,6 +228,7 @@ export class PaymentService {
             }
           }
         });
+        // Tạp sự kiện thông báo đã hết hạn vào outbox.
         await tx.outboxEvent.create({
           data: {
             id: randomUUID(),
@@ -242,7 +246,9 @@ export class PaymentService {
 
     // 5. PENDING -> PROCESSING và consume token chống replay
     if (payment.status === PaymentStatus.PENDING) {
+      // Lần đầu tiên. 
       await prisma.$transaction(async (tx) => {
+        // Đưa mã định dang của token (jti) vào danh sách "Đã sử dụng"
         try {
           await tx.usedTransactionToken.create({
             data: {
@@ -252,12 +258,13 @@ export class PaymentService {
             }
           });
         } catch (err: any) {
-          if (err.code === 'P2002') {
+          if (err.code === 'P2002') { // Xử lý khi trùng mã jti
             throw new DomainException(409, 'TXN_TOKEN_REUSED', 'Transaction token has already been used');
           }
           throw err;
         }
 
+        // Chuyển trạng thái đơn hàng sang PROCESSING
         await tx.payment.update({
           where: { id },
           data: {
@@ -274,7 +281,7 @@ export class PaymentService {
         });
       });
     } else {
-      // payment.status === PaymentStatus.PROCESSING (retry confirm)
+      // Khách hàng ấn lại (retry), mạng bị lag.
       try {
         await prisma.usedTransactionToken.create({
           data: {
@@ -288,10 +295,12 @@ export class PaymentService {
           const used = await prisma.usedTransactionToken.findUnique({
             where: { jti: tokenPayload.jti }
           });
+          // Token này đã được dùng cho ĐƠN KHÁC -> CHẶN.
           if (!used || used.paymentId !== payment.id) {
             throw new DomainException(409, 'TXN_TOKEN_REUSED', 'Transaction token has already been used');
           }
         } else {
+          // Nếu đúng là token của CHÍNH ĐƠN NÀY đang thử lại -> CHO PHÉP ĐI TIẾP.
           throw err;
         }
       }
@@ -299,6 +308,7 @@ export class PaymentService {
 
     // 6. Gọi captureHold (lũy đẳng theo referenceId)
     try {
+      // Gọi API trừ tiền, chuyển tiền từ đóng băng sang trừ thật.
       await this.walletClient.captureHold(payment.userId, payment.holdId);
 
       // Capture thành công -> chuyển sang SUCCESS, ghi outbox event PAYMENT_SUCCESS
@@ -318,6 +328,7 @@ export class PaymentService {
           }
         });
 
+        // Tạo sự kiện và đẩy lên Event
         await tx.outboxEvent.create({
           data: {
             id: randomUUID(),
@@ -348,6 +359,7 @@ export class PaymentService {
         captureError.message?.includes('Hold has expired') ||
         captureError.message?.includes('Hold has already been released');
 
+      // Hold nếu hết hạn thì gọi mở hold tiền.
       if (isHoldExpired) {
         if (payment.holdId) {
           await this.walletClient.releaseHold(payment.userId, payment.holdId);
@@ -359,7 +371,7 @@ export class PaymentService {
           const updated = await tx.payment.update({
             where: { id },
             data: {
-              status: PaymentStatus.EXPIRED,
+              status: PaymentStatus.EXPIRED, // Chuyển đổi trạng thái thành hết hạn.
               failureReason: expiredNote,
               histories: {
                 create: {
@@ -372,6 +384,7 @@ export class PaymentService {
             }
           });
 
+          // Phát sự kiện PAYMENT_EXPIRED  lên RabbitMQ.
           await tx.outboxEvent.create({
             data: {
               id: randomUUID(),
@@ -385,11 +398,14 @@ export class PaymentService {
         });
 
         triggerOutboxDrain();
+        // Ném lỗi 410 phiên thanh toán hết hạn cho khách hàng.
         throw new DomainException(410, 'PAYMENT_EXPIRED', captureError.message || 'Giao dịch thanh toán đã hết hạn');
       }
 
+      // Lỗi nghiệp vũ mã < 400 thì mở hold tiền.
       if (captureError.isDeterministic || (captureError instanceof DomainException && captureError.status < 500)) {
         if (payment.holdId) {
+          // Gọi mở hold tiền
           await this.walletClient.releaseHold(payment.userId, payment.holdId);
         }
 
@@ -399,7 +415,7 @@ export class PaymentService {
           const updated = await tx.payment.update({
             where: { id },
             data: {
-              status: PaymentStatus.FAILED,
+              status: PaymentStatus.FAILED, // Cập nhật trạng thái FAILED
               failureReason: failureNote,
               histories: {
                 create: {
@@ -412,6 +428,7 @@ export class PaymentService {
             }
           });
 
+          // Tạo sự kiện cho Outbox Event.
           await tx.outboxEvent.create({
             data: {
               id: randomUUID(),
@@ -444,13 +461,17 @@ export class PaymentService {
     }
   }
 
+  // Xác nhận hoàn tất trừ tiền dành cho các service nội bộ, yêu cầu kèm chìa khóa.
   async internalConfirm(id: string) {
     const payment = await prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new DomainException(404, 'NOT_FOUND', 'Payment not found');
+    // Cấm loại chuyển tiền P2P.
+    // Chuyển tiền cá nhân bắt buộc người gửi , các service nội bộ không được tự ý chuyển tiền hộ.
     if (payment.type === PaymentType.WALLET_TRANSFER) {
       throw new DomainException(403, 'TRANSACTION_TOKEN_REQUIRED', 'Wallet transfers require user PIN authorization');
     }
 
+    // Kiểm tra trạng thái đơn hàng.
     if (payment.status === PaymentStatus.SUCCESS) {
       throw new DomainException(409, 'PAYMENT_ALREADY_CONFIRMED', 'Payment has already been confirmed');
     }
@@ -459,11 +480,14 @@ export class PaymentService {
       throw new DomainException(409, 'CONFLICT', `Payment is in ${payment.status} status. Cannot confirm.`);
     }
 
+    // Kiểm tra hạn giữ tiền (Hold TTL) đã hết hạn chưa.
     if (payment.status === PaymentStatus.PENDING && payment.holdExpiresAt && payment.holdExpiresAt.getTime() < Date.now()) {
       if (payment.holdId) {
+        // Gọi API sang wallet trả tiền
         await this.walletClient.releaseHold(payment.userId, payment.holdId);
       }
       await prisma.$transaction(async tx => {
+        // update trạng thái đơn hàng.
         const updated = await tx.payment.update({
           where: { id },
           data: {
@@ -478,6 +502,7 @@ export class PaymentService {
             }
           }
         });
+        // tạo sư kiện báo đơn hàng hết hạn
         await tx.outboxEvent.create({
           data: {
             id: randomUUID(),
@@ -493,6 +518,7 @@ export class PaymentService {
       throw new DomainException(410, 'PAYMENT_EXPIRED', 'Hold has expired, please checkout again');
     }
 
+    // Chuyển trạng thái PENDING sang PROCESSING trước khi gọi ví.
     if (payment.status === PaymentStatus.PENDING) {
       await prisma.payment.update({
         where: { id },
@@ -511,9 +537,11 @@ export class PaymentService {
     }
 
     try {
+      // Gọi API sang wallet service
       await this.walletClient.captureHold(payment.userId, payment.holdId);
 
       const completed = await prisma.$transaction(async (tx) => {
+        // update trạng thái đơn hàng thành công.
         const updated = await tx.payment.update({
           where: { id },
           data: {
@@ -529,6 +557,7 @@ export class PaymentService {
           }
         });
 
+        // tạo sự kiện đơn hàng thành công
         await tx.outboxEvent.create({
           data: {
             id: randomUUID(),
@@ -556,6 +585,7 @@ export class PaymentService {
         captureError.message?.includes('Hold has already been released');
 
       if (isHoldExpired) {
+        // Trường hợp hết hạn thì nhả tiền ví.
         if (payment.holdId) {
           await this.walletClient.releaseHold(payment.userId, payment.holdId);
         }
@@ -592,9 +622,11 @@ export class PaymentService {
         });
 
         triggerOutboxDrain();
+        // Lỗi 410 cho đơn hàng bị hết hạn.
         throw new DomainException(410, 'PAYMENT_EXPIRED', captureError.message || 'Giao dịch thanh toán đã hết hạn');
       }
 
+      // Lỗi 4x chuyển FAILD.
       if (captureError.isDeterministic || (captureError instanceof DomainException && captureError.status < 500)) {
         if (payment.holdId) {
           await this.walletClient.releaseHold(payment.userId, payment.holdId);
@@ -635,6 +667,7 @@ export class PaymentService {
         throw new DomainException(400, 'PAYMENT_FAILED', captureError.message || 'Thanh toán nội bộ thất bại');
       }
 
+      // Trường hợp bị lỗi mạng cho phép thử lại (retry) an toàn.
       await prisma.paymentHistory.create({
         data: {
           id: randomUUID(),
