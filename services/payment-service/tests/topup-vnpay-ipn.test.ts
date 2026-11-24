@@ -18,6 +18,9 @@ type Row = {
   amount: any;
   status: string;
   updatedAt: Date;
+  expiresAt?: Date;
+  approvedBy?: string | null;
+  rejectReason?: string;
   vnpResponseCode?: string | null;
   walletTransactionId?: string | null;
 };
@@ -35,8 +38,16 @@ function fakeStore(seed: Row[]) {
   const rows = new Map<string, Row>(seed.map(r => [r.id, { ...r }]));
   const audits: any[] = [];
 
-  const matches = (row: Row, where: any) =>
-    Object.entries(where).every(([k, v]) => (row as any)[k] === v);
+  const matches = (row: Row, where: any): boolean => Object.entries(where).every(([key, value]: any) => {
+    if (key === 'OR') return value.some((clause: any) => matches(row, clause));
+    const actual = (row as any)[key];
+    if (value && typeof value === 'object' && !(value instanceof Date)) {
+      if ('lt' in value) return actual < value.lt;
+      if ('gt' in value) return actual > value.gt;
+      if ('not' in value) return value.not === null ? actual != null : actual !== value.not;
+    }
+    return actual === value;
+  });
 
   const store: any = {
     __rows: rows,
@@ -46,10 +57,7 @@ function fakeStore(seed: Row[]) {
         where.code
           ? [...rows.values()].find(r => r.code === where.code) ?? null
           : rows.get(where.id) ?? null,
-      findMany: async ({ where }: any) =>
-        [...rows.values()].filter(r =>
-          Object.entries(where ?? {}).every(([k, v]: any) =>
-            k === 'updatedAt' ? r.updatedAt < v.lt : (r as any)[k] === v)),
+      findMany: async ({ where }: any) => [...rows.values()].filter(row => matches(row, where ?? {})),
       updateMany: async ({ where, data }: any) => {
         // Prisma updateMany accepts scalars only. Rejecting nested relation
         // writes here keeps the fake honest: this exact mistake shipped once
@@ -106,12 +114,24 @@ function fakeStore(seed: Row[]) {
       if (values.length === 2) {
         const [id, cutoff] = values;
         const row = rows.get(id);
-        if (!row || row.status !== 'PROCESSING' || row.vnpResponseCode !== '00' || !(row.updatedAt < cutoff)) return 0;
+        if (!row || row.status !== 'PROCESSING' || (row.vnpResponseCode !== '00' && !row.approvedBy) || !(row.updatedAt < cutoff)) return 0;
         row.updatedAt = new Date();
         return 1;
       }
       return 0;
     },
+  };
+  // Serialise transaction work and restore the snapshot when an audit/claim fails.
+  let tail = Promise.resolve();
+  store.$transaction = (work: any) => {
+    const result = tail.then(async () => {
+      const snapshot = [...rows].map(([key, row]) => [key, { ...row }] as const);
+      const auditCount = audits.length;
+      try { return await work(store); }
+      catch (error) { rows.clear(); for (const [key, row] of snapshot) rows.set(key, row); audits.length = auditCount; throw error; }
+    });
+    tail = result.catch(() => undefined);
+    return result;
   };
   return store;
 }
@@ -138,6 +158,7 @@ const baseRow = (): Row => ({
   amount: new (require('@prisma/client').Prisma.Decimal)(100000),
   status: 'PENDING',
   updatedAt: new Date(Date.now() - 10 * 60 * 1000),
+  expiresAt: new Date(Date.now() + 30 * 60 * 1000),
 });
 
 function walletSuccess(transactionId = 'tx-1', replayed = false) {
@@ -319,4 +340,129 @@ test('return URL is read-only and rejects a forged signature', async () => {
     service.handleVnpayReturn({ ...ipnQuery(), vnp_SecureHash: 'b'.repeat(128) }),
     (err: any) => err.status === 400 && err.code === 'INVALID_SIGNATURE'
   );
+});
+
+
+test('manual approval and IPN use the same wallet reference; repeats never credit twice', async () => {
+  const store = fakeStore([baseRow()]);
+  const references = new Set<string>();
+  const wallet = { topupCredit: async (_user: string, _amount: string, reference: string) => {
+    const replayed = references.has(reference); references.add(reference);
+    return { outcome: 'success' as const, transactionId: 'tx-manual', replayed };
+  } };
+  const service = await loadService({ store, walletClient: wallet });
+  await service.approveTopup(baseRow().id, 'test-admin');
+  await service.approveTopup(baseRow().id, 'test-admin');
+  assert.equal((await service.handleVnpayIpn(ipnQuery())).RspCode, '02');
+  assert.equal(references.size, 1);
+  assert.equal(store.__rows.get(baseRow().id).approvedBy, 'test-admin');
+  assert.ok(store.__audits.some((audit: any) => audit.action === 'MANUAL_APPROVE_REQUESTED'));
+});
+
+test('manual rejection validates reason and prevents a later paid IPN from crediting', async () => {
+  const store = fakeStore([baseRow()]);
+  let credits = 0;
+  const service = await loadService({ store, walletClient: { topupCredit: async () => { credits++; return { outcome: 'success' as const, transactionId: 'unexpected' }; } } });
+  await assert.rejects(() => service.rejectTopup(baseRow().id, 'test-admin', '  '));
+  await service.rejectTopup(baseRow().id, 'test-admin', '  Synthetic rejection  ');
+  await service.rejectTopup(baseRow().id, 'test-admin', 'Synthetic rejection');
+  assert.equal((await service.handleVnpayIpn(ipnQuery())).RspCode, '02');
+  assert.equal(credits, 0);
+  assert.equal(store.__rows.get(baseRow().id).rejectReason, 'Synthetic rejection');
+  assert.equal(store.__audits.length, 1);
+});
+
+test('manual claim rolls back on audit failure before contacting Wallet', async () => {
+  const store = fakeStore([baseRow()]);
+  store.topupAuditLog.create = async () => { throw new Error('synthetic audit failure'); };
+  let credits = 0;
+  const service = await loadService({ store, walletClient: { topupCredit: async () => { credits++; return { outcome: 'success' as const }; } } });
+  await assert.rejects(() => service.approveTopup(baseRow().id, 'test-admin'));
+  assert.equal(store.__rows.get(baseRow().id).status, 'PENDING');
+  assert.equal(credits, 0);
+});
+
+test('manual credit timeout remains PROCESSING, rejects conflicting decisions, and recovers the same reference', async () => {
+  const store = fakeStore([baseRow()]);
+  let calls = 0;
+  const references: string[] = [];
+  const service = await loadService({ store, walletClient: { topupCredit: async (_user: string, _amount: string, reference: string) => {
+    references.push(reference);
+    return ++calls === 1 ? { outcome: 'unknown' as const, status: 503 } : { outcome: 'success' as const, transactionId: 'tx-recovered', replayed: true };
+  } } });
+  await assert.rejects(() => service.approveTopup(baseRow().id, 'test-admin'), (e: any) => e.code === 'TOPUP_OUTCOME_UNKNOWN');
+  await assert.rejects(() => service.rejectTopup(baseRow().id, 'test-admin', 'Do not race processing'));
+  store.__rows.get(baseRow().id).updatedAt = new Date(Date.now() - 5 * 60 * 1000);
+  assert.equal((await service.recoverStuckTopups()).approved, 1);
+  assert.deepEqual(references, ['NAP0001', 'NAP0001']);
+  assert.equal(store.__rows.get(baseRow().id).approvedBy, 'test-admin');
+});
+
+
+test('manual decisions: real PostgreSQL concurrency, durable recovery and audit rollback on an isolated acceptance database', {
+  skip: !process.env.TOPUP_TEST_ACCEPTANCE_RUN_FILE && 'Set TOPUP_TEST_ACCEPTANCE_RUN_FILE and TOPUP_TEST_DATABASE_URL for an isolated PostgreSQL run'
+}, async () => {
+  const { readFileSync } = await import('node:fs');
+  const { dirname, resolve } = await import('node:path');
+  const { parseEnv } = await import('node:util');
+  const runFile = resolve(process.env.TOPUP_TEST_ACCEPTANCE_RUN_FILE!);
+  const run = JSON.parse(readFileSync(runFile, 'utf8'));
+  assert.match(run.project, /^finvault-acceptance-[0-9a-f]{12}$/);
+  assert.equal(dirname(runFile), resolve(__dirname, '../../../.cache/acceptance-week2', run.project));
+  const config = parseEnv(readFileSync(resolve(dirname(runFile), '.env'), 'utf8'));
+  const url = new URL(process.env.TOPUP_TEST_DATABASE_URL!);
+  assert.ok(['127.0.0.1', 'localhost'].includes(url.hostname));
+  assert.equal(url.port, config.POSTGRES_HOST_PORT);
+  assert.equal(url.pathname, '/payment_service');
+  const { PrismaClient, Prisma } = await import('@prisma/client');
+  const db = new PrismaClient({ datasources: { db: { url: url.href } } });
+  const ids: string[] = [];
+  const create = async () => {
+    const row = await db.topupRequest.create({ data: { userId: crypto.randomUUID(), code: 'TEST' + crypto.randomBytes(8).toString('hex'), amount: new Prisma.Decimal('100000'), expiresAt: new Date(Date.now() + 60000) } });
+    ids.push(row.id); return row;
+  };
+  try {
+    const row = await create();
+    const credits = new Set<string>();
+    const service = await loadService({ store: db, walletClient: { topupCredit: async (_user: string, _amount: string, reference: string) => {
+      const replayed = credits.has(reference); credits.add(reference);
+      return { outcome: 'success' as const, transactionId: crypto.randomUUID(), replayed };
+    } } });
+    const callbacks = ipnQuery({ vnp_TxnRef: row.code });
+    await Promise.allSettled([
+      service.approveTopup(row.id, 'synthetic-admin-a'), service.approveTopup(row.id, 'synthetic-admin-b'),
+      service.rejectTopup(row.id, 'synthetic-admin-c', 'Synthetic concurrent rejection'), service.handleVnpayIpn(callbacks)
+    ]);
+    const finished = await db.topupRequest.findUniqueOrThrow({ where: { id: row.id } });
+    assert.ok(['APPROVED', 'REJECTED'].includes(finished.status));
+    assert.equal(credits.size, finished.status === 'APPROVED' ? 1 : 0);
+    if (finished.status === 'APPROVED') {
+      await service.approveTopup(row.id, 'synthetic-admin-a');
+      assert.equal((await service.handleVnpayIpn(callbacks)).RspCode, '02');
+      assert.equal(credits.size, 1);
+    }
+    const recover = await create();
+    let attempts = 0;
+    const recovered = await loadService({ store: db, walletClient: { topupCredit: async (_user: string, _amount: string, reference: string) => {
+      assert.equal(reference, recover.code);
+      return ++attempts === 1 ? { outcome: 'unknown' as const, status: 503 } : { outcome: 'success' as const, transactionId: crypto.randomUUID(), replayed: true };
+    } } });
+    await assert.rejects(() => recovered.approveTopup(recover.id, 'synthetic-admin-a'));
+    await db.topupRequest.update({ where: { id: recover.id }, data: { updatedAt: new Date(Date.now() - 300000) } });
+    await recovered.recoverStuckTopups();
+    assert.equal((await db.topupRequest.findUniqueOrThrow({ where: { id: recover.id } })).status, 'APPROVED');
+    assert.equal(attempts, 2);
+    const rollback = await create();
+    let rollbackCredits = 0;
+    const failingStore = {
+      $transaction: (work: any) => db.$transaction(tx => work({ topupRequest: tx.topupRequest, topupAuditLog: { create: async () => { throw new Error('Synthetic audit failure'); } } }))
+    };
+    const failing = await loadService({ store: failingStore, walletClient: { topupCredit: async () => { rollbackCredits++; return { outcome: 'success' as const }; } } });
+    await assert.rejects(() => failing.approveTopup(rollback.id, 'synthetic-admin-a'));
+    assert.equal((await db.topupRequest.findUniqueOrThrow({ where: { id: rollback.id } })).status, 'PENDING');
+    assert.equal(rollbackCredits, 0);
+  } finally {
+    await db.topupRequest.deleteMany({ where: { id: { in: ids } } });
+    await db.$disconnect();
+  }
 });

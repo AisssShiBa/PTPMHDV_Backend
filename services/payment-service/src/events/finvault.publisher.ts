@@ -26,9 +26,23 @@ function amountString(value: Prisma.JsonValue | undefined): string {
   return match[1]
 }
 
+function refundedEvent(row: PaymentOutbox, payload: Prisma.JsonObject): FinvaultEvent {
+  // Refund workers persist raw data; also accept an already-versioned envelope.
+  const event = 'eventId' in payload || 'eventType' in payload || 'data' in payload
+    ? parseFinvaultEvent(payload)
+    : createEventFromOutbox(row, 'payment.refunded', payload)
+  const data = event.data
+  if (event.eventId !== row.id || event.eventType !== row.eventType || !data || typeof data !== 'object'
+    || !('paymentId' in data) || data.paymentId !== row.aggregateId) {
+    throw new TypeError('Refund event envelope does not match its outbox row')
+  }
+  return event
+}
+
 export function buildPaymentFinvaultEvent(row: PaymentOutbox): FinvaultEvent | undefined {
   if (!isRecord(row.payload)) throw new TypeError('Payment outbox payload must be an object')
   const payload = row.payload
+  if (row.eventType === 'payment.refunded') return refundedEvent(row, payload)
   // Huu's durable P2P workflow already stores the complete event envelope.
   // Keep its stable ID while using main's leased outbox and retry handling.
   if (row.eventType.startsWith('payment.') || row.eventType.startsWith('funding.cashout_')) {

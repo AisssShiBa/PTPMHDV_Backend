@@ -80,41 +80,50 @@ test('Kịch bản nghiệm thu Đ16: Thu hẹp Whitelist Gateway và Xác thự
         assert.equal(res.statusCode, 401)
     })
 
-    await t.test('3. Đúng IPN / Return Webhook của VNPAY vẫn được công khai bình thường', async () => {
-        // 3.1. Webhook nạp tiền VNPAY
-        {
-            const { req, res } = createMockReqRes({
-                path: '/api/payments/topups/vnpay/callback',
-                method: 'POST'
-            })
-            let nextCalled = false
+    await t.test('3. Only contracted GET VNPAY IPN and return endpoints are public', async t => {
+        for (const prefix of ['/api/payments/topups/vnpay', '/api/funding/vnpay']) {
+            for (const endpoint of ['ipn', 'return']) {
+                const callbackPath = `${prefix}/${endpoint}`
+                await t.test(`GET ${callbackPath}`, () => {
+                    const { req, res } = createMockReqRes({ path: callbackPath, method: 'GET' })
+                    let nextCalled = false
 
-            authenticate(req, res, () => { nextCalled = true })
-            assert.equal(nextCalled, true, 'VNPAY callback phải được cho qua không cần token')
+                    authenticate(req, res, () => { nextCalled = true })
+
+                    assert.equal(nextCalled, true)
+                    assert.equal(res.statusCode, 200)
+                    assert.equal(req.headers['x-gateway-token'], undefined)
+                })
+            }
         }
+    })
 
-        // 3.2. Return URL người dùng chuyển hướng về từ VNPAY
-        {
-            const { req, res } = createMockReqRes({
-                path: '/api/payments/topups/vnpay/return',
-                method: 'GET'
-            })
-            let nextCalled = false
+    await t.test('3b. Wrong methods and lookalike VNPAY paths require authentication', async t => {
+        for (const prefix of ['/api/payments/topups/vnpay', '/api/funding/vnpay']) {
+            const protectedRequests = [
+                { path: `${prefix}/ipn`, method: 'POST' },
+                { path: `${prefix}/return`, method: 'POST' },
+                { path: `${prefix}/ipn`, method: 'PUT' },
+                { path: `${prefix}/return`, method: 'DELETE' },
+                { path: `${prefix}/ipn/extra`, method: 'GET' },
+                { path: `${prefix}/return/extra`, method: 'GET' },
+                { path: `${prefix}/callback`, method: 'POST' },
+                { path: `${prefix}/callback`, method: 'GET' },
+                { path: `${prefix}/create`, method: 'POST' }
+            ]
+            for (const request of protectedRequests) {
+                await t.test(`${request.method} ${request.path}`, () => {
+                    const { req, res } = createMockReqRes(request)
+                    let nextCalled = false
 
-            authenticate(req, res, () => { nextCalled = true })
-            assert.equal(nextCalled, true, 'VNPAY return URL phải được cho qua')
-        }
+                    authenticate(req, res, () => { nextCalled = true })
 
-        // 3.3. Webhook IPN VNPAY nhánh funding
-        {
-            const { req, res } = createMockReqRes({
-                path: '/api/funding/vnpay/ipn',
-                method: 'POST'
-            })
-            let nextCalled = false
-
-            authenticate(req, res, () => { nextCalled = true })
-            assert.equal(nextCalled, true, 'VNPAY IPN funding phải được cho qua')
+                    assert.equal(nextCalled, false)
+                    assert.equal(res.statusCode, 401)
+                    assert.equal(res.responseData?.error?.code, 'UNAUTHORIZED')
+                    assert.equal(req.headers['x-gateway-token'], undefined)
+                })
+            }
         }
     })
 

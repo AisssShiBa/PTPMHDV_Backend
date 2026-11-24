@@ -40,7 +40,9 @@ export const isAuthOrPinRoute = (path: string): boolean => {
 /**
  * Nhận diện tác vụ nhạy cảm cần áp dụng giới hạn bảo vệ riêng theo userId
  */
-export const getSensitiveAction = (path: string): string | null => {
+export const getSensitiveAction = (path: string, method = 'POST'): string | null => {
+    // Status polling must not consume the per-user mutation quota.
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) return null
     const p = path.toLowerCase()
     if (p.includes('/pin/verify')) return 'pin-verify'
     if (/\/api\/payments\/[^/]+\/confirm/.test(p)) return 'payment-confirm'
@@ -146,7 +148,7 @@ export const rateLimiter = (
             }
 
             // 3. Rate limiting bổ sung theo userId cho các route nhạy cảm
-            const sensitiveAction = getSensitiveAction(req.path)
+            const sensitiveAction = getSensitiveAction(req.path, req.method)
             if (sensitiveAction) {
                 const userId = extractUserId(req)
                 if (userId) {

@@ -19,6 +19,7 @@ export interface TopupStore {
   topupRequest: any;
   topupAuditLog: any;
   $executeRaw: any;
+  $transaction?: <T>(work: (tx: TopupStore) => Promise<T>) => Promise<T>;
 }
 
 export interface TopupServiceDeps {
@@ -206,7 +207,7 @@ export class TopupService {
       return { RspCode: RSP.UNKNOWN_ERROR, Message: 'Processing in progress' };
     }
 
-    const outcome = await this.creditAndApprove(topup.id, topup.userId, topup.amount.toFixed(2), topup.code, Boolean(claimed.fromPending));
+    const outcome = await this.creditAndApprove(topup.id, topup.userId, topup.amount.toFixed(2), topup.code, Boolean(claimed.fromPending), topup.approvedBy || 'VNPAY_SYSTEM');
 
     if (outcome === 'approved') {
       return { RspCode: RSP.SUCCESS, Message: 'Confirm Success' };
@@ -235,12 +236,12 @@ export class TopupService {
     const rows = await this.store.topupRequest.findMany({
       where: {
         status: TopupStatus.PROCESSING,
-        vnpResponseCode: '00',
+        OR: [{ vnpResponseCode: '00' }, { approvedBy: { not: null } }],
         updatedAt: { lt: cutoff },
       },
       orderBy: { updatedAt: 'asc' },
       take: limit,
-      select: { id: true, userId: true, amount: true, code: true },
+      select: { id: true, userId: true, amount: true, code: true, approvedBy: true },
     });
 
     let approved = 0;
@@ -251,12 +252,12 @@ export class TopupService {
         SET "updatedAt" = NOW()
         WHERE id = ${row.id}::uuid
           AND status = 'PROCESSING'
-          AND "vnpResponseCode" = '00'
+          AND ("vnpResponseCode" = '00' OR "approvedBy" IS NOT NULL)
           AND "updatedAt" < ${cutoff}
       `;
       if (claimed !== 1) continue;
 
-      const outcome = await this.creditAndApprove(row.id, row.userId, row.amount.toFixed(2), row.code, false);
+      const outcome = await this.creditAndApprove(row.id, row.userId, row.amount.toFixed(2), row.code, false, row.approvedBy || 'VNPAY_SYSTEM');
       if (outcome === 'approved') approved++;
       else retried++;
     }
@@ -290,11 +291,52 @@ export class TopupService {
   }
 
   async approveTopup(id: string, adminId: string) {
-    throw new DomainException(400, 'NOT_ALLOWED', 'Manual approve is disabled for VNPAY integration. Use for resolving stuck orders only.');
+    const topup = await this.manualDecision(id, adminId, 'APPROVE');
+    if (topup.status === TopupStatus.APPROVED) return topup;
+    // IPN and manual approval always credit the same reference (topup.code).
+    const result = await this.creditAndApprove(topup.id, topup.userId, topup.amount.toFixed(2), topup.code, true, adminId);
+    if (result !== 'approved') {
+      throw new DomainException(503, 'TOPUP_OUTCOME_UNKNOWN', 'Approval is being reconciled; read the existing request status');
+    }
+    return this.store.topupRequest.findUnique({ where: { id } });
   }
 
   async rejectTopup(id: string, adminId: string, reason: string) {
-    throw new DomainException(400, 'NOT_ALLOWED', 'Manual reject is disabled for VNPAY integration.');
+    if (typeof reason !== 'string' || reason.trim().length < 1 || reason.trim().length > 500) {
+      throw new DomainException(400, 'INVALID_REASON', 'Rejection reason must contain 1 to 500 characters');
+    }
+    return this.manualDecision(id, adminId, 'REJECT', reason.trim());
+  }
+
+  private async manualDecision(id: string, adminId: string, action: 'APPROVE' | 'REJECT', reason?: string) {
+    if (!this.store.$transaction) {
+      throw new DomainException(503, 'TOPUP_OUTCOME_UNKNOWN', 'Atomic manual decision storage is unavailable');
+    }
+    return this.store.$transaction(async tx => {
+      const topup = await tx.topupRequest.findUnique({ where: { id } });
+      if (!topup) throw new DomainException(404, 'NOT_FOUND', 'Topup request not found');
+      if (action === 'APPROVE' && topup.status === TopupStatus.APPROVED) return topup;
+      if (action === 'REJECT' && topup.status === TopupStatus.REJECTED) return topup;
+      if (topup.status !== TopupStatus.PENDING) {
+        throw new DomainException(409, topup.status === TopupStatus.PROCESSING ? 'TOPUP_PROCESSING' : 'INVALID_TRANSITION', 'Topup is no longer pending');
+      }
+      const now = new Date();
+      const status = action === 'APPROVE' ? TopupStatus.PROCESSING : TopupStatus.REJECTED;
+      const changed = await tx.topupRequest.updateMany({
+        where: { id, status: TopupStatus.PENDING, ...(action === 'APPROVE' ? { expiresAt: { gt: now } } : {}) },
+        data: action === 'APPROVE' ? { status, approvedBy: adminId }
+          : { status, rejectReason: reason },
+      });
+      if (changed.count !== 1) {
+        throw new DomainException(409, 'INVALID_TRANSITION', 'Topup expired or another decision already won');
+      }
+      // Audit failure rolls back the claim before any Wallet request is sent.
+      await tx.topupAuditLog.create({ data: {
+        topupRequestId: id, actorId: adminId, action: action === 'APPROVE' ? 'MANUAL_APPROVE_REQUESTED' : 'MANUAL_REJECT',
+        fromStatus: TopupStatus.PENDING, toStatus: status, ...(reason ? { reason } : {}),
+      } });
+      return { ...topup, status, approvedBy: action === 'APPROVE' ? adminId : topup.approvedBy };
+    });
   }
 
   /**
@@ -354,7 +396,8 @@ export class TopupService {
     userId: string,
     amount: string,
     code: string,
-    fromPending: boolean
+    fromPending: boolean,
+    actorId = 'VNPAY_SYSTEM'
   ): Promise<CreditOutcome> {
     let result;
     try {
@@ -373,13 +416,13 @@ export class TopupService {
           status: TopupStatus.APPROVED,
           walletTransactionId: result.transactionId ?? null,
           approvedAt: new Date(),
-          approvedBy: 'VNPAY_SYSTEM',
+          approvedBy: actorId,
         }
       });
       if (updated.count !== 1 && !result.replayed) return 'unknown';
       await this.recordAudit(topupId, {
-        actorId: 'SYSTEM',
-        action: 'VNPAY_IPN_SUCCESS',
+        actorId,
+        action: actorId === 'VNPAY_SYSTEM' ? 'VNPAY_IPN_SUCCESS' : 'MANUAL_APPROVE_SUCCESS',
         fromStatus: TopupStatus.PROCESSING,
         toStatus: TopupStatus.APPROVED,
         reason: result.replayed ? 'wallet credit replayed (already applied)' : undefined,

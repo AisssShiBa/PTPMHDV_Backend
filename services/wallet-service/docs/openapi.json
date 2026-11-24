@@ -589,7 +589,7 @@
       "post": {
         "operationId": "adjustReconciliationAnomaly",
         "summary": "Điều chỉnh một bất thường đối soát (BALANCE_DRIFT)",
-        "description": "Chỉ ADMIN. Đồng bộ số dư ví về tổng sổ cái (nguồn sự thật duy nhất), bảo toàn bất biến LedgerEntry và ghi nhận vết kiểm toán. Hỗ trợ direction, amount, referenceId và lý do 5-500 ký tự.",
+        "description": "Chỉ ADMIN. Khôi phục cache số dư về tổng sổ cái, không đảo giao dịch và không tạo LedgerEntry mới; transactionId=null. Giữ nguyên heldBalance; trả 409 REPAIR_CONFLICTS_WITH_HOLDS nếu ledger không đủ bảo đảm khoản đang giữ. direction/amount mô tả chênh lệch cache hiện tại, referenceId cố định adjust-anomaly-<id>, lý do 5-500 ký tự.",
         "parameters": [
           {
             "name": "id",
@@ -659,6 +659,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
+              }
+            }
+          },
+          "409": {
+            "description": "REPAIR_CONFLICTS_WITH_HOLDS: số dư ledger không đủ bảo đảm heldBalance, dữ liệu không đổi; ALREADY_ADJUSTED: đã xử lý với tham chiếu khác",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
               }
             }
           },
@@ -1187,7 +1195,7 @@
           },
           "referenceId": {
             "type": "string",
-            "description": "Mã tham chiếu điều chỉnh (mặc định adjust-anomaly-<id>)"
+            "description": "Mã tham chiếu cố định adjust-anomaly-<id>; nếu truyền giá trị khác sẽ bị từ chối"
           }
         }
       },

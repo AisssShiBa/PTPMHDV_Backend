@@ -142,6 +142,7 @@ export const testApp = (options: { mockProviderEnabled?: boolean } = {}) => {
 }
 
 export const clearDatabase = async () => {
+  await prisma.utilityOutbox.deleteMany()
   await prisma.utilityOrderHistory.deleteMany()
   await prisma.utilityOrder.deleteMany()
   await prisma.utilityInbox.deleteMany()

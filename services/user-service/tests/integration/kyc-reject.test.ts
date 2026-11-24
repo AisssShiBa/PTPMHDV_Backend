@@ -11,6 +11,8 @@ import userApp from '../../src/app'
 import { prisma } from '../../src/config/prisma'
 import { env } from '../../src/config/env'
 import { storage } from '../../src/services/storage'
+import { setKycStatus } from '../../src/services/user.service'
+import { stub } from '../stub'
 
 let server: Server, adminApp: any, auditDb: any
 const adminId = randomUUID()
@@ -87,6 +89,11 @@ test('K02 reject with reason persists it, shows it only to the owner, and audits
   const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } })
   assert.equal(row.kycStatus, 'REJECTED')
   assert.equal(row.kycRejectReason, detail)
+  const [review] = await prisma.userOutboxEvent.findMany()
+  assert.equal(await prisma.userOutboxEvent.count(), 1)
+  assert.equal(review.eventType, 'user.kyc_reviewed')
+  assert.deepEqual(parseFinvaultEvent(review.payload).data,
+    { authUserId: user.authUserId, status: 'REJECTED', reason: detail })
 
   const mine = await request(userApp).get('/api/users/me/kyc').set(owner(user)).expect(200)
   assert.equal(mine.body.data.kycStatus, 'REJECTED')
@@ -121,50 +128,57 @@ test('K03 documents the current, not yet agreed, tier rule for reject', async ()
     .send({ kycStatus: 'REJECTED', reason: 'Approved profile rejected' }).expect(200)
   assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: approved.id } })).kycTier, 0)
   // APPROVED tier 1 -> 0 still notifies Wallet; the PENDING case above stays tier 0 either way.
-  const events = await prisma.userOutboxEvent.findMany({ where: { aggregateId: approved.id } })
+  const events = await prisma.userOutboxEvent.findMany({ where: { aggregateId: approved.id, eventType: 'user.kyc_updated' } })
   assert.equal(events.length, 1)
   assert.deepEqual((events[0].payload as any).data,
     { authUserId: approved.authUserId, kycTier: 0, previousTier: 1 })
 })
 
-// K04 (partial): the tier event must survive. The review event is BLOCKED (see below).
-test('K04 approval keeps exactly one user.kyc_updated and emits no review event', async () => {
+// K04: one transition may carry separate Wallet and Notification events.
+test('K04 approval atomically records one tier event and one review event', async () => {
   const user = await create()
   await request(adminApp).post(`/api/admin/kyc/${user.id}/review`).set(adminHeaders)
     .send({ status: 'APPROVED' }).expect(200)
   const events = await prisma.userOutboxEvent.findMany()
-  assert.equal(events.length, 1)
-  assert.equal(events[0].eventType, 'user.kyc_updated')
-  assert.deepEqual((events[0].payload as any).data,
+  assert.equal(events.length, 2)
+  const tier = events.find(event => event.eventType === 'user.kyc_updated')!
+  const review = events.find(event => event.eventType === 'user.kyc_reviewed')!
+  assert.deepEqual(parseFinvaultEvent(tier.payload).data,
     { authUserId: user.authUserId, kycTier: 1, previousTier: 0 })
-  assert.equal(await prisma.userOutboxEvent.count({ where: { eventType: 'user.kyc_reviewed' } }), 0)
+  assert.deepEqual(parseFinvaultEvent(review.payload).data,
+    { authUserId: user.authUserId, status: 'APPROVED' })
+  assert.equal(tier.aggregateVersion, review.aggregateVersion)
+  assert.equal(tier.aggregateId, review.aggregateId)
+  assert.notEqual(tier.id, review.id)
+  for (const event of events) {
+    assert.equal(parseFinvaultEvent(event.payload).eventId, event.id)
+    assert.equal(event.status, 'PENDING')
+  }
 })
 
-// Evidence for the BLOCKED review event: both mechanisms are observable here.
-test('user.kyc_reviewed is BLOCKED by outbox version uniqueness and the unregistered schema', async () => {
-  // APPROVED -> REJECTED moves the tier 1 -> 0, so this transition DOES write a tier event.
+test('review outbox deduplicates by type/version and repeated decisions emit nothing', async () => {
   const user = await create({ kycStatus: 'APPROVED', kycTier: 1 })
   await request(adminApp).post(`/api/admin/kyc/${user.id}/review`).set(adminHeaders)
     .send({ status: 'REJECTED', detail: 'Rejected for test' }).expect(200)
-  const [tierEvent] = await prisma.userOutboxEvent.findMany()
-  assert.equal(tierEvent.aggregateVersion, 1)
-
-  // (a) A review event for the same transition would reuse (aggregateId, aggregateVersion).
+  const events = await prisma.userOutboxEvent.findMany()
+  assert.equal(events.length, 2)
+  const review = events.find(event => event.eventType === 'user.kyc_reviewed')!
+  assert.equal(review.aggregateVersion, 1)
+  const eventId = randomUUID()
   await assert.rejects(prisma.userOutboxEvent.create({ data: {
-    id: randomUUID(), aggregateId: user.id, aggregateVersion: tierEvent.aggregateVersion,
+    id: eventId, aggregateId: user.id, aggregateVersion: review.aggregateVersion,
     eventType: 'user.kyc_reviewed',
-    payload: { eventId: randomUUID(), eventType: 'user.kyc_reviewed', eventVersion: 1,
+    payload: { eventId, eventType: 'user.kyc_reviewed', eventVersion: 1,
       occurredAt: new Date().toISOString(), data: { authUserId: user.authUserId, status: 'REJECTED' } }
   } }), (error: any) => error.code === 'P2002')
-
-  // (b) Even if the row existed, the shared publisher contract would refuse to publish it.
-  assert.throws(() => parseFinvaultEvent({ eventId: randomUUID(), eventType: 'user.kyc_reviewed',
-    eventVersion: 1, occurredAt: new Date().toISOString(),
-    data: { authUserId: user.authUserId, status: 'REJECTED' } }), (error: any) => error.reason === 'UNKNOWN_EVENT_TYPE')
+  await request(adminApp).post(`/api/admin/kyc/${user.id}/review`).set(adminHeaders)
+    .send({ status: 'REJECTED', detail: 'Repeated decision' }).expect(200)
+  assert.equal(await prisma.userOutboxEvent.count(), 2)
+  assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).version, 1)
 })
 
-// K05: two concurrent reviews of one profile commit exactly one transition and one event.
-test('K05 concurrent reviews produce one transition and one tier event', async () => {
+// K05: two concurrent reviews commit one transition with one event per type.
+test('K05 concurrent reviews produce one transition and one event per type', async () => {
   const user = await create({ kycStatus: 'APPROVED', kycTier: 1 })
   const path = `/api/admin/kyc/${user.id}/review`
   const results = await Promise.all([1, 2].map(() => request(adminApp).post(path).set(adminHeaders)
@@ -176,9 +190,40 @@ test('K05 concurrent reviews produce one transition and one tier event', async (
   assert.equal(row.kycStatus, 'REJECTED')
   assert.equal(row.version, 1)
   const events = await prisma.userOutboxEvent.findMany()
-  assert.equal(events.length, 1)
-  assert.deepEqual((events[0].payload as any).data,
+  assert.equal(events.length, 2)
+  assert.deepEqual(parseFinvaultEvent(events.find(event => event.eventType === 'user.kyc_updated')!.payload).data,
     { authUserId: user.authUserId, kycTier: 0, previousTier: 1 })
+  assert.deepEqual(parseFinvaultEvent(events.find(event => event.eventType === 'user.kyc_reviewed')!.payload).data,
+    { authUserId: user.authUserId, status: 'REJECTED', reason: 'Concurrent review' })
+})
+
+test('review insertion failure rolls back the decision and an already inserted tier event', async () => {
+  const user = await create()
+  const original = prisma.$transaction.bind(prisma)
+  stub(prisma, '$transaction', (work: any, options: any) => original(async tx => {
+    const createEvent = tx.userOutboxEvent.create.bind(tx.userOutboxEvent)
+    tx.userOutboxEvent.create = (async (args: any) => {
+      if (args.data.eventType === 'user.kyc_reviewed') throw new Error('Injected review failure')
+      return createEvent(args)
+    }) as any
+    return work(tx)
+  }, options))
+  await assert.rejects(setKycStatus(user, 'APPROVED'), /Injected review failure/)
+  const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } })
+  assert.equal(unchanged.kycStatus, 'PENDING')
+  assert.equal(unchanged.kycTier, 0)
+  assert.equal(unchanged.version, 0)
+  assert.equal(await prisma.userOutboxEvent.count(), 0)
+})
+
+test('domain rejection validation protects callers that bypass the HTTP validator', async () => {
+  const user = await create()
+  for (const reason of [undefined, '', '   ', 'x'.repeat(501)]) {
+    await assert.rejects(setKycStatus(user, 'REJECTED', reason), (error: any) => error.code === 'VALIDATION_ERROR')
+  }
+  const rejected = await setKycStatus(user, 'REJECTED', '  Blurry document  ')
+  assert.equal(rejected.kycRejectReason, 'Blurry document')
+  assert.equal(await prisma.userOutboxEvent.count(), 1)
 })
 
 // K07: the default wired into signing is 900s; the 2s expiry proof lives in storage.test.ts:175.

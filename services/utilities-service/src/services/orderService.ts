@@ -5,6 +5,7 @@ import { HttpError, isUniqueConstraintError } from '../utils/errors'
 import { discountFor } from '../utils/money'
 import type { PaymentClient } from '../types/utility'
 import { PaymentClientError } from './paymentClient'
+import { enqueueUtilityOutcome } from './utilityOutbox'
 
 const tails = new Map<string, Promise<void>>()
 
@@ -59,6 +60,7 @@ export async function transitionOrder(
     })
     if (result.count === 0) return false
     await history(tx, orderId, from.length === 1 ? from[0] : null, to, note)
+    await enqueueUtilityOutcome(tx, orderId, to)
     return true
   })
 }

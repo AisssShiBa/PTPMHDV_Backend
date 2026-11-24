@@ -29,6 +29,15 @@ export const userKycUpdatedLegacySchema = z.object({
   kycTier: tier
 }).passthrough()
 
+export const userKycReviewedSchema = z.object({
+  authUserId: nonEmptyString.refine(value => value === value.trim()),
+  status: z.enum(['APPROVED', 'REJECTED']),
+  reason: z.string().max(500).optional()
+}).passthrough().refine(
+  data => data.status !== 'REJECTED' || Boolean(data.reason?.trim()),
+  { path: ['reason'], message: 'A rejected KYC review requires a reason' }
+)
+
 export const merchantStatusUpdatedSchema = z.object({
   merchantId: nonEmptyString,
   status: nonEmptyString
@@ -45,6 +54,13 @@ export const paymentFailedSchema = z.object({
   paymentId: nonEmptyString,
   senderId: nonEmptyString,
   reason: nonEmptyString
+}).passthrough()
+
+export const paymentRefundedSchema = z.object({
+  paymentId: nonEmptyString.refine(value => value === value.trim()),
+  userId: nonEmptyString.refine(value => value === value.trim()),
+  // Prisma emits whole VND as a decimal string, for example "50000.00".
+  amount: z.string().regex(/^[1-9]\d{0,17}(?:\.0{1,2})?$/)
 }).passthrough()
 
 export const paymentExpiredSchema = z.object({
@@ -72,12 +88,26 @@ export const fundingCashoutFailedSchema = z.object({
   reason: nonEmptyString
 }).passthrough()
 
+const utilityOrderOutcomeSchema = z.object({
+  orderId: nonEmptyString,
+  userId: nonEmptyString,
+  amount: z.string().regex(/^\d+$/),
+  utilityType: z.enum(['TELCO_TOPUP', 'BILL_PAY']),
+  paymentId: nonEmptyString.nullable().optional(),
+  reason: nonEmptyString.optional()
+}).passthrough()
+
 export const eventSchemaRegistry = {
+  'utility.order_succeeded': { 1: utilityOrderOutcomeSchema },
+  'utility.order_failed': { 1: utilityOrderOutcomeSchema },
+  'utility.order_refunded': { 1: utilityOrderOutcomeSchema },
   'user.registered': { 1: userRegisteredSchema },
   'user.kyc_updated': { 1: userKycUpdatedSchema },
+  'user.kyc_reviewed': { 1: userKycReviewedSchema },
   'merchant.status_updated': { 1: merchantStatusUpdatedSchema },
   'payment.succeeded': { 1: paymentSucceededSchema },
   'payment.failed': { 1: paymentFailedSchema },
+  'payment.refunded': { 1: paymentRefundedSchema },
   'payment.expired': { 1: paymentExpiredSchema },
   'wallet.limit_exceeded': { 1: walletLimitExceededSchema },
   'funding.cashout_completed': { 1: fundingCashoutCompletedSchema },

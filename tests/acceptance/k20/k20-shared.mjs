@@ -1,17 +1,30 @@
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import assert from 'node:assert/strict';
+import { parseEnv } from 'node:util';
 import { appendFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
-import { createHash, createHmac, createSign, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 
 const require = createRequire(import.meta.url);
 const root = resolve(import.meta.dirname, '../../..');
 
 const { PrismaClient } = require(resolve(root, 'services/wallet-service/node_modules/@prisma/client'));
 
-export const GATEWAY_BASE_URL = process.env.GATEWAY_URL || 'http://localhost:3000';
-export const WALLET_DB_URL = process.env.WALLET_DATABASE_URL ||
-  'postgresql://postgres:404897ba313a20d9a166a1db0625276a77186fc0160c690a5e6e93ee09e06720@localhost:5432/wallet_service?schema=public';
-export const REDIS_PASSWORD = process.env.REDIS_PASSWORD || '2e0bccb19255393af31732c39143d9ac47bdd997312b2c636872590ac7cdff4a';
+// Legacy K20 scenarios may reset fixtures: never infer a shared/default target.
+assert.ok(process.env.LIVE_ACCEPTANCE_RUN_FILE, 'K20 requires an explicit isolated LIVE_ACCEPTANCE_RUN_FILE');
+const runFile = resolve(process.env.LIVE_ACCEPTANCE_RUN_FILE);
+const run = JSON.parse(readFileSync(runFile, 'utf8'));
+assert.match(run.project ?? '', /^finvault-acceptance-[0-9a-f]{12}$/);
+const runDirectory = resolve(root, '.cache/acceptance-week2', run.project);
+assert.equal(dirname(runFile), runDirectory);
+const runConfig = parseEnv(readFileSync(resolve(runDirectory, '.env'), 'utf8'));
+const gatewayUrl = new URL(run.gateway);
+assert.equal(gatewayUrl.protocol, 'http:');
+assert.ok(['localhost', '127.0.0.1'].includes(gatewayUrl.hostname));
+export const GATEWAY_BASE_URL = gatewayUrl.origin;
+export const WALLET_DB_URL = 'postgresql://postgres:' + runConfig.POSTGRES_PASSWORD_URLENCODED + '@127.0.0.1:' + runConfig.POSTGRES_HOST_PORT + '/wallet_service?schema=public';
+export const REDIS_PASSWORD = runConfig.REDIS_PASSWORD;
+export const getPostgresContainer = () => run.project + '-postgres-1';
 
 let walletPrismaInstance = null;
 
@@ -30,7 +43,7 @@ export function getWalletPrisma() {
 export async function executeSql(database, sqlQuery) {
   const { execFileSync } = await import('node:child_process');
   const result = execFileSync('docker', [
-    'exec', '-i', 'ptpmhdv_backend-postgres-1',
+    'exec', '-i', getPostgresContainer(),
     'psql', '-U', 'postgres', '-d', database,
     '-At', '-v', 'ON_ERROR_STOP=1', '-c', sqlQuery
   ], { encoding: 'utf8', windowsHide: true });
@@ -44,8 +57,8 @@ export async function flushRedis() {
   const { execFileSync } = await import('node:child_process');
   try {
     execFileSync('docker', [
-      'exec', 'ptpmhdv_backend-redis-1',
-      'redis-cli', '-a', REDIS_PASSWORD, 'flushall'
+      'exec', run.project + '-redis-1', 'sh', '-c',
+      'export REDISCLI_AUTH="$(cat /run/secrets/redis_password)"; exec redis-cli flushall'
     ], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] });
   } catch (e) {
     // ignore
@@ -67,7 +80,7 @@ export function sanitizeLog(str) {
  * Logger writing to console and to logs/k20/<mã>-<timestamp>.log
  */
 export function createK20Logger(scenarioCode) {
-  const logsDir = resolve(root, 'logs/k20');
+  const logsDir = resolve(runDirectory, 'k20');
   mkdirSync(logsDir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const logFilePath = resolve(logsDir, `${scenarioCode}-${timestamp}.log`);
@@ -108,6 +121,7 @@ export async function apiCall(path, options = {}) {
   } = options;
 
   const fullUrl = path.startsWith('http') ? path : `${GATEWAY_BASE_URL}/api${path.startsWith('/') ? path : '/' + path}`;
+  assert.equal(new URL(fullUrl).origin, gatewayUrl.origin, 'K20 API target must match the isolated manifest');
   const reqHeaders = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -592,40 +606,8 @@ export async function getPinTransactionToken(senderToken, paymentId, amount, pin
     });
     return res.data.data.transactionToken;
   } catch (err) {
-    if (err.status === 429) {
-      // Auth-service in-memory rate limiter reached during acceptance loops; sign token with test deployment key
-      const privateKeyPath = resolve(root, 'secrets/auth_txn_private.pem');
-      if (existsSync(privateKeyPath)) {
-        let uid = 'unknown-user';
-        if (senderToken) {
-          const parts = senderToken.split('.');
-          if (parts[1]) {
-            try {
-              const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
-              uid = payload.userId || payload.sub || uid;
-            } catch {
-              // ignore
-            }
-          }
-        }
-        const privateKey = readFileSync(privateKeyPath, 'utf8');
-        const header = Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'JWT' })).toString('base64url');
-        const payload = Buffer.from(JSON.stringify({
-          iss: 'finvault-auth-service',
-          aud: 'finvault-payment-service',
-          sub: uid,
-          paymentId,
-          amount: String(amount),
-          jti: randomUUID(),
-          iat: Math.floor(Date.now() / 1000),
-          exp: Math.floor(Date.now() / 1000) + 60
-        })).toString('base64url');
-        const sign = createSign('SHA256');
-        sign.update(`${header}.${payload}`);
-        const signature = sign.sign({ key: privateKey, dsaEncoding: 'ieee-p1363' }, 'base64url');
-        return `${header}.${payload}.${signature}`;
-      }
-    }
+    // A real 429 is an acceptance failure/rate-limit condition, not permission
+    // to mint a token with a deployment signing key.
     throw err;
   }
 }

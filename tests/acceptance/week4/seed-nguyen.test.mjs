@@ -15,12 +15,15 @@ import {
   shouldUploadKyc,
   syntheticDocument
 } from './seed-lib.mjs'
-import { contextFromProject, seedNguyen } from './seed-nguyen.mjs'
+import { contextFromProject, seedNguyen, seedNguyenDrift } from './seed-nguyen.mjs'
+import { verifyDemo } from '../demo-seed.verify.mjs'
+import { historyTransfers, matchesDemoDrift } from '../demo-seed.mjs'
 
 const require = createRequire(new URL('../../../services/user-service/package.json', import.meta.url))
 
 test('seed module exports the Week-4 entry points', () => {
   assert.equal(typeof seedNguyen, 'function')
+  assert.equal(typeof seedNguyenDrift, 'function')
   assert.equal(typeof contextFromProject, 'function')
   assert.equal(KYC_SLOTS.length, 5)
   assert.equal(new Set(KYC_SLOTS.map((slot) => slot.email)).size, 5)
@@ -29,6 +32,33 @@ test('seed module exports the Week-4 entry points', () => {
     assert.ok(!KYC_SLOTS.some((slot) => slot.email === reserved), reserved)
     assert.notEqual(DRIFT_SLOT.email, reserved)
   }
+})
+
+test('50 demo histories preserve each target balance and stay within the Auth PIN budget', () => {
+  assert.equal(historyTransfers.length, 50)
+  const net = { an: 0n, binh: 0n, chi: 0n }
+  const verifies = { an: 0, binh: 0, chi: 0 }
+  for (const [from, to] of historyTransfers) {
+    assert.notEqual(from, to)
+    net[from] -= 1000n
+    net[to] += 1000n
+    verifies[from]++
+  }
+  assert.deepEqual(net, { an: 0n, binh: 0n, chi: 0n })
+  assert.ok(Object.values(verifies).every(count => count <= 20))
+  assert.deepEqual(Object.values(verifies).sort(), [16, 17, 17])
+})
+
+test('A8 matches wallet and normalized Admin drift contracts without accepting another anomaly', () => {
+  for (const type of ['BALANCE_DRIFT_QUICK', 'BALANCE_DRIFT_FULL']) {
+    assert.equal(matchesDemoDrift({ walletId: 37, type }, '37'), true)
+  }
+  for (const mode of ['QUICK', 'FULL']) {
+    assert.equal(matchesDemoDrift({ walletId: 37, type: 'BALANCE_DRIFT', detail: { mode } }, '37'), true)
+  }
+  assert.equal(matchesDemoDrift({ walletId: 38, type: 'BALANCE_DRIFT_FULL' }, '37'), false)
+  assert.equal(matchesDemoDrift({ walletId: 37, type: 'BALANCE_DRIFT' }, '37'), false)
+  assert.equal(matchesDemoDrift({ walletId: 37, type: 'NEGATIVE_BALANCE' }, '37'), false)
 })
 
 test('synthetic documents are PNG, 900x560, under 5 MB and side-specific', async () => {
@@ -103,4 +133,93 @@ test('notification event ids are deterministic and unique per slot', () => {
 test('contextFromProject rejects malformed or unknown projects without touching Docker', () => {
   assert.throws(() => contextFromProject('production'), /finvault-acceptance/)
   assert.throws(() => contextFromProject('finvault-acceptance-000000000000'), /Unknown acceptance project/)
+})
+
+const demoContext = { project: 'finvault-acceptance-123456abcdef' }
+const fixtureIds = Object.fromEntries(['an', 'binh', 'chi', ...KYC_SLOTS.map(slot => slot.email), DRIFT_SLOT.email]
+  .map((name, index) => [name.includes('@') ? name : name + '@demo.vn', `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`]))
+
+// Synthetic inventories exercise the verifier without creating data or using Docker.
+function fixtureReader({ drift = false, override = () => undefined } = {}) {
+  return (_ctx, database, statement) => {
+    assert.match(statement, /^SELECT /, 'verification must remain read-only')
+    const replacement = override(database, statement)
+    if (replacement !== undefined) return replacement
+    if (database === 'auth_service' && statement.startsWith('SELECT id ')) {
+      return fixtureIds[statement.match(/email='([^']+)'/)[1]] ?? ''
+    }
+    if (statement.startsWith('SELECT kyc_tier')) {
+      const id = statement.match(/auth_user_id='([^']+)'/)[1]
+      return id === fixtureIds['an@demo.vn'] ? '2' : id === fixtureIds['binh@demo.vn'] ? '1' : '0'
+    }
+    if (statement.startsWith('SELECT balance::text')) {
+      const id = statement.match(/"userId"='([^']+)'/)[1]
+      const balances = { [fixtureIds['an@demo.vn']]: '1250000.00', [fixtureIds['binh@demo.vn']]: '300000.00', [fixtureIds['chi@demo.vn']]: '100000.00' }
+      return balances[id] ?? '50000.00'
+    }
+    if (database === 'user_service' || database === 'notification_service') return '1'
+    if (statement.includes('FROM "User" WHERE email IN')) return '5'
+    if (statement === 'SELECT count(*) FROM merchants') return '10'
+    if (statement.includes('FROM outlets')) return '3'
+    if (statement.includes('FROM "Payment"')) return '50'
+    if (statement === 'SELECT count(*) FROM "TopupRequest" WHERE status=\'APPROVED\'') return '3'
+    if (statement.startsWith('SELECT code')) return 'NAP00000001\nNAP00000002\nNAP00000003'
+    if (statement.startsWith('SELECT id::text')) return '99'
+    if (statement.startsWith('SELECT (w.balance')) return drift ? '5000.00' : '0.00'
+    if (statement.startsWith('SELECT COALESCE(SUM(balance)')) return drift ? '5000.00' : '0.00'
+    if (statement.includes('FROM "Wallet" w WHERE w.balance')) return drift ? '1' : '0'
+    if (statement.includes('"referenceId"') && statement.includes("'CLEARING_TOPUP'")) return '1'
+    if (statement.includes('"referenceId"')) return '2'
+    if (statement.includes('"LedgerEntry"') || statement.includes('"Wallet"')) return '0'
+    assert.fail('Unhandled fixture query: ' + statement)
+  }
+}
+
+test('combined H15/N20 verification requires all fixtures and can be repeated without writes', () => {
+  const read = fixtureReader()
+  const first = verifyDemo(demoContext, { read })
+  assert.deepEqual(first.week4, { pendingKyc: 5, sampleNotifications: 5 })
+  assert.equal(first.systemConservation, '0.00')
+  assert.equal(first.intentionallyCorrupted, false)
+  assert.deepEqual(verifyDemo(demoContext, { read }), first)
+})
+
+test('combined verification rejects a missing KYC side and a wrong notification owner', () => {
+  for (const target of ['user_service', 'notification_service']) {
+    const read = fixtureReader({ override: (db, query) => db === target &&
+      (target === 'user_service' ? query.includes("kyc_status='PENDING'") : query.includes('AND "userId"')) ? '0' : undefined })
+    assert.throws(() => verifyDemo(demoContext, { read }), target === 'user_service' ? /two uploaded KYC/ : /notification owner/)
+  }
+})
+
+test('combined verification rejects duplicate sample notifications', () => {
+  const read = fixtureReader({ override: (db, query) => db === 'notification_service' && !query.includes('AND "userId"') ? '2' : undefined })
+  assert.throws(() => verifyDemo(demoContext, { read }), /exactly once/)
+})
+
+test('A8 verification permits only the designated drift and never calls it a clean baseline', () => {
+  const read = fixtureReader({ drift: true })
+  const summary = verifyDemo(demoContext, { read, includeDrift: true })
+  assert.equal(summary.intentionallyCorrupted, true)
+  assert.equal(summary.systemConservation, '5000.00')
+  assert.equal(summary.driftWalletId, '99')
+  assert.throws(() => verifyDemo(demoContext, { read }), /Total balance/)
+  assert.throws(() => verifyDemo(demoContext, { read: fixtureReader(), includeDrift: true }), /designated A8 wallet/)
+})
+
+test('A8 verification rejects an additional wallet mismatch or unexplained money', () => {
+  for (const target of ['mismatch', 'total']) {
+    const read = fixtureReader({ drift: true, override: (_db, query) =>
+      target === 'mismatch' && query.includes('FROM "Wallet" w WHERE w.balance') ? '2' :
+      target === 'total' && query.startsWith('SELECT COALESCE(SUM(balance)') ? '10000.00' : undefined })
+    assert.throws(() => verifyDemo(demoContext, { read, includeDrift: true }), /mismatch|Total balance/)
+  }
+})
+
+test('drift refuses unsafe flags before looking up accounts or issuing SQL', async () => {
+  for (const env of [{ NODE_ENV: 'production', SEED_ALLOW_DRIFT: '1' }, { NODE_ENV: 'test' }]) {
+    await assert.rejects(seedNguyenDrift(demoContext, { env }), /production|SEED_ALLOW_DRIFT/)
+    await assert.rejects(seedNguyen(demoContext, { env, includeDrift: true }), /production|SEED_ALLOW_DRIFT/)
+  }
+  assert.throws(() => verifyDemo({ project: 'production' }, { read: () => assert.fail('must not query') }), /finvault-acceptance/)
 })

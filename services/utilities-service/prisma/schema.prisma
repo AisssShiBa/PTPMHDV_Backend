@@ -71,3 +71,21 @@ model UtilityInbox {
 
   @@map("utility_inbox")
 }
+
+
+// Durable event delivery is separate from the append-only business history.
+model UtilityOutbox {
+  id          String    @id @default(uuid()) @db.Uuid
+  orderId     String    @map("order_id")
+  eventType   String    @map("event_type")
+  payload     Json
+  createdAt   DateTime  @default(now()) @map("created_at")
+  publishedAt DateTime? @map("published_at")
+  lockedUntil DateTime? @map("locked_until")
+  lockToken   String?   @map("lock_token") @db.Uuid
+  attempts    Int       @default(0)
+
+  @@unique([orderId, eventType])
+  @@index([publishedAt, lockedUntil, createdAt])
+  @@map("utility_outbox")
+}

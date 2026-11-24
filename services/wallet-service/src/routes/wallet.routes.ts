@@ -33,18 +33,20 @@ router.get('/transactions/lookup', requireInternalOrAdmin, walletController.look
 router.get('/me/ledger', walletController.getMeLedger);
 router.get('/me', walletController.getMe);
 
-router.get('/:userId/balance', validate(schemas.ownerIdParamSchema.merge(schemas.ownerTypeQuerySchema)), walletController.getBalance);
-router.post('/:userId/hold', requireInternalOrAdmin, validate(schemas.holdSchema), walletController.hold);
-router.post('/:userId/hold/extend', requireInternalOrAdmin, validate(schemas.extendSchema), walletController.extend);
-router.post('/:userId/capture', requireInternalOrAdmin, validate(schemas.referenceSchema), walletController.capture);
-router.post('/:userId/release', requireInternalOrAdmin, validate(schemas.referenceSchema), walletController.release);
-router.post('/:userId/refund', requireInternalOrAdmin, validate(schemas.refundSchema), walletController.refund);
-router.post('/:userId/transfer', requireInternalOrAdmin, validate(schemas.transferSchema), walletController.transfer);
+// Route parameters are available only after Express matches the route.
+// Keep the router-level guard for body-based ownership and check :userId here.
+router.get('/:userId/balance', requireOwnerOrAdmin, validate(schemas.ownerIdParamSchema.merge(schemas.ownerTypeQuerySchema)), walletController.getBalance);
+router.post('/:userId/hold', requireInternalOrAdmin, requireOwnerOrAdmin, validate(schemas.holdSchema), walletController.hold);
+router.post('/:userId/hold/extend', requireInternalOrAdmin, requireOwnerOrAdmin, validate(schemas.extendSchema), walletController.extend);
+router.post('/:userId/capture', requireInternalOrAdmin, requireOwnerOrAdmin, validate(schemas.referenceSchema), walletController.capture);
+router.post('/:userId/release', requireInternalOrAdmin, requireOwnerOrAdmin, validate(schemas.referenceSchema), walletController.release);
+router.post('/:userId/refund', requireInternalOrAdmin, requireOwnerOrAdmin, validate(schemas.refundSchema), walletController.refund);
+router.post('/:userId/transfer', requireInternalOrAdmin, requireOwnerOrAdmin, validate(schemas.transferSchema), walletController.transfer);
 
 // credit và debit chỉ dành cho internal service call hoặc ADMIN (không phải USER thông thường)
-router.post('/:userId/credit', requireInternalOrAdmin, validate(schemas.creditDebitSchema), walletController.credit);
-router.post('/:userId/debit',  requireInternalOrAdmin, validate(schemas.creditDebitSchema), walletController.debit);
+router.post('/:userId/credit', requireInternalOrAdmin, requireOwnerOrAdmin, validate(schemas.creditDebitSchema), walletController.credit);
+router.post('/:userId/debit',  requireInternalOrAdmin, requireOwnerOrAdmin, validate(schemas.creditDebitSchema), walletController.debit);
 
-router.get('/:userId/history', validate(schemas.historyQuerySchema), walletController.history);
+router.get('/:userId/history', requireOwnerOrAdmin, validate(schemas.historyQuerySchema), walletController.history);
 
 export default router;

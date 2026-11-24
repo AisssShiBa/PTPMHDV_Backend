@@ -4,12 +4,45 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseEnv } from 'node:util'
+import { setTimeout as delay } from 'node:timers/promises'
 import { prepare, command, hostReady, account, call, documents, sql } from './week2/runtime.mjs'
 import { checkout, confirm } from './week2/p2p-scenarios.mjs'
 import { signVnpay, TMN } from './week3/vnpay-scenarios.mjs'
 import { assertIsolated, namespace, targets, verifyDemo } from './demo-seed.verify.mjs'
+import { seedNguyen, seedNguyenDrift } from './week4/seed-nguyen.mjs'
+import { assertDriftAllowed, DRIFT_AMOUNT, DRIFT_SLOT } from './week4/seed-lib.mjs'
 
 const save = (directory, name, data) => writeFileSync(resolve(directory, name), JSON.stringify(data, null, 2) + '\n', { mode: 0o600 })
+
+// 25 round trips keep all three target balances unchanged. Each sender verifies
+// at most 17 PINs, below Auth's 20-per-15-minute budget.
+export const historyTransfers = Array.from({ length: 50 }, (_, index) => {
+  const pair = [['an', 'binh'], ['binh', 'chi'], ['chi', 'an']][Math.floor(index / 2) % 3]
+  return index % 2 ? [...pair].reverse() : [...pair]
+})
+
+export function matchesDemoDrift(anomaly, walletId) {
+  return String(anomaly.walletId) === String(walletId) && (
+    ['BALANCE_DRIFT_QUICK', 'BALANCE_DRIFT_FULL'].includes(anomaly.type) ||
+    (anomaly.type === 'BALANCE_DRIFT' && ['QUICK', 'FULL'].includes(anomaly.detail?.mode))
+  )
+}
+
+async function demoAdmin(ctx) {
+  const { admin } = JSON.parse(readFileSync(resolve(ctx.directory, 'demo-accounts.json'), 'utf8'))
+  assert.ok(admin?.username && admin?.password, 'Demo admin credentials missing')
+  const login = await call(ctx, '/auth/signin', { method: 'POST', body: { username: admin.username, password: admin.password } })
+  assert.ok(login.data?.accessToken, 'Demo admin signin failed')
+  return login.data.accessToken
+}
+
+async function baselineReport(ctx, token) {
+  const { data } = await call(ctx, '/admin/reconciliation/run?mode=full', { method: 'POST', token })
+  assert.equal(data?.isBalanced, true, 'RC1 baseline must be balanced before A8')
+  assert.equal(data.anomaliesFound, 0, 'RC1 baseline must report zero anomalies')
+  assert.ok(Array.isArray(data.anomalies) && data.anomalies.length === 0, 'RC1 baseline must have no anomalies')
+  return { id: data.id, isBalanced: true, anomalies: 0 }
+}
 
 export async function seedDemo(ctx) {
   assertIsolated(ctx)
@@ -36,9 +69,9 @@ export async function seedDemo(ctx) {
       method: 'POST', token: accounts.admin.token,
       body: { amount: String(initial), referenceId: namespace + '-initial-' + name, transferType: 'TOPUP' }
     })
-    // Current backend contract is number. Do not change payment owner's contract here.
+    // Keep VND canonical; the current backend also accepts bounded legacy integers.
     const created = (await call(ctx, '/payments/topups', {
-      method: 'POST', token: accounts[name].token, body: { amount: 100000 }, expected: 201
+      method: 'POST', token: accounts[name].token, body: { amount: '100000' }, expected: 201
     })).data
     const code = new URL(created.paymentUrl).searchParams.get('vnp_TxnRef')
     assert.ok(code)
@@ -63,28 +96,67 @@ export async function seedDemo(ctx) {
       await call(ctx, '/merchants/' + merchant.id + '/outlets/' + created.id + '/qr', { token: owner.token })
     }
   }
-  // 25 round trips create 50 real payment histories while preserving target balances.
-  for (let i = 0; i < 50; i++) {
-    const [sender, receiver] = i % 2 ? [accounts.binh, accounts.an] : [accounts.an, accounts.binh]
+  // Also respect Gateway's per-user PIN budget without disabling rate limits.
+  const pinTimes = new Map()
+  for (const [i, [from, to]] of historyTransfers.entries()) {
+    const [sender, receiver] = [accounts[from], accounts[to]]
+    let recent = (pinTimes.get(from) ?? []).filter(time => Date.now() - time < 61_000)
+    if (recent.length >= 9) await delay(Math.max(0, recent[0] + 61_000 - Date.now()))
+    recent = recent.filter(time => Date.now() - time < 61_000)
+    pinTimes.set(from, [...recent, Date.now()])
     const payment = (await checkout(ctx, sender, receiver, '1000', namespace + '-history-' + String(i).padStart(2, '0'))).data
     assert.equal((await confirm(ctx, sender, payment)).data.status, 'SUCCESS')
   }
-  return verifyDemo(ctx)
+  const adminToken = await demoAdmin(ctx)
+  await seedNguyen(ctx, { adminToken, includeDrift: false })
+  const summary = verifyDemo(ctx)
+  return { ...summary, rc1: await baselineReport(ctx, adminToken) }
+}
+
+// Deliberately corrupt only the N20 fixture after verifying a clean baseline.
+// Repeating this stage must never add the drift amount again.
+export async function prepareDemoDrift(ctx) {
+  assertIsolated(ctx)
+  assertDriftAllowed(process.env)
+  const token = await demoAdmin(ctx)
+  const existing = sql(ctx, 'auth_service', `SELECT id FROM "User" WHERE email='${DRIFT_SLOT.email}'`)
+  let alreadyDrifted = false
+  if (existing) {
+    assert.match(existing, /^[0-9a-f-]{36}$/)
+    const delta = sql(ctx, 'wallet_service', `SELECT (w.balance - COALESCE((SELECT SUM(CASE WHEN e.direction='CREDIT' THEN e.amount ELSE -e.amount END) FROM "LedgerEntry" e WHERE e."walletId"=w.id),0))::numeric(20,2)::text FROM "Wallet" w WHERE w."userId"='${existing}' AND w."ownerType"='USER'`)
+    assert.ok(['', '0.00', DRIFT_AMOUNT + '.00'].includes(delta), 'Unexpected existing drift; inspect the test fixture')
+    alreadyDrifted = delta === DRIFT_AMOUNT + '.00'
+  }
+  if (!alreadyDrifted) {
+    verifyDemo(ctx)
+    save(ctx.directory, 'demo-rc1-before-drift.json', await baselineReport(ctx, token))
+    await seedNguyenDrift(ctx, { adminToken: token })
+  }
+  const summary = verifyDemo(ctx, { includeDrift: true })
+  const { data } = await call(ctx, '/admin/reconciliation/run?mode=full', { method: 'POST', token })
+  assert.equal(data?.isBalanced, false, 'A8 fixture must be detected by reconciliation')
+  // Run returns the report summary; W3 carries the actual anomaly details.
+  const detail = await call(ctx, '/admin/reconciliation/reports/' + data.id, { token })
+  const anomaly = detail.data?.anomalies?.find(item => matchesDemoDrift(item, summary.driftWalletId))
+  assert.ok(anomaly, 'A8 drift anomaly missing for the designated wallet')
+  return { ...summary, driftAppliedNow: !alreadyDrifted, reconciliation: { reportId: data.id, anomalyId: anomaly.id } }
 }
 
 export async function runDemo(args = process.argv.slice(2)) {
   const [mode, ...rest] = args
-  assert.ok(['fresh', 'verify-only'].includes(mode), 'Usage: demo-seed.mjs fresh [--no-build] | verify-only <run-directory>')
-  if (mode === 'verify-only') {
-    assert.equal(rest.length, 1)
+  assert.ok(['fresh', 'verify-only', 'a8'].includes(mode), 'Usage: demo-seed.mjs fresh [--no-build] | verify-only <run-directory> [--drift] | a8 <run-directory>')
+  if (mode === 'verify-only' || mode === 'a8') {
+    assert.ok(rest.length === 1 || (mode === 'verify-only' && rest.length === 2 && rest[1] === '--drift'), 'Expected one run directory and optional --drift for verify-only')
+    if (mode === 'a8') assertDriftAllowed(process.env)
     const directory = resolve(rest[0])
     const record = JSON.parse(readFileSync(resolve(directory, 'demo-context.json'), 'utf8'))
     assertIsolated(record)
     const config = parseEnv(readFileSync(resolve(directory, '.env'), 'utf8'))
-    const ctx = { ...record, directory, env: { ...process.env, ...config, COMPOSE_PROJECT_NAME: record.project } }
-    const summary = verifyDemo(ctx)
-    save(directory, 'seed-summary.json', summary)
-    console.log('PASS verify-only: ' + directory)
+    const ctx = { ...record, directory, config, base: record.base ?? 'http://127.0.0.1:' + config.GATEWAY_PORT,
+      env: { ...process.env, ...config, COMPOSE_PROJECT_NAME: record.project }, requests: [] }
+    const summary = mode === 'a8' ? await prepareDemoDrift(ctx) : verifyDemo(ctx, { includeDrift: rest[1] === '--drift' })
+    save(directory, mode === 'a8' ? 'demo-drift.json' : 'seed-summary.json', summary)
+    console.log(mode === 'a8' ? 'PASS A8 fixture detected (adjustment is a separate acceptance step): ' + directory : 'PASS verify-only: ' + directory)
     return
   }
   assert.ok(rest.every(arg => arg === '--no-build'), 'Unknown fresh option')
@@ -94,7 +166,7 @@ export async function runDemo(args = process.argv.slice(2)) {
   const envPath = resolve(ctx.directory, '.env')
   writeFileSync(envPath, readFileSync(envPath, 'utf8') + '\nVNP_TMN_CODE=' + TMN + '\n', { mode: 0o600 })
   ctx.config.VNP_TMN_CODE = ctx.env.VNP_TMN_CODE = TMN
-  save(ctx.directory, 'demo-context.json', { project: ctx.project, composeArgs: ctx.composeArgs })
+  save(ctx.directory, 'demo-context.json', { project: ctx.project, composeArgs: ctx.composeArgs, base: ctx.base })
   console.log('Isolated demo project: ' + ctx.project + '\nEvidence: ' + ctx.directory)
   try {
     const up = ['up', '-d', ...(rest.includes('--no-build') ? [] : ['--build']), '--wait', '--wait-timeout', '480']

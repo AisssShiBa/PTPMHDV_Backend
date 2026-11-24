@@ -161,6 +161,30 @@ test('Kịch bản nghiệm thu RL1: Rate limit Redis tại API Gateway (Nhiệm
         assert.equal(res.responseData?.error?.code, 'TOO_MANY_REQUESTS')
     })
 
+    await t.test('cashout GET polling preserves the write quota while POST still stops after ten attempts', async () => {
+        const options = { ip: '127.0.0.88', path: '/api/funding/cash-out/test-order', headers: { 'x-user-id': 'cashout-polling-regression' } }
+        for (let index = 0; index < 12; index++) {
+            const { req, res } = createMockReqRes({ ...options, method: 'GET' })
+            let allowed = false
+            await limiter(req, res, () => { allowed = true })
+            assert.equal(allowed, true)
+        }
+        for (let index = 0; index < 10; index++) {
+            const { req, res } = createMockReqRes({ ...options, method: 'POST' })
+            let allowed = false
+            await limiter(req, res, () => { allowed = true })
+            assert.equal(allowed, true)
+        }
+        const blocked = createMockReqRes({ ...options, method: 'POST' })
+        let allowed = false
+        await limiter(blocked.req, blocked.res, () => { allowed = true })
+        assert.equal(allowed, false)
+        assert.equal(blocked.res.statusCode, 429)
+        const read = createMockReqRes({ ...options, method: 'GET' })
+        await limiter(read.req, read.res, () => { allowed = true })
+        assert.equal(allowed, true)
+    })
+
     await t.test('6. Redis gặp sự cố: Route Auth/PIN phải Fail-Closed (503), Route khác phải Fail-Open (200/next)', async () => {
         // Giả lập Redis rớt kết nối
         ;(redisClient as any).status = 'close'
