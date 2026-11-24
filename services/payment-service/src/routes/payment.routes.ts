@@ -31,6 +31,7 @@ router.post('/:id/confirm',  requireGateway, requireTransactionToken, attachRequ
 router.post('/internal/:id/confirm', requireInternalAuth, attachRequestId, validate(schemas.paramIdSchema), paymentController.internalConfirm);
 
 // refund chỉ dành cho service nội bộ hoặc ADMIN (user thường 403)
+// Dùng cho giao dịch có status = SUCCESS chuyển ngược lại ví người mua. 
 router.post('/:id/refund', requireGatewayOrInternalKey, requireInternalOrAdmin, attachRequestId, validate(schemas.paramIdSchema), paymentController.refund);
 
 export default router;

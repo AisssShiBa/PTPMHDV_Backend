@@ -12,8 +12,16 @@ const router = Router();
 // Được whitelist tại gateway/authenticate.ts (PUBLIC_ROUTES) và bảo vệ
 // bằng VNPay HMAC checksum trong topupService.handleVnpayIpn / handleVnpayReturn.
 // KHÔNG gắn requireGateway ở đây để tránh reject request hợp lệ từ VNPay.
+
+/* 
+Router được máy chỉ VNPAY tự động gọi sang hệ thống thông báo:
+    - Thông báo kết quả.
+    - Kích hoạt cộng tiền vào ví.
+*/
 router.get('/vnpay/ipn',    topupController.vnpayIpn);
 router.get('/vnpay/return', topupController.vnpayReturn);
+
+
 
 // --- Routes YÊU CẦU XÁC THỰC (User endpoints) ---
 // Tất cả các route dưới đây yêu cầu Gateway Token hợp lệ (ES256, TTL 60s).

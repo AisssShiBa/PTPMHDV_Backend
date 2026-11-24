@@ -34,6 +34,7 @@ function isValidInternalKey(provided: string | string[] | undefined): boolean {
  * Luồng xử lý:
  *   A. Có header `x-gateway-token`  → Xác thực ES256 qua finvault-internal-auth.
  *      Kết quả hợp lệ được inject vào `req.auth` bởi thư viện.
+ *      => Kiểm tra token của người dùng.
  *   B. Có header `x-internal-key`   → So sánh timingSafeEqual với INTERNAL_KEY env.
  *      Gán `req.isInternalCall = true`; req.auth không được set.
  *   C. Không có cả hai             → 401 Unauthorized.
