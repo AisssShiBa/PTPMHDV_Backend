@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   createK20Logger,
+  getPostgresContainer,
   resetToSeed,
   loginSeed,
   apiCall,
@@ -86,7 +87,7 @@ export async function runA2() {
     // Kiểm tra DB: Chỉ có đúng 1 payment và đúng 1 hold
     const { execFileSync } = await import('node:child_process');
     const paymentCountSeq = execFileSync('docker', [
-      'exec', '-i', 'ptpmhdv_backend-postgres-1',
+      'exec', '-i', getPostgresContainer(),
       'psql', '-U', 'postgres', '-d', 'payment_service',
       '-At', '-c', `SELECT count(*) FROM "Payment" WHERE "idempotencyKey"='${seqKey}';`
     ], { encoding: 'utf8' }).trim();
@@ -156,7 +157,7 @@ export async function runA2() {
     assert.equal(replayedData.id, winnerPaymentId, 'Cả hai request phải gắn với cùng 1 paymentId');
 
     const paymentCountPar = execFileSync('docker', [
-      'exec', '-i', 'ptpmhdv_backend-postgres-1',
+      'exec', '-i', getPostgresContainer(),
       'psql', '-U', 'postgres', '-d', 'payment_service',
       '-At', '-c', `SELECT count(*) FROM "Payment" WHERE "idempotencyKey"='${parKey}';`
     ], { encoding: 'utf8' }).trim();

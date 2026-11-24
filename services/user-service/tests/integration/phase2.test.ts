@@ -42,6 +42,7 @@ before(async () => {
   await channel.assertExchange(env.eventExchange, 'topic', { durable: true })
   queue = (await channel.assertQueue('', { exclusive: true })).queue
   await channel.bindQueue(queue, env.eventExchange, 'user.kyc_updated')
+  await channel.bindQueue(queue, env.eventExchange, 'user.kyc_reviewed')
 })
 beforeEach(async () => {
   await prisma.userOutboxEvent.deleteMany()
@@ -61,7 +62,7 @@ async function waitFor(check: () => Promise<boolean>) {
   throw new Error('Timed out waiting for publisher')
 }
 
-test('S11: real Admin -> User approval/rejection writes audit and publishes ordered tier changes to RabbitMQ', async () => {
+test('S11: real Admin -> User approval/rejection audits and publishes tier/review events to RabbitMQ', async () => {
   const user = await create()
   const path = `/api/admin/kyc/${user.id}`
   const approved = await request(adminApp).post(path + '/review').set(adminHeaders).send({ status: 'APPROVED' }).expect(200)
@@ -77,23 +78,28 @@ test('S11: real Admin -> User approval/rejection writes audit and publishes orde
   assert.equal(JSON.stringify(audits).includes(user.idNumber!), false)
   const controller = new AbortController()
   const workers = [startOutboxPublisher(controller.signal), startOutboxPublisher(controller.signal)]
-  try { await waitFor(async () => await prisma.userOutboxEvent.count({ where: { status: 'PUBLISHED' } }) === 3) }
+  try { await waitFor(async () => await prisma.userOutboxEvent.count({ where: { status: 'PUBLISHED' } }) === 5) }
   finally { controller.abort(); await Promise.all(workers) }
   const events = []
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 5; i++) {
     const message = await channel.get(queue, { noAck: true })
     assert.ok(message)
     const event = JSON.parse(message.content.toString())
-    assert.equal(message.fields.routingKey, 'user.kyc_updated')
+    assert.equal(message.fields.routingKey, event.eventType)
+    assert.ok(['user.kyc_updated', 'user.kyc_reviewed'].includes(event.eventType))
     assert.equal(message.properties.messageId, event.eventId)
     events.push(event)
   }
-  assert.deepEqual(events.map(e => e.data), [
+  assert.deepEqual(events.filter(e => e.eventType === 'user.kyc_updated').map(e => e.data), [
     { authUserId: user.authUserId, kycTier: 1, previousTier: 0 },
     { authUserId: user.authUserId, kycTier: 2, previousTier: 1 },
     { authUserId: user.authUserId, kycTier: 0, previousTier: 2 }
   ])
-  assert.equal(new Set(events.map(e => e.eventId)).size, 3)
+  assert.deepEqual(events.filter(e => e.eventType === 'user.kyc_reviewed').map(e => e.data), [
+    { authUserId: user.authUserId, status: 'APPROVED' },
+    { authUserId: user.authUserId, status: 'REJECTED', reason: 'Blurry back image' }
+  ])
+  assert.equal(new Set(events.map(e => e.eventId)).size, 5)
   assert.equal(await publishOne(async () => assert.fail('published rows must not be resent')), false)
   assert.equal(await channel.get(queue, { noAck: true }), false)
 })

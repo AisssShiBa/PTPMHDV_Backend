@@ -30,6 +30,30 @@ function envelope(eventType: string, data: unknown, eventVersion = 1) {
   return { eventId: uuid, eventType, eventVersion, occurredAt, data }
 }
 
+test('KYC review contract accepts decisions and requires a bounded rejection reason', () => {
+  for (const data of [
+    { authUserId: uuid, status: 'APPROVED' },
+    { authUserId: uuid, status: 'REJECTED', reason: 'Blurry image' },
+    { authUserId: uuid, status: 'REJECTED', reason: 'x'.repeat(500) }
+  ]) {
+    assert.deepEqual(parseFinvaultEvent(envelope('user.kyc_reviewed', data)).data, data)
+  }
+  for (const data of [
+    { authUserId: uuid, status: 'PENDING' },
+    { authUserId: uuid, status: 'REJECTED' },
+    { authUserId: uuid, status: 'REJECTED', reason: '   ' },
+    { authUserId: uuid, status: 'REJECTED', reason: 'x'.repeat(501) },
+    { authUserId: uuid, status: 'REJECTED', reason: 42 },
+    { authUserId: ' ' + uuid, status: 'APPROVED' },
+    { authUserId: '', status: 'APPROVED' }
+  ]) {
+    assert.throws(() => parseFinvaultEvent(envelope('user.kyc_reviewed', data)),
+      (error: unknown) => error instanceof EventValidationError && error.reason === 'INVALID_PAYLOAD')
+  }
+  assert.throws(() => parseFinvaultEvent(envelope('user.kyc_reviewed', { authUserId: uuid, status: 'APPROVED' }, 2)),
+    (error: unknown) => error instanceof EventValidationError && error.reason === 'UNSUPPORTED_EVENT_VERSION')
+})
+
 class FakeConfirmChannel extends EventEmitter {
   mode: 'confirm' | 'nack' | 'timeout' | 'return' = 'confirm'
   published: Array<{ exchange: string; key: string; content: Buffer; options: Record<string, unknown> }> = []

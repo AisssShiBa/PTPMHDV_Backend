@@ -412,6 +412,10 @@ export class ReconciliationService {
     } catch {
       throw new DomainException(400, 'INVALID_ANOMALY_ID', 'Anomaly id must be a positive integer');
     }
+    const canonicalReferenceId = `adjust-anomaly-${bigIntId.toString()}`;
+    if (rawReferenceId === undefined || rawReferenceId === null) {
+      effectiveReferenceId = canonicalReferenceId;
+    }
 
     console.log(
       JSON.stringify({
@@ -490,6 +494,9 @@ export class ReconciliationService {
               `Anomaly type ${anomaly.type} cannot be adjusted automatically`
             );
           }
+          if (effectiveReferenceId !== canonicalReferenceId) {
+            throw new DomainException(400, 'INVALID_REFERENCE_ID', 'referenceId must be adjust-anomaly-<id>');
+          }
 
           // 4. Khóa hàng ví theo thứ tự ID tăng dần để triệt tiêu nguy cơ Deadlock
           const wallets = await tx.$queryRaw<any[]>`
@@ -516,6 +523,17 @@ export class ReconciliationService {
             ledgerSumResult[0]?.expectedBalance?.toString() || '0.00'
           );
           const currentBalance = new Prisma.Decimal(wallet.balance.toString());
+          const heldBalance = new Prisma.Decimal(wallet.heldBalance.toString());
+          // Repairing a cache cannot invalidate reservations or conceal a bad
+          // ledger. Keep the anomaly OPEN; no hold or ledger row is rewritten.
+          if (heldBalance.lessThan(0) ||
+              (wallet.ownerType !== 'SYSTEM' && expectedBalance.lessThan(heldBalance))) {
+            throw new DomainException(
+              409,
+              'REPAIR_CONFLICTS_WITH_HOLDS',
+              'Ledger balance cannot cover existing holds; investigate before repairing the cache'
+            );
+          }
           const delta = currentBalance.minus(expectedBalance);
 
           // Kiểm tra tính tương thích ngữ nghĩa của direction và amount nếu được truyền vào
@@ -672,10 +690,10 @@ export class ReconciliationService {
                ROW_NUMBER() OVER(PARTITION BY "walletId" ORDER BY "createdAt" DESC, "id" DESC) as rn
         FROM "LedgerEntry"
       )
-      SELECT w.id as "walletId", w.balance as "actualBalance", l."balanceAfter" as "expectedBalance"
+      SELECT w.id as "walletId", w.balance as "actualBalance", COALESCE(l."balanceAfter", 0) as "expectedBalance"
       FROM "Wallet" w
-      JOIN LatestLedger l ON w.id = l."walletId" AND l.rn = 1
-      WHERE ABS(w.balance - l."balanceAfter") > 0.01;
+      LEFT JOIN LatestLedger l ON w.id = l."walletId" AND l.rn = 1
+      WHERE ABS(w.balance - COALESCE(l."balanceAfter", 0)) > 0.01;
     `;
     return result.map(row => {
       const actual = new Prisma.Decimal(row.actualBalance.toString());
@@ -706,9 +724,9 @@ export class ReconciliationService {
         FROM "LedgerEntry"
         GROUP BY "walletId"
       )
-      SELECT w.id as "walletId", w.balance as "actualBalance", c."calculatedBalance" as "expectedBalance"
+      SELECT w.id as "walletId", w.balance as "actualBalance", COALESCE(c."calculatedBalance", 0) as "expectedBalance"
       FROM "Wallet" w
-      JOIN CalculatedBalance c ON w.id = c."walletId"
+      LEFT JOIN CalculatedBalance c ON w.id = c."walletId"
       WHERE ABS(w.balance - COALESCE(c."calculatedBalance", 0)) > 0.01;
     `;
     return result.map(row => {

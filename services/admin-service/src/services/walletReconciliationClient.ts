@@ -1,10 +1,10 @@
 import { env } from '../config/env'
 
 // Single integration point for the wallet admin reconciliation API.
-// W1-W4 are the contract agreed with the wallet owner (Khoa). On main only W1
-// exists, and it does not return anomalies yet; W2-W4 are not implemented.
-// Everything is therefore tested against a fake wallet HTTP server and must be
-// reported as "not integrated with the real wallet" until Khoa confirms.
+// W1-W4 exist. For balance drift, W4 repairs the wallet cache against the
+// immutable ledger; direction/amount describe that repair, not a new transfer.
+// transactionId is null. Reversing an original financial transaction is a
+// separate operation and is not implemented by this client.
 
 export type WalletAnomaly = {
   id: string

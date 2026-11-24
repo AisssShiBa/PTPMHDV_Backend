@@ -12,6 +12,75 @@ const USER_ID = '44444444-4444-4444-8444-444444444444';
 const adminToken = () => createTestGatewayToken(ADMIN_ID, 'ADMIN');
 const userToken = () => createTestGatewayToken(USER_ID, 'USER');
 
+test('W4 detects and repairs a cache drift on a wallet with no ledger rows', async () => {
+  const { ReconciliationService } = await import('../src/services/reconciliation.service');
+  const service = new ReconciliationService();
+  const wallet = await prisma.wallet.create({ data: { userId: randomUUID(), ownerType: OwnerType.USER,
+    balance: '5000', heldBalance: '0' } });
+  const reports: number[] = [];
+  try {
+    for (const mode of ['quick', 'full'] as const) {
+      const report = await service.runReconciliation(mode);
+      reports.push(report.id);
+      const anomaly = report.anomalies.find(item => item.walletId === wallet.id && item.type === 'BALANCE_DRIFT');
+      assert.ok(anomaly, mode + ' must include a newly created wallet whose cache is nonzero');
+      assert.equal(anomaly.expected, '0.00');
+      assert.equal(anomaly.difference, '5000.00');
+      if (mode === 'full') {
+        const result = await service.adjustAnomaly(anomaly.id,
+          { direction: 'DEBIT', amount: '5000', reason: 'Restore empty wallet cache' }, ADMIN_ID);
+        assert.equal(result.transactionId, null);
+        assert.equal((await prisma.wallet.findUniqueOrThrow({ where: { id: wallet.id } })).balance.toFixed(2), '0.00');
+        assert.equal(await prisma.ledgerEntry.count({ where: { walletId: wallet.id } }), 0);
+      }
+    }
+  } finally {
+    await prisma.anomalyAdjustment.deleteMany({ where: { walletId: wallet.id } });
+    await prisma.reconciliationReport.deleteMany({ where: { id: { in: reports } } });
+    await prisma.wallet.delete({ where: { id: wallet.id } });
+  }
+});
+
+test('W4 cache repair preserves holds and rolls back unsafe repairs', async () => {
+  const { ReconciliationService } = await import('../src/services/reconciliation.service');
+  const service = new ReconciliationService();
+  const wallet = await prisma.wallet.create({ data: { userId: randomUUID(), ownerType: OwnerType.USER,
+    balance: '205000', heldBalance: '201000' } });
+  const report = await prisma.reconciliationReport.create({ data: { totalWallets: 1, anomaliesFound: 1,
+    systemBalanceExpected: '0', systemBalanceActual: '5000', isBalanced: false } });
+  const anomaly = await prisma.reconciliationAnomaly.create({ data: { reportId: report.id,
+    type: 'BALANCE_DRIFT_FULL', walletId: wallet.id, expected: '200000', actual: '205000',
+    difference: '5000', detail: {} } });
+  await prisma.ledgerEntry.create({ data: { transactionId: randomUUID(), walletId: wallet.id,
+    direction: 'CREDIT', amount: '200000', balanceAfter: '200000', referenceId: randomUUID(), transferType: 'TOPUP' } });
+  const before = await prisma.ledgerEntry.findMany({ where: { walletId: wallet.id } });
+  const input = { direction: 'DEBIT', amount: '5000', reason: 'Repair cache after reconciliation',
+    referenceId: `adjust-anomaly-${anomaly.id}` };
+  try {
+    await assert.rejects(service.adjustAnomaly(String(anomaly.id), input, ADMIN_ID),
+      (error: any) => error.code === 'REPAIR_CONFLICTS_WITH_HOLDS');
+    assert.equal((await prisma.wallet.findUniqueOrThrow({ where: { id: wallet.id } })).balance.toFixed(2), '205000.00');
+    assert.equal((await prisma.reconciliationAnomaly.findUniqueOrThrow({ where: { id: anomaly.id } })).status, 'OPEN');
+    assert.equal(await prisma.anomalyAdjustment.count({ where: { anomalyId: anomaly.id } }), 0);
+    await prisma.wallet.update({ where: { id: wallet.id }, data: { heldBalance: '150000' } });
+    await assert.rejects(service.adjustAnomaly(String(anomaly.id), { ...input, referenceId: 'arbitrary-reference' }, ADMIN_ID),
+      (error: any) => error.code === 'INVALID_REFERENCE_ID');
+    const results = await Promise.all([service.adjustAnomaly(String(anomaly.id), input, ADMIN_ID),
+      service.adjustAnomaly(String(anomaly.id), input, ADMIN_ID)]);
+    assert.equal(results.filter(result => result.replayed).length, 1);
+    const after = await prisma.wallet.findUniqueOrThrow({ where: { id: wallet.id } });
+    assert.equal(after.balance.toFixed(2), '200000.00');
+    assert.equal(after.heldBalance.toFixed(2), '150000.00');
+    assert.deepEqual(await prisma.ledgerEntry.findMany({ where: { walletId: wallet.id } }), before);
+    assert.equal(await prisma.anomalyAdjustment.count({ where: { anomalyId: anomaly.id } }), 1);
+  } finally {
+    await prisma.anomalyAdjustment.deleteMany({ where: { anomalyId: anomaly.id } });
+    await prisma.reconciliationReport.delete({ where: { id: report.id } });
+    // Ledger rows are append-only. The test runner drops its disposable test
+    // database; do not disable triggers or delete historical money entries.
+  }
+});
+
 test('K17-4: W4 Phân quyền - 401 khi thiếu token, 403 khi USER, 404 khi không tìm thấy anomaly', async () => {
   const appModule = await import('../src/app');
   const app = appModule.default;

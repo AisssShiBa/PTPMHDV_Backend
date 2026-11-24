@@ -3,13 +3,15 @@ import { env } from '../config/env'
 import { prisma } from '../config/prisma'
 import { createUtilityInbox, type UtilityTransactionContext } from './utilityInbox'
 import { fulfillPaidOrder } from './fulfillmentService'
+import { enqueueUtilityOutcome } from './utilityOutbox'
 import type { PaymentClient, ProviderClient } from '../types/utility'
 
 export const utilityEventQueue = 'utilities.finvault.events'
 export const utilityEventBindings = [
   'payment.succeeded',
   'payment.failed',
-  'payment.expired'
+  'payment.expired',
+  'payment.refunded'
 ] as const
 
 export type UtilityEventDependencies = {
@@ -37,6 +39,19 @@ export async function handleUtilityEvent(
   // Payments that do not belong to a utilities order are acknowledged and
   // ignored; they are not errors and must not be retried forever.
   if (!order) return
+
+  if (event.eventType === 'payment.refunded') {
+    const result = await transaction.prisma.utilityOrder.updateMany({
+      where: { id: order.id, status: 'REFUND_REQUESTED' }, data: { status: 'REFUNDED' }
+    })
+    if (result.count > 0) {
+      await transaction.prisma.utilityOrderHistory.create({ data: {
+        orderId: order.id, fromStatus: 'REFUND_REQUESTED', toStatus: 'REFUNDED', note: 'PAYMENT_REFUNDED'
+      } })
+      await enqueueUtilityOutcome(transaction.prisma, order.id, 'REFUNDED')
+    }
+    return
+  }
 
   if (event.eventType === 'payment.succeeded') {
     const updated = await transaction.prisma.utilityOrder.updateMany({
@@ -72,6 +87,7 @@ export async function handleUtilityEvent(
         note: reason
       }
     })
+    await enqueueUtilityOutcome(transaction.prisma, order.id, 'FAILED')
   }
 }
 
@@ -93,7 +109,8 @@ export function createUtilityEventsConsumer(
       'payment.succeeded': (event, context) =>
         handleUtilityEvent(event, context, dependencies),
       'payment.failed': (event, context) => handleUtilityEvent(event, context, dependencies),
-      'payment.expired': (event, context) => handleUtilityEvent(event, context, dependencies)
+      'payment.expired': (event, context) => handleUtilityEvent(event, context, dependencies),
+      'payment.refunded': (event, context) => handleUtilityEvent(event, context, dependencies)
     }
   })
 }

@@ -1,4 +1,5 @@
 import { Prisma, User as UserProfile } from '@prisma/client'
+import { randomUUID } from 'node:crypto'
 import { prisma } from '../config/prisma'
 import { HttpError } from '../utils/errors'
 import { transaction } from '../utils/transaction'
@@ -48,17 +49,32 @@ export async function setKycStatus(profile: UserProfile, status: UserProfile['ky
   if (!transitions[profile.kycStatus].includes(status)) throw new HttpError(409, 'INVALID_TRANSITION', 'Invalid KYC status transition')
   if (status === 'APPROVED' && (!profile.kycObjectKey || !profile.kycBackObjectKey || !profile.idNumber))
     throw new HttpError(409, 'KYC_DOCUMENTS_REQUIRED', 'Both uploaded KYC images are required before approval')
+  const rejectionReason = status === 'REJECTED' ? reason?.trim() : undefined
+  if (status === 'REJECTED' && (!rejectionReason || rejectionReason.length > 500))
+    throw new HttpError(400, 'VALIDATION_ERROR', 'A rejection reason of 1 to 500 characters is required')
   const profileId = profile.id
   return transaction(async tx => {
     const result = await tx.user.updateMany({
       where: { id: profileId, version: profile.version, deletedAt: null },
       data: { kycStatus: status, kycTier: status === 'APPROVED' ? 1 : status === 'REJECTED' ? 0 : profile.kycTier,
-        kycRejectReason: status === 'REJECTED' ? reason : null,
+        kycRejectReason: rejectionReason ?? null,
         version: { increment: 1 } }
     })
     if (result.count !== 1) throw new HttpError(409, 'CONCURRENT_UPDATE', 'Profile changed; reload and retry')
     const updated = await tx.user.findUniqueOrThrow({ where: { id: profileId } })
     await recordTierChange(tx, updated, profile.kycTier)
+    // Persist the decision even when the tier does not change. Both events must
+    // commit with the profile so a publisher failure can safely retry later.
+    const eventId = randomUUID()
+    await tx.userOutboxEvent.create({ data: {
+      id: eventId, aggregateId: updated.id, aggregateVersion: updated.version,
+      eventType: 'user.kyc_reviewed',
+      payload: {
+        eventId, eventType: 'user.kyc_reviewed', eventVersion: 1, occurredAt: new Date().toISOString(),
+        data: { authUserId: updated.authUserId, status: updated.kycStatus,
+          ...(rejectionReason === undefined ? {} : { reason: rejectionReason }) }
+      }
+    } })
     return updated
   })
 }

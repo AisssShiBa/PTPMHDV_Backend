@@ -19,11 +19,16 @@ import { createUserLookupClient, type UserLookupClient } from './userLookup'
 
 export const financeEventQueue = 'notification.finvault.events'
 export const financeEventBindings = [
+  'utility.order_succeeded',
+  'utility.order_failed',
+  'utility.order_refunded',
   'user.registered',
   'user.kyc_updated',
+  'user.kyc_reviewed',
   'merchant.status_updated',
   'payment.succeeded',
   'payment.failed',
+  'payment.refunded',
   'payment.expired',
   'funding.cashout_completed',
   'funding.cashout_failed'
@@ -175,8 +180,13 @@ export function createFinanceEventHandlers(
     persistEventNotifications(event, context, lookup, updateNotification)
   return {
     'user.kyc_updated': persist,
+    'user.kyc_reviewed': persist,
+    'utility.order_succeeded': persist,
+    'utility.order_failed': persist,
+    'utility.order_refunded': persist,
     'payment.succeeded': persist,
     'payment.failed': persist,
+    'payment.refunded': persist,
     'payment.expired': persist,
     'funding.cashout_completed': persist,
     'funding.cashout_failed': persist

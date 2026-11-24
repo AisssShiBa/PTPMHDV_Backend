@@ -71,13 +71,18 @@ const handlers = createFinanceEventHandlers(inertLookup, async (id, message) => 
   createdAt: new Date(0)
 }))
 
-test('N19 bindings are exactly the six legacy file events plus the two cashout events', () => {
+test('N19 bindings contain registered utility, payment, KYC and cashout event types', () => {
   assert.deepEqual([...financeEventBindings], [
+    'utility.order_succeeded',
+    'utility.order_failed',
+    'utility.order_refunded',
     'user.registered',
     'user.kyc_updated',
+    'user.kyc_reviewed',
     'merchant.status_updated',
     'payment.succeeded',
     'payment.failed',
+    'payment.refunded',
     'payment.expired',
     'funding.cashout_completed',
     'funding.cashout_failed'
@@ -204,3 +209,16 @@ test('the inbox processes a repeated cashout eventId exactly once', async () => 
   assert.equal((await runOnce()).status, 'duplicate')
   assert.equal(transaction.rows.length, 1)
 })
+
+
+for (const [eventType, type] of [['utility.order_succeeded', 'UTILITY_SUCCEEDED'], ['utility.order_failed', 'UTILITY_FAILED'], ['utility.order_refunded', 'UTILITY_REFUNDED']]) {
+  test(`${eventType} validates and persists a user notification without provider details`, async () => {
+    const parsed = parseFinvaultEvent(event(eventType, { orderId: 'synthetic-order', userId: 'user-1', utilityType: 'TELCO_TOPUP', amount: '50000', reason: 'private provider details' }));
+    const transaction = createFakeTransaction();
+    await handlers[eventType](parsed, { tx: transaction.context });
+    assert.equal(transaction.rows.length, 1);
+    assert.equal(transaction.rows[0].type, type);
+    assert.equal(transaction.rows[0].userId, 'user-1');
+    assert.equal(transaction.rows[0].message.includes('private provider details'), false);
+  });
+}

@@ -79,7 +79,9 @@ model UserOutboxEvent {
   lockToken        String?   @map("lock_token")
   lastError        String?   @map("last_error")
 
-  @@unique([aggregateId, aggregateVersion])
+  // One profile transition may emit both a tier change and a review result.
+  // Each event type may occur only once for that profile version.
+  @@unique([aggregateId, aggregateVersion, eventType])
   @@index([status, createdAt])
   @@map("user_outbox_events")
 }

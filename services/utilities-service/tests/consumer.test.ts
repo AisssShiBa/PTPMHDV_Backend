@@ -1,7 +1,7 @@
 import './setup'
 import assert from 'node:assert/strict'
 import { beforeEach, test } from 'node:test'
-import { eventPayloadHash } from 'finvault-events'
+import { createInMemoryInbox, eventPayloadHash } from 'finvault-events'
 import type { FinvaultEvent } from 'finvault-events'
 import { prisma } from '../src/config/prisma'
 import { PaymentClientError } from '../src/services/paymentClient'
@@ -206,3 +206,70 @@ test('refund retries stop at five attempts', async () => {
   await runRecoveryOnce({ paymentClient, providerClient }, new Date(), 60_000)
   assert.equal(paymentClient.refundCalls.length, 0)
 })
+
+
+test('terminal order state and durable event commit together; lost acknowledgement retries the same eventId once at the receiver', async () => {
+  const { transitionOrder } = await import('../src/services/orderService');
+  const { publishUtilityOutboxBatch } = await import('../src/services/utilityOutbox');
+  const order = await createOrder({ paymentId: 'outbox-pay', status: 'PAID' });
+  assert.equal(await transitionOrder(order.id, ['PAID'], 'SUCCESS', 'PROVIDER_SUCCESS'), true);
+  assert.equal(await transitionOrder(order.id, ['PAID'], 'SUCCESS', 'DUPLICATE'), false);
+  const row = await prisma.utilityOutbox.findFirstOrThrow({ where: { orderId: order.id } });
+  assert.equal(row.eventType, 'utility.order_succeeded');
+  const received: string[] = [];
+  const inbox = createInMemoryInbox();
+  let notifications = 0;
+  const deliver = async (event: FinvaultEvent) => {
+    received.push(event.eventId);
+    await inbox.runOnce({ eventId: event.eventId, eventType: event.eventType, payloadHash: eventPayloadHash(event) }, async () => { notifications++; });
+  };
+  const first = await publishUtilityOutboxBatch(async event => { await deliver(event); throw new Error('Synthetic lost broker acknowledgement'); });
+  assert.equal(first.published, 0);
+  assert.equal((await prisma.utilityOutbox.findUniqueOrThrow({ where: { id: row.id } })).publishedAt, null);
+  await prisma.utilityOutbox.update({ where: { id: row.id }, data: { lockedUntil: new Date(0) } });
+  assert.equal((await publishUtilityOutboxBatch(deliver)).published, 1);
+  assert.deepEqual(received, [row.id, row.id]);
+  assert.equal(notifications, 1);
+});
+
+test('outbox insertion failure rolls back both state transition and append-only history', async () => {
+  const { transitionOrder } = await import('../src/services/orderService');
+  const order = await createOrder({ paymentId: 'rollback-pay', status: 'PAID' });
+  await prisma.$executeRawUnsafe(`CREATE FUNCTION utility_test_reject_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'Synthetic outbox failure'; END; $$`);
+  await prisma.$executeRawUnsafe(`CREATE TRIGGER utility_test_outbox_failure BEFORE INSERT ON utility_outbox FOR EACH ROW EXECUTE FUNCTION utility_test_reject_outbox()`);
+  try {
+    await assert.rejects(() => transitionOrder(order.id, ['PAID'], 'SUCCESS', 'MUST_ROLL_BACK'));
+    assert.equal((await prisma.utilityOrder.findUniqueOrThrow({ where: { id: order.id } })).status, 'PAID');
+    assert.equal(await prisma.utilityOrderHistory.count({ where: { orderId: order.id, toStatus: 'SUCCESS' } }), 0);
+    assert.equal(await prisma.utilityOutbox.count({ where: { orderId: order.id } }), 0);
+  } finally {
+    await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS utility_test_outbox_failure ON utility_outbox');
+    await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS utility_test_reject_outbox()');
+  }
+});
+
+test('parallel publisher claims are disjoint and leave no unpublished healthy events', async () => {
+  const { transitionOrder } = await import('../src/services/orderService');
+  const { publishUtilityOutboxBatch } = await import('../src/services/utilityOutbox');
+  for (let index = 0; index < 4; index++) {
+    const order = await createOrder({ paymentId: 'parallel-pay-' + index, status: 'PAID' });
+    await transitionOrder(order.id, ['PAID'], 'SUCCESS', 'PROVIDER_SUCCESS');
+  }
+  const ids: string[] = [];
+  await Promise.all([publishUtilityOutboxBatch(async event => { ids.push(event.eventId); }, 2), publishUtilityOutboxBatch(async event => { ids.push(event.eventId); }, 2)]);
+  assert.equal(ids.length, 4);
+  assert.equal(new Set(ids).size, 4);
+  assert.equal(await prisma.utilityOutbox.count({ where: { publishedAt: null } }), 0);
+});
+
+
+test('payment.refunded closes the refund immediately and repeated delivery emits one utility notification event', async () => {
+  const { deliver } = setup();
+  const order = await createOrder({ paymentId: 'refund-event-pay', status: 'REFUND_REQUESTED' });
+  const event = eventOf('payment.refunded', { paymentId: order.paymentId, userId: order.userId, amount: order.amount.toFixed(0), reason: 'Synthetic refund' });
+  await deliver(event);
+  await deliver(event);
+  assert.equal((await prisma.utilityOrder.findUniqueOrThrow({ where: { id: order.id } })).status, 'REFUNDED');
+  assert.equal(await prisma.utilityOrderHistory.count({ where: { orderId: order.id, toStatus: 'REFUNDED' } }), 1);
+  assert.equal(await prisma.utilityOutbox.count({ where: { orderId: order.id, eventType: 'utility.order_refunded' } }), 1);
+});

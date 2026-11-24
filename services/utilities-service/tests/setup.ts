@@ -9,3 +9,6 @@ process.env.RECOVERY_ENABLED = 'false'
 process.env.PROVIDER_TIMEOUT_MS = '2000'
 delete process.env.GATEWAY_PUBLIC_KEY
 delete process.env.GATEWAY_PUBLIC_KEY_FILE
+
+// Use the synthetic test key, not the Compose-mounted runtime secret.
+delete process.env.INTERNAL_KEY_FILE

@@ -1,285 +1,221 @@
-import { createRequire } from 'node:module';
-import { createRequire } from 'node:module';
+/**
+ * Inspect existing demo accounts; optionally recover missing profile/wallet via
+ * Auth outbox. This replaces the former destructive reset/funding script.
+ * Usage: node scripts/setup-two-users.mjs [--dry-run | --apply] [--email EMAIL]
+ * Requires the existing Docker Compose stack. Default targets: An and Admin.
+ * Does not create Auth accounts, reset credentials, seed funds or approve KYC.
+ */
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const require = createRequire(import.meta.url);
-const root = resolve(import.meta.dirname, '..');
-const bcrypt = require(resolve(root, 'services/payment-service/node_modules/bcrypt'));
-const { PrismaClient: WalletPrisma } = require(resolve(root, 'services/wallet-service/node_modules/@prisma/client'));
+const ROOT = fileURLToPath(new URL('../', import.meta.url));
+const DEFAULT_EMAILS = ['an@demo.vn', 'admin@demo.vn'];
 
-const WALLET_DB_URL = process.env.WALLET_DATABASE_URL ||
-  'postgresql://postgres:404897ba313a20d9a166a1db0625276a77186fc0160c690a5e6e93ee09e06720@localhost:5432/wallet_service?schema=public';
-const REDIS_PASSWORD = process.env.REDIS_PASSWORD || '2e0bccb19255393af31732c39143d9ac47bdd997312b2c636872590ac7cdff4a';
-
-const prisma = new WalletPrisma({
-  datasources: { db: { url: WALLET_DB_URL } }
-});
-
-function executeSql(database, sqlQuery) {
-  const result = execFileSync('docker', [
-    'exec', '-i', 'ptpmhdv_backend-postgres-1',
-    'psql', '-U', 'postgres', '-d', database,
-    '-At', '-v', 'ON_ERROR_STOP=1', '-c', sqlQuery
-  ], { encoding: 'utf8', windowsHide: true });
-  return result.trim();
+export function parseArguments(args) {
+  const emails = [];
+  let apply = false;
+  let dryRun = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--apply') apply = true;
+    else if (args[i] === '--dry-run') dryRun = true;
+    else if (args[i] === '--help') return { help: true };
+    else if (args[i] === '--email' && args[i + 1]) emails.push(args[++i].trim().toLowerCase());
+    else throw new Error('Tham số không hợp lệ: ' + args[i]);
+  }
+  if (apply && dryRun) throw new Error('Chọn --apply hoặc --dry-run.');
+  const selected = [...new Set(emails.length ? emails : DEFAULT_EMAILS)];
+  if (selected.some(email => !/^[^\s@]+@demo\.vn$/.test(email))) {
+    throw new Error('Công cụ này chỉ dành cho tài khoản mẫu @demo.vn.');
+  }
+  return { apply, emails: selected };
 }
 
-async function flushRedis() {
-  try {
-    execFileSync('docker', [
-      'exec', 'ptpmhdv_backend-redis-1',
-      'redis-cli', '-a', REDIS_PASSWORD, 'flushall'
-    ], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] });
-  } catch (e) {
-    // ignore
+export function repairEventId(authId) {
+  const bytes = createHash('sha256').update('finvault:week4:registration-repair:' + authId).digest();
+  bytes[6] = (bytes[6] & 15) | 80;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = bytes.subarray(0, 16).toString('hex');
+  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-');
+}
+
+const AUTH_PROGRAM = `
+const { PrismaClient } = require('@prisma/client');
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const prisma = new PrismaClient();
+(async () => {
+  if (input.action === 'inspect') {
+    const users = await prisma.user.findMany({
+      where: { email: { in: input.emails } },
+      select: { id: true, email: true, username: true, firstName: true, lastName: true, role: true }
+    });
+    const events = await prisma.authOutboxEvent.findMany({
+      where: { aggregateId: { in: users.map(user => user.id) }, eventType: 'user.registered' },
+      select: { id: true, aggregateId: true, status: true }
+    });
+    return { users, events };
+  }
+  if (input.action !== 'enqueue') throw new Error('INVALID_ACTION');
+  return prisma.$transaction(async tx => {
+    const user = await tx.user.findUnique({
+      where: { id: input.authId },
+      select: { id: true, email: true, username: true, firstName: true, lastName: true }
+    });
+    if (!user || user.email !== input.email) throw new Error('AUTH_CHANGED');
+    const event = await tx.authOutboxEvent.upsert({
+      where: { id: input.eventId },
+      create: {
+        id: input.eventId, aggregateId: user.id, eventType: 'user.registered',
+        payload: { authUserId: user.id, email: user.email, username: user.username,
+          firstName: user.firstName, lastName: user.lastName },
+        status: 'PENDING'
+      },
+      update: {}
+    });
+    return { id: event.id, status: event.status };
+  });
+})().then(result => console.log(JSON.stringify(result))).catch(error => {
+  console.error(error.code || 'DEMO_REPAIR_QUERY_FAILED');
+  process.exitCode = 1;
+}).finally(() => prisma.$disconnect());
+`;
+
+const PROFILE_PROGRAM = `
+const { PrismaClient } = require('@prisma/client');
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const prisma = new PrismaClient();
+prisma.user.findMany({
+  where: { OR: [{ authUserId: { in: input.ids } }, { email: { in: input.emails } }] },
+  select: { authUserId: true, email: true, deletedAt: true, kycTier: true }
+}).then(result => console.log(JSON.stringify(result))).catch(error => {
+  console.error(error.code || 'PROFILE_QUERY_FAILED'); process.exitCode = 1;
+}).finally(() => prisma.$disconnect());
+`;
+
+const WALLET_PROGRAM = `
+const { PrismaClient } = require('@prisma/client');
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const prisma = new PrismaClient();
+prisma.wallet.findMany({
+  where: { userId: { in: input.ids }, ownerType: 'USER' },
+  select: { userId: true, status: true, kycTier: true }
+}).then(result => console.log(JSON.stringify(result))).catch(error => {
+  console.error(error.code || 'WALLET_QUERY_FAILED'); process.exitCode = 1;
+}).finally(() => prisma.$disconnect());
+`;
+
+function runInService(service, program, input) {
+  const result = spawnSync('docker', ['compose', 'exec', '-T', service, 'node', '-e', program], {
+    cwd: ROOT, input: JSON.stringify(input), encoding: 'utf8', timeout: 30000,
+    maxBuffer: 1024 * 1024, windowsHide: true
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error('Không truy vấn được ' + service + '. Kiểm tra Docker Compose và log dịch vụ.');
+  }
+  return JSON.parse(result.stdout.trim());
+}
+
+async function inspect(emails) {
+  const auth = runInService('auth-service', AUTH_PROGRAM, { action: 'inspect', emails });
+  const input = { emails, ids: auth.users.map(user => user.id) };
+  const profiles = runInService('user-service', PROFILE_PROGRAM, input);
+  const wallets = runInService('wallet-service', WALLET_PROGRAM, input);
+  return planRepairs(emails, { ...auth, profiles, wallets });
+}
+
+export function planRepairs(emails, snapshot) {
+  return emails.map(email => {
+    const user = snapshot.users.find(item => item.email === email);
+    if (!user) return { email, blockers: ['Không có tài khoản Auth; cần tạo qua luồng đăng ký.'] };
+    const profile = snapshot.profiles.find(item => item.authUserId === user.id);
+    const wallet = snapshot.wallets.find(item => item.userId === user.id);
+    const blockers = [];
+    if (snapshot.profiles.some(item => item.email === email && item.authUserId !== user.id)) {
+      blockers.push('Email profile đang gắn với Auth ID khác.');
+    }
+    if (profile && (profile.deletedAt || profile.email !== email)) {
+      blockers.push('Profile đã xóa hoặc có email không khớp; cần rà soát riêng.');
+    }
+    if ((!wallet && profile?.kycTier > 0) || (!profile && wallet?.kycTier > 0)
+      || (profile && wallet && profile.kycTier !== wallet.kycTier)) {
+      blockers.push('Cần đối chiếu KYC trước khi khôi phục; không tự nâng/hạ tier.');
+    }
+    const events = snapshot.events.filter(item => item.aggregateId === user.id);
+    const eventId = repairEventId(user.id);
+    const repair = events.find(item => item.id === eventId);
+    if (repair?.status === 'FAILED') blockers.push('Sự kiện khôi phục đã FAILED; cần xem publisher/consumer.');
+    return {
+      email, authId: user.id, eventId, blockers,
+      missingProfile: !profile, missingWallet: !wallet,
+      complete: Boolean(profile && wallet && blockers.length === 0),
+      existingEvent: repair || events.find(item => item.status === 'PENDING')
+    };
+  });
+}
+
+function printPlan(plan) {
+  for (const item of plan) {
+    const state = item.blockers.length ? 'CẦN RÀ SOÁT' : item.complete ? 'ĐỦ DỮ LIỆU' : 'THIẾU DỮ LIỆU';
+    console.log(item.email + ': ' + state);
+    if (item.authId) {
+      console.log('  Profile: ' + (item.missingProfile ? 'thiếu' : 'có') + '; ví USER: ' + (item.missingWallet ? 'thiếu' : 'có'));
+    }
+    for (const reason of item.blockers) console.log('  ' + reason);
+    if (!item.complete && item.existingEvent) {
+      console.log('  Sự kiện đã có: ' + item.existingEvent.status + '; không tạo thêm.');
+    }
   }
 }
 
 async function main() {
-  console.log('=== BẮT ĐẦU THIẾT LẬP 2 TÀI KHOẢN NGƯỜI DÙNG & VÍ ADMIN ÂM -200.000Đ ===\n');
-
-  // Mật khẩu và mã PIN chuẩn: 123456
-  const DEFAULT_PASSWORD = 'Password123!';
-  const SIMPLE_PASSWORD = '123456';
-  const DEFAULT_PIN = '123456';
-
-  const passwordHash = bcrypt.hashSync(SIMPLE_PASSWORD, 10);
-  const pinHash = bcrypt.hashSync(DEFAULT_PIN, 10);
-
-  const ACCOUNTS = [
-    {
-      key: 'user1',
-      id: '11111111-1111-4111-8111-111111111111',
-      username: 'user1',
-      email: 'user1@demo.vn',
-      firstName: 'Văn A',
-      lastName: 'Nguyễn',
-      fullName: 'Nguyễn Văn A',
-      phone: '0901111111',
-      role: 'USER',
-      balance: 100000,
-      tier: 2
-    },
-    {
-      key: 'user2',
-      id: '22222222-2222-4222-8222-222222222222',
-      username: 'user2',
-      email: 'user2@demo.vn',
-      firstName: 'Thị B',
-      lastName: 'Trần',
-      fullName: 'Trần Thị B',
-      phone: '0902222222',
-      role: 'USER',
-      balance: 100000,
-      tier: 2
-    },
-    {
-      key: 'admin',
-      id: '33333333-3333-4333-8333-333333333333',
-      username: 'admin',
-      email: 'admin@demo.vn',
-      firstName: 'Quản Trị',
-      lastName: 'Hệ Thống',
-      fullName: 'Quản Trị Viên (Admin)',
-      phone: '0903333333',
-      role: 'ADMIN',
-      balance: 0,
-      tier: 2
-    },
-    {
-      key: 'annguyen',
-      id: '44444444-4444-4444-8444-444444444444',
-      username: 'annguyen',
-      email: 'annguyen@demo.vn',
-      firstName: 'An',
-      lastName: 'Nguyễn',
-      fullName: 'An Nguyễn (Khách Hàng)',
-      phone: '0904444444',
-      role: 'USER',
-      balance: 0,
-      tier: 2
-    }
-  ];
-
-  // 1. Dọn dẹp dữ liệu payment và hold cũ không cần thiết ("các payment khác thì ko cần tạo đủ ko dư")
-  console.log('1. Làm sạch bảng Payment, OutboxEvent, UsedTransactionToken...');
-  executeSql('payment_service', `
-    TRUNCATE TABLE "Payment", "PaymentHistory", "OutboxEvent", "UsedTransactionToken" CASCADE;
-  `);
-
-  // 2. Làm sạch sổ cái trước khi dọn ví
-  console.log('2. Làm sạch LedgerEntry, WalletHold, Anomaly, ReconciliationReport...');
-  executeSql('wallet_service', `
-    TRUNCATE TABLE "WalletHold", "AnomalyAdjustment", "ReconciliationAnomaly", "ReconciliationReport", "UserDailyUsage" CASCADE;
-    ALTER TABLE "LedgerEntry" DISABLE TRIGGER "LedgerEntry_append_only";
-    TRUNCATE TABLE "LedgerEntry" CASCADE;
-    ALTER TABLE "LedgerEntry" ENABLE TRIGGER "LedgerEntry_append_only";
-  `);
-
-  // 2. Tạo hoặc cập nhật tài khoản trong auth_service và user_service
-  console.log('3. Thiết lập thông tin người dùng trong auth_service và user_service:');
-  const userMap = {};
-
-  for (const acc of ACCOUNTS) {
-    // 2.1. auth_service: User
-    executeSql('auth_service', `
-      DELETE FROM "UserPin" WHERE "userId" IN (SELECT id FROM "User" WHERE username='${acc.username}' OR email='${acc.email}');
-      DELETE FROM "Session" WHERE "userId" IN (SELECT id FROM "User" WHERE username='${acc.username}' OR email='${acc.email}');
-      DELETE FROM "User" WHERE username='${acc.username}' OR email='${acc.email}';
-      INSERT INTO "User" ("id", "username", "email", "password", "firstName", "lastName", "role", "createdAt")
-      VALUES ('${acc.id}', '${acc.username}', '${acc.email}', '${passwordHash}', '${acc.firstName}', '${acc.lastName}', '${acc.role}', NOW());
-    `);
-
-    // 2.2. auth_service: UserPin
-    executeSql('auth_service', `
-      INSERT INTO "UserPin" ("id", "userId", "pinHash", "failedAttempts", "lockedUntil", "createdAt", "updatedAt")
-      VALUES ('${randomUUID()}', '${acc.id}', '${pinHash}', 0, NULL, NOW(), NOW());
-    `);
-
-    // 2.3. user_service: users
-    executeSql('user_service', `
-      DELETE FROM users WHERE auth_user_id='${acc.id}' OR email='${acc.email}';
-      INSERT INTO users ("id", "auth_user_id", "email", "full_name", "phone", "kyc_status", "kyc_tier", "created_at", "updated_at")
-      VALUES ('${randomUUID()}', '${acc.id}', '${acc.email}', '${acc.fullName}', '${acc.phone}', 'APPROVED', ${acc.tier}, NOW(), NOW());
-    `);
-
-    userMap[acc.key] = acc;
-    console.log(`   - Tạo thành công [${acc.role}]: username='${acc.username}', email='${acc.email}', password='${SIMPLE_PASSWORD}', PIN='${DEFAULT_PIN}'`);
+  const options = parseArguments(process.argv.slice(2));
+  if (options.help) {
+    console.log('node scripts/setup-two-users.mjs [--dry-run | --apply] [--email an@demo.vn]');
+    console.log('Mặc định chỉ kiểm tra An/Admin. --apply ghi sự kiện khôi phục, không reset dữ liệu hay cấp tiền/KYC.');
+    return 0;
   }
-
-  // 3. Đảm bảo các ví hệ thống tồn tại trong wallet_service
-  console.log('\n4. Thiết lập ví hệ thống (SYSTEM):');
-  const systemCodes = ['CLEARING_TOPUP', 'SETTLEMENT', 'FEE'];
-  for (const code of systemCodes) {
-    const exists = await prisma.wallet.findUnique({ where: { systemCode: code } });
-    if (!exists) {
-      await prisma.wallet.create({
-        data: {
-          ownerType: 'SYSTEM',
-          systemCode: code,
-          balance: 0,
-          heldBalance: 0,
-          currency: 'VND',
-          status: 'ACTIVE',
-          kycTier: 0
-        }
+  let plan = await inspect(options.emails);
+  printPlan(plan);
+  if (plan.some(item => item.blockers.length)) {
+    console.error('Dừng: cần giải quyết các xung đột trước. Không ghi sự kiện khôi phục.');
+    return 2;
+  }
+  if (!options.apply) {
+    console.log('DRY RUN: không ghi dữ liệu. Dùng --apply sau khi đã xem kế hoạch khôi phục.');
+    return 0;
+  }
+  if (plan.every(item => item.complete)) {
+    console.log('Không có dữ liệu cần khôi phục; không ghi thêm sự kiện.');
+    return 0;
+  }
+  for (const item of plan.filter(item => !item.complete)) {
+    if (!item.existingEvent) {
+      const event = runInService('auth-service', AUTH_PROGRAM, {
+        action: 'enqueue', authId: item.authId, email: item.email, eventId: item.eventId
       });
+      console.log(item.email + ': sự kiện khôi phục ' + event.status + '.');
     }
   }
-
-  // Xóa các ví người dùng thừa cũ
-  const keepUserIds = ACCOUNTS.map(a => `'${a.id}'`).join(',');
-  executeSql('wallet_service', `
-    DELETE FROM "Wallet" WHERE "ownerType" = 'USER' AND "userId" NOT IN (${keepUserIds});
-  `);
-
-  // Tạo hoặc cập nhật ví cho các tài khoản
-  for (const acc of ACCOUNTS) {
-    let wallet = await prisma.wallet.findUnique({
-      where: { userId_ownerType: { userId: acc.id, ownerType: 'USER' } }
-    });
-    if (!wallet) {
-      wallet = await prisma.wallet.create({
-        data: {
-          userId: acc.id,
-          ownerType: 'USER',
-          balance: acc.balance,
-          heldBalance: 0,
-          kycTier: acc.tier,
-          currency: 'VND',
-          status: 'ACTIVE'
-        }
-      });
-    } else {
-      wallet = await prisma.wallet.update({
-        where: { id: wallet.id },
-        data: {
-          balance: acc.balance,
-          heldBalance: 0,
-          kycTier: acc.tier,
-          status: 'ACTIVE'
-        }
-      });
+  const deadline = Date.now() + 45000;
+  do {
+    await delay(1500);
+    plan = await inspect(options.emails);
+    if (plan.every(item => item.complete)) {
+      printPlan(plan);
+      console.log('Khôi phục hoàn tất qua publisher/consumer hiện có. Ví mới có số dư mặc định 0; ví cũ được giữ nguyên.');
+      return 0;
     }
-    acc.walletId = wallet.id;
-  }
-
-  // 4. Cập nhật số dư ví hệ thống:
-  // User 1 (100k) + User 2 (100k) = 200k
-  // Ví CLEARING_TOPUP (ví admin đối ứng) = -200k
-  const totalUserBalance = ACCOUNTS.reduce((sum, a) => sum + a.balance, 0); // 200,000
-  const clearingWallet = await prisma.wallet.findUniqueOrThrow({ where: { systemCode: 'CLEARING_TOPUP' } });
-  const settlementWallet = await prisma.wallet.findUniqueOrThrow({ where: { systemCode: 'SETTLEMENT' } });
-  const feeWallet = await prisma.wallet.findUniqueOrThrow({ where: { systemCode: 'FEE' } });
-
-  await prisma.wallet.update({
-    where: { id: clearingWallet.id },
-    data: { balance: -totalUserBalance, heldBalance: 0 }
-  });
-  await prisma.wallet.update({
-    where: { id: settlementWallet.id },
-    data: { balance: 0, heldBalance: 0 }
-  });
-  await prisma.wallet.update({
-    where: { id: feeWallet.id },
-    data: { balance: 0, heldBalance: 0 }
-  });
-
-  console.log(`   - Ví CLEARING_TOPUP (ví admin đối ứng hệ thống): ${-totalUserBalance} VND`);
-  console.log(`   - Ví SETTLEMENT: 0 VND`);
-  console.log(`   - Ví FEE: 0 VND`);
-
-  // 5. Khởi tạo sổ cái cân bằng tuyệt đối (Double-entry Ledger)
-  console.log('\n5. Khởi tạo sổ cái kép (LedgerEntry):');
-
-  let runningClearingBal = 0;
-  for (const acc of ACCOUNTS) {
-    if (acc.balance > 0) {
-      const txnId = randomUUID();
-      const refId = `seed-${acc.username}-${Date.now()}`;
-      runningClearingBal -= acc.balance;
-
-      // DEBIT CLEARING_TOPUP
-      await prisma.ledgerEntry.create({
-        data: {
-          transactionId: txnId,
-          walletId: clearingWallet.id,
-          direction: 'DEBIT',
-          amount: acc.balance,
-          balanceAfter: runningClearingBal,
-          referenceId: `ref-clr-${refId}`,
-          transferType: 'TOPUP',
-          note: `Seed funding debit for ${acc.username}`
-        }
-      });
-
-      // CREDIT User Wallet
-      await prisma.ledgerEntry.create({
-        data: {
-          transactionId: txnId,
-          walletId: acc.walletId,
-          direction: 'CREDIT',
-          amount: acc.balance,
-          balanceAfter: acc.balance,
-          referenceId: `ref-usr-${refId}`,
-          transferType: 'TOPUP',
-          note: `Seed funding credit for ${acc.username}`
-        }
-      });
-
-      console.log(`   - [Bút toán TOPUP] +${acc.balance} VND cho ${acc.username} (DEBIT CLEARING_TOPUP: ${runningClearingBal} VND, CREDIT Ví ${acc.username})`);
-    }
-  }
-
-  // 6. Xóa cache Redis
-  await flushRedis();
-  console.log('\n6. Đã xóa sạch cache Redis.');
-
-  console.log('\n=== HOÀN TẤT THIẾT LẬP DỮ LIỆU ===');
+  } while (Date.now() < deadline && !plan.some(item => item.blockers.length));
+  printPlan(plan);
+  console.error('Chưa hoàn tất: kiểm tra Auth publisher, User consumer và Wallet consumer. Không chạy seed/reset để xử lý.');
+  return 2;
 }
 
-main()
-  .catch(console.error)
-  .finally(() => prisma.$disconnect());
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().then(code => { process.exitCode = code; }).catch(error => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

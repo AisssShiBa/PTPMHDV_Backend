@@ -3,6 +3,7 @@ import { prisma } from './config/prisma'
 import { createDefaultAppOptions, createUtilityApp } from './app'
 import { startUtilityEventsConsumer } from './services/utilityEventsConsumer'
 import { createRecoveryJob } from './services/recoveryService'
+import { startUtilityOutboxPublisher } from './services/utilityOutbox'
 
 const dependencies = createDefaultAppOptions()
 const app = createUtilityApp(dependencies)
@@ -17,6 +18,8 @@ async function start() {
     paymentClient: dependencies.paymentClient,
     providerClient: dependencies.providerClient
   })
+  const publisherStop = new AbortController()
+  const publisher = env.rabbitmqUrl ? startUtilityOutboxPublisher(env.rabbitmqUrl, publisherStop.signal) : Promise.resolve()
   const recovery = createRecoveryJob(
     {
       paymentClient: dependencies.paymentClient,
@@ -34,8 +37,10 @@ async function start() {
     if (stopping) return
     stopping = true
     recovery?.stop()
+    publisherStop.abort()
     server.close(async () => {
       await consumer?.stop()
+      await publisher
       await prisma.$disconnect()
     })
     setTimeout(() => process.exit(1), 15000).unref()

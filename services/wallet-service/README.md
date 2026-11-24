@@ -142,3 +142,19 @@ The conversion migration removes the accidental auth-era `User`, `Session`,
 `WalletTransaction`, and `WalletIdempotency` tables from the wallet database.
 Back up a pre-existing development database before applying it: legacy one-sided
 transactions cannot be truthfully converted into the new mandatory paired ledger.
+# W4 / A8 — quyết định nghiệp vụ 24/11/2026
+
+Đạt chốt khôi phục cache, chưa thêm đảo giao dịch tài chính. `adjustAnomaly`
+khóa anomaly và ví, tính số dư từ ledger ngay trong transaction rồi xác nhận
+direction/amount khớp chênh lệch. `referenceId` cố định `adjust-anomaly-<id>`;
+`transactionId=null` vì không tạo LedgerEntry. Ledger và heldBalance giữ nguyên.
+Ví không phải SYSTEM phải có ledger balance >= heldBalance; held âm hoặc
+thiếu bảo đảm trả 409 `REPAIR_CONFLICTS_WITH_HOLDS`, anomaly vẫn OPEN và không
+ghi adjustment. Không tự giải phóng hold hoặc ghi debit để làm báo cáo cân.
+
+8 test W4 PostgreSQL PASS trên DB thử riêng, thêm trường hợp giữ nguyên hold,
+từ chối tham chiếu khác và hai yêu cầu song song. A8/RC1 còn chạy qua Web →
+Admin thật → Wallet thật với hold 50000 và cache drift +5000. Chi tiết/lệnh
+ở `tests/acceptance/README.md` từ root Backend. Không chạy suite DB lên DB nhóm.
+Quick/full còn kiểm ví chưa có ledger qua LEFT JOIN/COALESCE: cache sai vẫn
+hiện BALANCE_DRIFT với expected=0, và sửa cache không tạo bút toán giả.

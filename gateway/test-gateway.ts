@@ -1,85 +1,135 @@
-// D:\PTPMHDV\Backend\gateway\test-gateway.ts
+import assert from 'node:assert/strict'
+import { generateKeyPairSync, randomBytes } from 'node:crypto'
+import { once } from 'node:events'
+import { test } from 'node:test'
+import express from 'express'
 import jwt from 'jsonwebtoken'
-import { signGatewayToken, verifyGatewayToken } from './src/utils/gatewayToken'
-import { authenticate } from './src/middlewares/authenticate'
-import { env } from './src/config/services'
 
-console.log('=== TEST 1: KIỂM TRA MODULE MẬT MÃ (ES256) ===')
-const userId = '11111111-2222-3333-4444-555555555555'
-const role = 'ADMIN'
-const kycTier = 2
-
-const token = signGatewayToken(userId, role, kycTier)
-const decoded = verifyGatewayToken(token)
-
-console.log('-> Đã ký và verify thành công Token cho:', decoded.sub)
-console.log('-> TTL chính xác 60s:', (decoded.exp! - decoded.iat!) === 60 ? 'PASS' : 'FAIL')
-
-console.log('\n=== TEST 2: KIỂM TRA MIDDLEWARE AUTHENTICATE ===')
-
-// Helper giả lập Request, Response và NextFunction của Express
-const createMockReqRes = (path: string, method: string, authHeader?: string) => {
-    const req: any = {
-        path,
-        method,
-        headers: authHeader ? { authorization: authHeader } : {}
+test('Gateway signing and authentication use isolated test credentials', async t => {
+    const keys = generateKeyPairSync('ec', {
+        namedCurve: 'prime256v1',
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+        publicKeyEncoding: { type: 'spki', format: 'pem' }
+    })
+    const testEnvironment: Record<string, string | undefined> = {
+        NODE_ENV: 'test',
+        GATEWAY_PRIVATE_KEY: keys.privateKey,
+        GATEWAY_PUBLIC_KEY: keys.publicKey,
+        ACCESS_TOKEN_SECRET: randomBytes(32).toString('hex'),
+        INTERNAL_KEY: 'synthetic-gateway-test-key',
+        GATEWAY_PRIVATE_KEY_FILE: undefined,
+        GATEWAY_PUBLIC_KEY_FILE: undefined,
+        ACCESS_TOKEN_SECRET_FILE: undefined,
+        INTERNAL_KEY_FILE: undefined,
+        REDIS_URL_FILE: undefined
     }
-    const res: any = {
-        statusCode: 200,
-        responseData: null,
-        status(code: number) {
-            this.statusCode = code
-            return this
-        },
-        json(data: any) {
-            this.responseData = data
-            return this
+    const previousEnvironment = new Map(Object.keys(testEnvironment).map(key => [key, process.env[key]]))
+    t.after(() => {
+        for (const [key, value] of previousEnvironment) {
+            if (value === undefined) delete process.env[key]
+            else process.env[key] = value
         }
+    })
+    for (const [key, value] of Object.entries(testEnvironment)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
     }
-    return { req, res }
-}
 
-// 2.1. Kiểm tra Route công khai: /health
-{
-    const { req, res } = createMockReqRes('/health', 'GET')
-    let nextCalled = false
-    authenticate(req, res, () => { nextCalled = true })
+    // Load configuration after replacing deployment credentials with fixtures.
+    const { signGatewayToken, verifyGatewayToken } = await import('./src/utils/gatewayToken')
+    const { authenticate } = await import('./src/middlewares/authenticate')
+    const { sanitizeHeaders } = await import('./src/middlewares/sanitizeHeaders')
+    const { env } = await import('./src/config/services')
+    const userId = '11111111-2222-4333-8444-555555555555'
+    const role = 'ADMIN'
 
-    console.log('1. Route công khai (/health):')
-    console.log('   - Cho qua (next called):', nextCalled ? 'PASS' : 'FAIL')
-    console.log('   - KHÔNG còn cờ x-gateway-verified:', req.headers['x-gateway-verified'] === undefined ? 'PASS' : 'FAIL')
-}
+    await t.test('ES256 identity, audience, unique ID and 60-second TTL', () => {
+        const token = signGatewayToken(userId, role)
+        const claims = verifyGatewayToken(token)
+        assert.equal(jwt.decode(token, { complete: true })?.header.alg, 'ES256')
+        assert.equal(claims.sub, userId)
+        assert.equal(claims.role, role)
+        assert.equal(claims.iss, 'finvault-gateway')
+        assert.equal(claims.aud, 'finvault-internal-services')
+        assert.equal(typeof claims.iat, 'number')
+        assert.equal(typeof claims.exp, 'number')
+        assert.equal(claims.exp! - claims.iat!, 60)
+        assert.ok(claims.jti)
+        assert.notEqual(verifyGatewayToken(signGatewayToken(userId, role)).jti, claims.jti)
+    })
 
-// 2.2. Kiểm tra Route bảo vệ nhưng KHÔNG có Token: /api/wallets/me
-{
-    const { req, res } = createMockReqRes('/api/wallets/me', 'GET')
-    authenticate(req, res, () => {})
+    const app = express()
+    app.use(sanitizeHeaders)
+    app.use(authenticate)
+    app.use((req, res) => {
+        const token = req.headers['x-gateway-token']
+        res.json({
+            claims: typeof token === 'string' ? verifyGatewayToken(token) : null,
+            userId: req.headers['x-user-id'],
+            role: req.headers['x-user-role'],
+            legacyHeader: req.headers['x-gateway-verified'],
+            internalKey: req.headers['x-internal-key']
+        })
+    })
+    const server = app.listen(0, '127.0.0.1')
+    t.after(() => new Promise<void>((resolve, reject) => {
+        server.close(error => error ? reject(error) : resolve())
+    }))
+    await once(server, 'listening')
+    const address = server.address()
+    assert.ok(address && typeof address !== 'string')
+    const baseUrl = 'http://127.0.0.1:' + address.port
 
-    console.log('2. Route bảo vệ thiếu token:')
-    console.log('   - Chặn với status 401:', res.statusCode === 401 ? 'PASS' : 'FAIL')
-    console.log('   - Mã lỗi UNAUTHORIZED:', res.responseData?.error?.code === 'UNAUTHORIZED' ? 'PASS' : 'FAIL')
-}
+    await t.test('public health strips forged service headers without minting identity', async () => {
+        const response = await fetch(baseUrl + '/health', {
+            headers: { 'x-gateway-verified': 'true', 'x-internal-key': 'forged-key' }
+        })
+        assert.equal(response.status, 200)
+        const body = await response.json()
+        assert.equal(body.claims, null)
+        assert.equal(body.legacyHeader, undefined)
+        assert.equal(body.internalKey, undefined)
+    })
 
-// 2.3. Kiểm tra Route bảo vệ với Access Token Client hợp lệ: /api/wallets/me
-{
-    // Tạo client token giả lập bằng ACCESS_TOKEN_SECRET
-    const clientToken = jwt.sign(
-        { userId, role, kycTier },
-        env.accessTokenSecret,
-        { expiresIn: '15m' }
-    )
+    await t.test('protected route without Bearer returns UNAUTHORIZED', async () => {
+        const response = await fetch(baseUrl + '/api/wallets/me')
+        assert.equal(response.status, 401)
+        assert.equal((await response.json()).error.code, 'UNAUTHORIZED')
+    })
 
-    const { req, res } = createMockReqRes('/api/wallets/me', 'GET', `Bearer ${clientToken}`)
-    let nextCalled = false
-    authenticate(req, res, () => { nextCalled = true })
+    await t.test('invalid and expired Bearer tokens return INVALID_TOKEN', async () => {
+        const expired = jwt.sign({ userId, role }, env.accessTokenSecret, { expiresIn: -1 })
+        for (const token of ['invalid-token', expired]) {
+            const response = await fetch(baseUrl + '/api/wallets/me', {
+                headers: { authorization: 'Bearer ' + token }
+            })
+            assert.equal(response.status, 401)
+            assert.equal((await response.json()).error.code, 'INVALID_TOKEN')
+        }
+    })
 
-    console.log('3. Route bảo vệ có Client Token hợp lệ:')
-    console.log('   - Xác thực thành công (next called):', nextCalled ? 'PASS' : 'FAIL')
-    console.log('   - Đã sinh header x-gateway-token:', typeof req.headers['x-gateway-token'] === 'string' ? 'PASS' : 'FAIL')
-    console.log('   - Đã xóa triệt để cờ x-gateway-verified:', req.headers['x-gateway-verified'] === undefined ? 'PASS' : 'FAIL')
-
-    // Giải mã kiểm chứng x-gateway-token được sinh ra
-    const verifiedGatewayPayload = verifyGatewayToken(req.headers['x-gateway-token'])
-    console.log('   - Gateway Token giải mã đúng userId:', verifiedGatewayPayload.sub === userId ? 'PASS' : 'FAIL')
-    console.log('   - Gateway Token giải mã đúng kycTier:', verifiedGatewayPayload.kycTier === kycTier ? 'PASS' : 'FAIL')
-}
+    await t.test('valid Bearer supplies identity but cannot set authoritative Wallet KYC', async () => {
+        const token = jwt.sign({ userId, role, kycTier: 2 }, env.accessTokenSecret, { expiresIn: '60s' })
+        const response = await fetch(baseUrl + '/api/wallets/me', {
+            headers: {
+                authorization: 'Bearer ' + token,
+                'x-user-id': 'forged-user',
+                'x-user-role': 'USER',
+                'x-gateway-token': 'forged-token',
+                'x-gateway-verified': 'true',
+                'x-internal-key': 'forged-key'
+            }
+        })
+        assert.equal(response.status, 200)
+        const body = await response.json()
+        assert.equal(body.claims.sub, userId)
+        assert.equal(body.claims.role, role)
+        // Compatibility defaults to zero; Wallet owns the actual KYC tier.
+        assert.equal(body.claims.kycTier, 0)
+        assert.equal(body.claims.exp - body.claims.iat, 60)
+        assert.equal(body.userId, userId)
+        assert.equal(body.role, role)
+        assert.equal(body.legacyHeader, undefined)
+        assert.equal(body.internalKey, undefined)
+    })
+})

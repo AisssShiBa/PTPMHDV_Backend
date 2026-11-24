@@ -1,11 +1,51 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import http from 'http';
-import { sanitizeHeaders } from './src/middlewares/sanitizeHeaders';
-import { authenticate } from './src/middlewares/authenticate';
-import { env } from './src/config/services';
-import { verifyGatewayToken } from './src/utils/gatewayToken';
+let sanitizeHeaders: typeof import('./src/middlewares/sanitizeHeaders').sanitizeHeaders;
+let authenticate: typeof import('./src/middlewares/authenticate').authenticate;
+let env: typeof import('./src/config/services').env;
+let verifyGatewayToken: typeof import('./src/utils/gatewayToken').verifyGatewayToken;
+const previousEnvironment = new Map<string, string | undefined>();
+
+before(async () => {
+  const keys = generateKeyPairSync('ec', {
+    namedCurve: 'prime256v1',
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const testEnvironment: Record<string, string | undefined> = {
+    NODE_ENV: 'test',
+    GATEWAY_PRIVATE_KEY: keys.privateKey,
+    GATEWAY_PUBLIC_KEY: keys.publicKey,
+    ACCESS_TOKEN_SECRET: randomBytes(32).toString('hex'),
+    INTERNAL_KEY: 'synthetic-k15-test-key',
+    REDIS_URL: 'redis://127.0.0.1:1',
+    GATEWAY_PRIVATE_KEY_FILE: undefined,
+    GATEWAY_PUBLIC_KEY_FILE: undefined,
+    ACCESS_TOKEN_SECRET_FILE: undefined,
+    INTERNAL_KEY_FILE: undefined,
+    REDIS_URL_FILE: undefined,
+  };
+  for (const [key, value] of Object.entries(testEnvironment)) {
+    previousEnvironment.set(key, process.env[key]);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  // Delay imports so module configuration cannot read deployment credentials.
+  ({ sanitizeHeaders } = await import('./src/middlewares/sanitizeHeaders'));
+  ({ authenticate } = await import('./src/middlewares/authenticate'));
+  ({ env } = await import('./src/config/services'));
+  ({ verifyGatewayToken } = await import('./src/utils/gatewayToken'));
+});
+
+after(() => {
+  for (const [key, value] of previousEnvironment) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 test('K15-3: SanitizeHeaders loại bỏ triệt để mọi header giả mạo từ client', () => {
   const req: any = {
@@ -77,21 +117,28 @@ test('K15-3: Authenticate middleware - Access Token hợp lệ sinh x-gateway-to
     headers: { authorization: `Bearer ${clientToken}` },
   };
   let nextCalled = false;
-  authenticate(req, {} as any, () => {
+  const res: any = {
+    statusCode: 200,
+    status(code: number) { this.statusCode = code; return this; },
+    json(data: unknown) { this.data = data; return this; },
+  };
+  authenticate(req, res, () => {
     nextCalled = true;
   });
 
   assert.equal(nextCalled, true);
+  assert.equal(res.statusCode, 200);
   assert.ok(req.headers['x-gateway-token'], 'Phải sinh header x-gateway-token');
 
   // Verify lại gateway token bằng public key của gateway
   const verified = verifyGatewayToken(req.headers['x-gateway-token']);
   assert.equal(verified.sub, userId);
   assert.equal(verified.role, role);
-  assert.equal(verified.kycTier, kycTier);
+  // M17: Wallet owns KYC; Gateway must not copy a client-supplied tier.
+  assert.equal(verified.kycTier, 0);
 });
 
-test('K15-3: End-to-end Gateway Proxy tới Wallet Service - chuyển tiếp token, lọc header giả', async () => {
+test('K15-3: Gateway proxy with mock Wallet forwards identity and strips forged headers', async t => {
   // Khởi tạo một mock backend service lắng nghe request từ Gateway
   let receivedHeaders: Record<string, string | string[] | undefined> = {};
   let receivedUrl = '';
@@ -130,18 +177,32 @@ test('K15-3: End-to-end Gateway Proxy tới Wallet Service - chuyển tiếp tok
     res.end();
   });
 
+  const closeServer = (server: http.Server) => new Promise<void>((resolve, reject) => {
+    if (!server.listening) return resolve();
+    server.close(error => error ? reject(error) : resolve());
+  });
+  t.after(() => closeServer(mockWalletServer));
+
   await new Promise<void>((resolve) => mockWalletServer.listen(0, resolve));
-  const mockPort = (mockWalletServer.address() as any).port;
+  const mockAddress = mockWalletServer.address();
+  assert.ok(mockAddress && typeof mockAddress !== 'string');
+  const mockPort = mockAddress.port;
 
   // Cấu hình tạm WALLET_SERVICE_URL của env sang mock port
   const originalWalletUrl = env.services.wallet;
-  (env.services as any).wallet = `http://127.0.0.1:${mockPort}`;
+  env.services.wallet = `http://127.0.0.1:${mockPort}`;
+  t.after(() => { env.services.wallet = originalWalletUrl; });
 
   // Import app của gateway
   const appModule = await import('./src/app');
+  const { redisClient } = await import('./src/config/redis');
+  t.after(() => { redisClient.disconnect(); });
   const gatewayApp = appModule.default;
   const gatewayServer = gatewayApp.listen(0);
-  const gatewayPort = (gatewayServer.address() as any).port;
+  t.after(() => closeServer(gatewayServer));
+  const gatewayAddress = gatewayServer.address();
+  assert.ok(gatewayAddress && typeof gatewayAddress !== 'string');
+  const gatewayPort = gatewayAddress.port;
   const gatewayBaseUrl = `http://127.0.0.1:${gatewayPort}`;
 
   try {
@@ -158,6 +219,8 @@ test('K15-3: End-to-end Gateway Proxy tới Wallet Service - chuyển tiếp tok
       headers: {
         authorization: `Bearer ${clientToken}`,
         'x-user-id': 'hacker_spoofed_user',
+        'x-user-role': 'ADMIN',
+        'x-gateway-token': 'forged-gateway-token',
         'x-gateway-verified': 'true',
         'x-internal-key': 'hacker_secret',
       },
@@ -177,6 +240,9 @@ test('K15-3: End-to-end Gateway Proxy tới Wallet Service - chuyển tiếp tok
     // Giải mã x-gateway-token mà mock backend nhận được:
     const backendVerified = verifyGatewayToken(receivedHeaders['x-gateway-token'] as string);
     assert.equal(backendVerified.sub, userId, 'Sub trong x-gateway-token phải khớp đúng danh tính token của user');
+    assert.equal(backendVerified.role, 'USER');
+    assert.equal(receivedHeaders['x-user-id'], userId);
+    assert.equal(receivedHeaders['x-user-role'], 'USER');
 
     // 2. Gọi /api/wallets/me/ledger?limit=10 qua Gateway
     const resLedger = await fetch(`${gatewayBaseUrl}/api/wallets/me/ledger?limit=10`, {
@@ -187,10 +253,11 @@ test('K15-3: End-to-end Gateway Proxy tới Wallet Service - chuyển tiếp tok
     });
 
     assert.equal(resLedger.status, 200);
+    const ledger = await resLedger.json();
+    assert.deepEqual(ledger.data, { items: [], nextCursor: null });
     assert.equal(receivedUrl, '/api/wallets/me/ledger?limit=10', 'Query parameters phải được forward đầy đủ');
   } finally {
-    (env.services as any).wallet = originalWalletUrl;
-    gatewayServer.close();
-    mockWalletServer.close();
+    await closeServer(gatewayServer);
+    await closeServer(mockWalletServer);
   }
 });

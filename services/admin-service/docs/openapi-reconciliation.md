@@ -78,7 +78,7 @@ x-gateway-token: <ADMIN JWT>
 {
   "direction": "CREDIT",
   "amount": "50000",
-  "reason": "Correcting a negative balance"
+  "reason": "Restore a cache that is 50000 below its ledger balance"
 }
 ```
 
@@ -88,6 +88,12 @@ x-gateway-token: <ADMIN JWT>
   (`400 INVALID_AMOUNT`).
 - `reason` is required and must contain 5-500 characters after trimming
   (`400 REASON_REQUIRED` / `400 INVALID_REASON`).
+- W4 is a cache repair for BALANCE_DRIFT. Direction/amount must match the current
+  cache difference. The ledger is immutable; no financial transaction is reversed
+  or created, so `transactionId` is `null`. Other anomaly types need investigation.
+- Existing holds remain intact. `409 REPAIR_CONFLICTS_WITH_HOLDS` leaves the Wallet
+  anomaly OPEN without a repair when ledger balance cannot cover held funds;
+  Admin records the definite rejection rather than UNKNOWN.
 - One local `AnomalyAdjustment` claim is created per anomaly (unique
   `anomalyId`), with the fixed `referenceId = adjust-anomaly-<anomalyId>`.
   Concurrent requests for the same anomaly get `409 ADJUSTMENT_IN_PROGRESS`;
@@ -110,7 +116,7 @@ Example response:
     "anomalyId": "123",
     "status": "SUCCEEDED",
     "referenceId": "adjust-anomaly-123",
-    "transactionId": "1f8f6a5e-...",
+    "transactionId": null,
     "replayed": false
   }
 }
@@ -128,4 +134,7 @@ Example response:
 `npm test` uses a real PostgreSQL database (`admin_test`) and a **fake wallet
 HTTP server**. It does not call the real wallet. Acceptance criterion RC1
 (`isBalanced=true`, 0 anomalies after every scenario) is not claimed because the
-real stack has not been run.
+real stack has not been run by that unit suite. Separate week-4 live acceptance
+now covers real Admin/Wallet/PostgreSQL, deliberate cache drift, immutable ledger,
+preserved live reservation, audit, double-click, replay and a clean final RC1.
+See the current Backend acceptance README and its dated evidence paths.

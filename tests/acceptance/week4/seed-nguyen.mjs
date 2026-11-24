@@ -3,9 +3,7 @@
 // except the single documented drift UPDATE, which only touches
 // "Wallet".balance and never a ledger entry.
 //
-// Ordering (printed at the end as well):
-//   RC1 (reconciliation, isBalanced=true) MUST run BEFORE this seed.
-//   A8 (drift anomaly) MUST run AFTER this seed.
+// Seed KYC/notifications first; run RC1 before the optional drift-only stage.
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
@@ -141,6 +139,7 @@ async function ensureAccount(ctx, slot, accounts) {
       }
     })
     accounts[slot.key] = { username: slot.username, email: slot.email, password }
+    writeAccounts(ctx.directory, accounts)
     authId = await until(
       () => authIdByEmail(ctx, slot.email),
       'Auth provisioning timed out for ' + slot.email
@@ -227,6 +226,9 @@ async function ensureKyc(ctx, slot, account, accounts) {
 }
 
 async function creditOnce(ctx, authId, amount, referenceId, adminToken) {
+  // Signup and wallet creation are asynchronous; an Auth row alone is not
+  // proof that the wallet consumer has finished provisioning this account.
+  await until(() => walletIdByUser(ctx, authId), 'Wallet provisioning timed out for seed credit', 60_000)
   await call(ctx, '/wallets/' + authId + '/credit', {
     method: 'POST',
     token: adminToken,
@@ -314,7 +316,7 @@ async function seedDrift(ctx, adminToken, env, accounts) {
       'wallet_service',
       'UPDATE "Wallet" SET balance = balance + ' +
         BigInt(DRIFT_AMOUNT) +
-        ' WHERE id = \'' +
+        ' WHERE balance = ' + BigInt(ledgerBefore) + ' AND id = \'' +
         requireSafeSqlValue(walletId) +
         '\''
     )
@@ -351,14 +353,30 @@ async function seedDrift(ctx, adminToken, env, accounts) {
   }
 }
 
+// Drift is an explicit second stage; it does not recreate KYC or notifications.
+export async function seedNguyenDrift(ctx, options = {}) {
+  assert.match(ctx.project, /^finvault-acceptance-[0-9a-f]{12}$/)
+  const env = options.env ?? process.env
+  assertDriftAllowed(env)
+  const adminToken = await resolveAdmin(ctx, options)
+  const accounts = readAccounts(ctx.directory)
+  const drift = await seedDrift(ctx, adminToken, env, accounts)
+  writeAccounts(ctx.directory, accounts)
+  const totalBalance = sql(ctx, 'wallet_service', 'SELECT (COALESCE(SUM(balance), 0)::bigint)::text FROM "Wallet"')
+  assert.equal(BigInt(totalBalance) - BigInt(DRIFT_AMOUNT), 0n, 'Only the deliberate drift may break conservation')
+  return drift
+}
+
 /**
  * @param {object} ctx week2 acceptance runtime context (project, directory,
  *   config, composeArgs, env, base) built by tests/acceptance/week2/runtime.mjs
- * @param {{ adminToken?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ adminToken?: string, env?: NodeJS.ProcessEnv, includeDrift?: boolean }} [options]
  */
 export async function seedNguyen(ctx, options = {}) {
   assert.match(ctx.project, /^finvault-acceptance-[0-9a-f]{12}$/)
   const env = options.env ?? process.env
+  const includeDrift = options.includeDrift ?? env.SEED_ALLOW_DRIFT === '1'
+  if (includeDrift) assertDriftAllowed(env)
   const adminToken = await resolveAdmin(ctx, options)
   const accounts = readAccounts(ctx.directory)
 
@@ -372,7 +390,7 @@ export async function seedNguyen(ctx, options = {}) {
     writeAccounts(ctx.directory, accounts)
   }
 
-  const drift = options.includeDrift !== false
+  const drift = includeDrift
     ? await seedDrift(ctx, adminToken, env, accounts)
     : null
   writeAccounts(ctx.directory, accounts)
@@ -388,16 +406,14 @@ export async function seedNguyen(ctx, options = {}) {
   const totalBalance = sql(
     ctx,
     'wallet_service',
-    drift
-      ? 'SELECT (COALESCE(SUM(balance), 0)::bigint)::text FROM "Wallet" WHERE id <> \'' +
-        requireSafeSqlValue(drift.walletId) + '\''
-      : 'SELECT (COALESCE(SUM(balance), 0)::bigint)::text FROM "Wallet"'
+    'SELECT (COALESCE(SUM(balance), 0)::bigint)::text FROM "Wallet"'
   )
+  const normalizedBalance = BigInt(totalBalance) - (drift ? BigInt(DRIFT_AMOUNT) : 0n)
   assert.equal(
-    BigInt(totalBalance),
+    normalizedBalance,
     0n,
     drift
-      ? 'Balance conservation excluding the drift wallet must stay 0'
+      ? 'Balance conservation subtracting only the deliberate drift must stay 0'
       : 'Balance conservation must stay 0 before drift'
   )
 
@@ -409,7 +425,7 @@ export async function seedNguyen(ctx, options = {}) {
     pendingKycProfiles: Number(pending),
     driftWallet: drift,
     totalBalance,
-    totalBalanceExcludingDrift: totalBalance,
+    totalBalanceAdjustedForDrift: normalizedBalance.toString(),
     notifications: profiles.map((profile) => ({
       key: profile.key,
       type: 'WALLET_CREDITED',
@@ -417,16 +433,14 @@ export async function seedNguyen(ctx, options = {}) {
       created: profile.notificationCreated,
       duplicate: profile.notificationDuplicate
     })),
-    ordering: [
-      'Run RC1 (reconciliation) BEFORE this seed when isBalanced=true is expected.',
-      'Run A8 (balance drift anomaly) AFTER this seed.',
-      'Total wallet balance excluding the drift wallet stays 0.'
-    ]
+    ordering: drift
+      ? ['RC1 must have passed before drift.', 'Run A8 next; total balance minus the deliberate drift is 0.']
+      : ['Run RC1 on this balanced seed.', 'Enable the separate drift stage only when preparing A8.']
   }
   writeFileSync(resolve(ctx.directory, 'week4-seed.json'), JSON.stringify(summary, null, 2))
 
   console.log('Week 4 seed: ' + KYC_SLOTS.length + ' PENDING KYC profiles, ' +
-    profiles.length + ' sample notifications, 1 drift wallet.')
+    profiles.length + ' sample notifications, ' + (drift ? 1 : 0) + ' drift wallet(s).')
   console.log('KYC profiles: ' + profiles.map((profile) => profile.email + '=' + profile.kycStatus).join(', '))
   console.log('Notifications created now: ' +
     profiles.filter((profile) => profile.notificationCreated).length + ', already present: ' +
