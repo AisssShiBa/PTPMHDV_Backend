@@ -12,6 +12,7 @@ import { Request, Response, NextFunction } from 'express';
 import { timingSafeEqual } from 'crypto';
 
 // Middleware dùng để xác thực các lời gọi Service to Service thông qua X-Internal-Key.
+// Người dùng từ bên ngoài sẽ bị từ chối.
 export const requireInternalAuth = (req: Request, res: Response, next: NextFunction) => {
     const expectedRaw = process.env.INTERNAL_KEY;
 

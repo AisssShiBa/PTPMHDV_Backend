@@ -1,5 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 
+/*
+    1. Nếu dùng x-internal-key (Service nội bộ)
+        => Cho qua.
+    2. Nếu quản trị viên (role = ADMIN).
+        => Cho qua.
+    3. Người dùng thông thường bị chặn.
+*/ 
 export const requireInternalOrAdmin = (req: Request, res: Response, next: NextFunction) => {
     if ((req as any).isInternalCall) {
         return next();
