@@ -49,17 +49,20 @@ export class TopupService {
     this.walletClient = deps.walletClient ?? defaultWalletClient;
   }
 
+  // Khởi tạo giao dịch nạp tiền và đường link thanh toán VNPAY trả về 
   async createTopup(userId: string, amount: string | number, ipAddr: string, idempotencyKey?: string) {
     const tmnCode = this.requireConfig('VNP_TMN_CODE');
     const secretKey = this.requireConfig('VNP_HASH_SECRET');
     const vnpUrl = this.requireConfig('VNP_URL');
     const returnUrl = this.requireConfig('VNP_RETURN_URL');
 
+    // B1: Kiểm tra hợp lệ số tiền.
     const amountDecimal = new Prisma.Decimal(amount);
     if (!amountDecimal.isInteger() || amountDecimal.lte(0)) {
       throw new DomainException(400, 'INVALID_AMOUNT', 'Amount must be a positive integer VND value');
     }
 
+    // B2: Tham số & Sinh URL thanh toán VNPAY
     const code = 'NAP' + crypto.randomBytes(4).toString('hex').toUpperCase();
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
 
@@ -86,8 +89,10 @@ export class TopupService {
     const signed = this.sign(sorted, secretKey);
     const paymentUrl = vnpUrl + '?' + new URLSearchParams({ ...sorted, vnp_SecureHash: signed }).toString();
 
-    // Persist the signed URL and intent together: a lost response cannot create
-    // a second order, and concurrent requests never observe a half-created URL.
+    // Lưu trữ đồng thời (ngay trong cùng một lần ghi vào Database) cả đường link URL
+    // đã ký và ý định nạp tiền (intent): một phản hồi bị mất kết nối trên đường truyền
+    // mạng sẽ không thể tạo ra đơn hàng thứ hai, và các request gửi đến đồng thời sẽ 
+    // không bao giờ nhìn thấy một URL mới chỉ được tạo một nửa (chưa hoàn thiện).
     const replay = async () => {
       const existing = await this.store.topupRequest.findUnique({
         where: { userId_idempotencyKey: { userId, idempotencyKey } },
@@ -101,11 +106,13 @@ export class TopupService {
       }
       return { topupId: existing.id, paymentUrl: existing.paymentUrl };
     };
+    // B3: Cơ chế chống tạo trùng lặp 
     if (idempotencyKey) {
       const previous = await replay();
       if (previous) return previous;
     }
     try {
+      // B4: Lưu và Database & Ghi nhật ký. (Audit log)
       const topup = await this.store.topupRequest.create({
         data: {
           userId, amount: amountDecimal, code, expiresAt, paymentUrl,
@@ -124,7 +131,16 @@ export class TopupService {
     }
   }
 
+  /* 
+  Webhook gọi ngầm giữa hai server do VNPAY bắn về khi người dùng hoàn tất (hoặc hủy) thanh toán. (nhận request từ VNPAY)
+    - Giai đoạn 1: Bảo mật và tính toàn vẹn.
+    - Giai đoạn 2: Chống lặp và đơn đã đóng.
+    - Giai đoạn 3: Phân loại kết quả VNPAY.
+    - Giai đoạn 4: Tranh chấp khóa 
+    - Giai đoạn 5: Gọi cộng ví tiền.
+  */ 
   async handleVnpayIpn(queryArgs: unknown) {
+    //1. Xác thực chữ kí số.
     const verification = this.verifySignature(queryArgs);
     if (!verification.ok) {
       return { RspCode: RSP.INVALID_SIGNATURE, Message: 'Invalid signature' };
@@ -135,6 +151,7 @@ export class TopupService {
     const responseCode = params['vnp_ResponseCode'];
     const transactionStatus = params['vnp_TransactionStatus'];
 
+    // 2. Kiểm tra đơn hàng và số tiền.
     const topup = await this.store.topupRequest.findUnique({ where: { code: orderId } });
     if (!topup) {
       return { RspCode: RSP.ORDER_NOT_FOUND, Message: 'Order not found' };
@@ -144,21 +161,28 @@ export class TopupService {
       return { RspCode: RSP.INVALID_AMOUNT, Message: 'Invalid amount' };
     }
 
-    // A terminal order can never be flipped by a late or replayed callback.
-    if (topup.status === TopupStatus.APPROVED) {
-      return { RspCode: RSP.ALREADY_CONFIRMED, Message: 'Order already confirmed' };
-    }
-    if (topup.status === TopupStatus.FAILED || topup.status === TopupStatus.REJECTED || topup.status === TopupStatus.EXPIRED) {
+    // 4. Chống lặp và bảo vệ trạng thái cuối.
+    // Một đơn hàng đã ở trạng thái APPROVED hoặc FAILED hoặc REJECTED hoặc EXPIRED thì không thể thay đổi nữa
+    if (
+      topup.status === TopupStatus.APPROVED ||
+      topup.status === TopupStatus.FAILED ||
+      topup.status === TopupStatus.REJECTED ||
+      topup.status === TopupStatus.EXPIRED
+    ) {
       return { RspCode: RSP.ALREADY_CONFIRMED, Message: 'Order already confirmed' };
     }
 
-    // Only a bank-confirmed payment counts as paid. responseCode 00 with a
-    // non-zero transactionStatus means the money did not move.
+    /*
+    - Chỉ khi ngân hàng thực sự xác nhận thành công thì mới được tính là đã thanh toán (paid)
+    - Nếu responseCode là 00 nhưng transactionStatus khác 00 thì có nghĩa là tiền chưa hề rời khỏi tài khoản ngân hàng. 
+    */
     const paid = responseCode === '00' && transactionStatus === '00';
 
-    // "Not paid" is only a fact when VNPAY actually said so. responseCode 00
-    // without a transactionStatus is an incomplete message, not a failure:
-    // persisting FAILED there could strand money that did move.
+    /*
+    "Not paid" là một giao dịch được coi là 'Thất bại' khi VNPAY thực sư tuyên bố như vậy. 
+    Nếu responseCode là 00 mà không có transactionStatus, thì đầy chỉ là một gói tin chưa được trọn vẹn chứ không phải là thanh toán thất bại.
+    Nếu vội vàng lưu trạng thái FAILED vào Database thì có thể làm 'treo' tiền cảu khách hàng trang khi thực tế tiền của họ đã bị trừ ở ngân hàng.
+    */
     const clearlyNotPaid = responseCode !== '00' || (transactionStatus !== undefined && transactionStatus !== '00');
 
     if (!paid && !clearlyNotPaid) {
@@ -166,10 +190,7 @@ export class TopupService {
     }
 
     if (!paid) {
-      // Do not downgrade a record that another worker already claimed as
-      // PROCESSING (that path may have credited the wallet).
-      // updateMany takes scalars only: nested relation writes are unsupported,
-      // so the audit row is appended after the conditional status change wins.
+      // Không hạ cấp (down grade) một bản ghi mà một worker/ tiến trình khác đang giành quyền xử lý là PROCESSING (bời vì tiền đã vào ví rồi).
       const failed = await this.store.topupRequest.updateMany({
         where: { id: topup.id, status: TopupStatus.PENDING },
         data: {
@@ -193,17 +214,20 @@ export class TopupService {
       return { RspCode: RSP.SUCCESS, Message: 'Confirm Success' };
     }
 
+    // Thực hiện tranh quyền xử lý.
     const claimed = await this.claimForProcessing(topup.id, topup.status, params);
     if (!claimed) {
       const current = await this.store.topupRequest.findUnique({ where: { id: topup.id }, select: { status: true } });
-      if (current?.status === TopupStatus.APPROVED) {
+      if (
+        current?.status === TopupStatus.APPROVED ||
+        current?.status === TopupStatus.FAILED ||
+        current?.status === TopupStatus.REJECTED ||
+        current?.status === TopupStatus.EXPIRED
+      ) {
         return { RspCode: RSP.ALREADY_CONFIRMED, Message: 'Order already confirmed' };
       }
-      if (current?.status === TopupStatus.FAILED || current?.status === TopupStatus.REJECTED || current?.status === TopupStatus.EXPIRED) {
-        return { RspCode: RSP.ALREADY_CONFIRMED, Message: 'Order already confirmed' };
-      }
-      // Another worker holds an active lease. Let VNPAY retry instead of
-      // acknowledging an outcome we have not confirmed yet.
+      // Một tiến trình khác đang giữ quyền xử lý. VNPAY sẽ retry sau, thay vì thừa nhận/ báo thành công một kết quả mà
+      // hệ thống chún ta thực tế vẫn chưa xác nhận xong.
       return { RspCode: RSP.UNKNOWN_ERROR, Message: 'Processing in progress' };
     }
 
@@ -212,17 +236,19 @@ export class TopupService {
     if (outcome === 'approved') {
       return { RspCode: RSP.SUCCESS, Message: 'Confirm Success' };
     }
-    // Never acknowledge success when the wallet state is unknown. VNPAY keeps
-    // retrying (99) and the recovery worker reconciles the same topup.code.
+    // Tuyệt đối không báo giờ báo thành công (acknowledge success) cho VNPAY khi trạng thía thực tế của ví tiền vẫn chưa
+    // rõ ràng (unknown). Hãy trả về mã 99 để VNPAY tiếp tục gửi lại (retry), và tiền trình phục hồi ngầm sẽ tự động đối soát
+    // dựa trên cùng mã topup.code
     return { RspCode: RSP.UNKNOWN_ERROR, Message: outcome === 'rejected' ? 'Wallet rejected credit; pending reconciliation' : 'Unknown error' };
   }
 
+  // Thanh toán xong trên cổng VNPAY và trình duyệt sẽ chuyển hướng quay về website qua đường dẫn trang web
   async handleVnpayReturn(queryArgs: unknown) {
     const verification = this.verifySignature(queryArgs);
     if (!verification.ok) {
       throw new DomainException(400, 'INVALID_SIGNATURE', 'Chữ ký VNPAY không hợp lệ');
     }
-    // Read-only: the return URL must never credit the wallet.
+    // Read-only: Return URL tuyệt dối không bao giờ được phép cộng tiền vào tài khoản.
     return verification.params;
   }
 
@@ -291,9 +317,12 @@ export class TopupService {
   }
 
   async approveTopup(id: string, adminId: string) {
+    // Mở transaction trong Database để kiểm tra và khóa đơn cần duyệt.
     const topup = await this.manualDecision(id, adminId, 'APPROVE');
+    // Đơn đã thành công thì trả luôn
     if (topup.status === TopupStatus.APPROVED) return topup;
-    // IPN and manual approval always credit the same reference (topup.code).
+    // Cả luồng VNPay IPN tự động và luồng Admin duyệt thủ công đều luôn truyền cùng một mã tham chuết referenceId = topup.code khi gọi sang wallet-service
+    // Gọi cộng tiền.
     const result = await this.creditAndApprove(topup.id, topup.userId, topup.amount.toFixed(2), topup.code, true, adminId);
     if (result !== 'approved') {
       throw new DomainException(503, 'TOPUP_OUTCOME_UNKNOWN', 'Approval is being reconciled; read the existing request status');
@@ -308,6 +337,9 @@ export class TopupService {
     return this.manualDecision(id, adminId, 'REJECT', reason.trim());
   }
 
+  // Chuyển trạng thái đơn nạp tiền một cách nguyên tử trong database transaction trước khi làm bước tiếp theo
+  // Mục đích: chống race condition (nhiều admin bấm cùng lúc) và đảm bảo có audit log trước khi động tới tiền.
+  // Dùng chung cho cả approve và reject.
   private async manualDecision(id: string, adminId: string, action: 'APPROVE' | 'REJECT', reason?: string) {
     if (!this.store.$transaction) {
       throw new DomainException(503, 'TOPUP_OUTCOME_UNKNOWN', 'Atomic manual decision storage is unavailable');
@@ -330,7 +362,7 @@ export class TopupService {
       if (changed.count !== 1) {
         throw new DomainException(409, 'INVALID_TRANSITION', 'Topup expired or another decision already won');
       }
-      // Audit failure rolls back the claim before any Wallet request is sent.
+      // Nếu ghi audit log thất bại thì bước giành quyềnh xử lý đơn (claim) sẽ bị hoàn tác (rollback) trước khi bất kỳ request nào được gửi sang Wallet.
       await tx.topupAuditLog.create({ data: {
         topupRequestId: id, actorId: adminId, action: action === 'APPROVE' ? 'MANUAL_APPROVE_REQUESTED' : 'MANUAL_REJECT',
         fromStatus: TopupStatus.PENDING, toStatus: status, ...(reason ? { reason } : {}),
@@ -391,6 +423,7 @@ export class TopupService {
     return { fromPending: previousStatus === TopupStatus.PENDING };
   }
 
+  // Gọi cộng tiền.
   private async creditAndApprove(
     topupId: string,
     userId: string,
@@ -401,15 +434,17 @@ export class TopupService {
   ): Promise<CreditOutcome> {
     let result;
     try {
+      // Gọi đồng bộ API sang wallet
       result = await this.walletClient.topupCredit(userId, amount, code);
     } catch (error) {
-      // Transport failure: outcome unknown, the record stays PROCESSING.
+      // Lỗi tầng Transport: kết quả không thể xác định (outcome unknown), bản ghi bắt buộc phải được giữ ngueyen ở trạng thái PROCESSING.
       console.error('[Topup] Wallet credit transport failure', { topupId, code, error: (error as Error)?.message });
       return 'unknown';
     }
 
+    // Phân loại phải hồi từ Wallet.
     if (result.outcome === 'success') {
-      // Scalars only: updateMany rejects nested relation writes.
+      // Chỉ nhận các trường đơn lẻ (scalar only): hàm updateMany từ chối các thao tác ghi quan hệ lồng nhau (nested relation writes).
       const updated = await this.store.topupRequest.updateMany({
         where: { id: topupId, status: TopupStatus.PROCESSING },
         data: {
@@ -431,9 +466,10 @@ export class TopupService {
     }
 
     if (result.outcome === 'rejected') {
-      // Paid but the wallet refused the credit: this is an operational error,
-      // not a payment failure. Keep PROCESSING so the money is never lost and
-      // the recovery worker keeps reconciling; log once for alerting.
+      // Tiền đã thành toán (Paid) nhưng Ví lại từ chối cộng tiền: đây là lỗi vận hành nghiệp vụ
+      // chứ không phải là thanh toán thất bại. Bắt buộc phải GIỮ NGUYÊN trạng thái PROCESSING để
+      // tiền không bao giờ bị thất lạc và tiếng trình cứu hộ tiếp tục đối soát; ghi log một lần để
+      // kích hoạt cảnh báo.
       console.error('[Topup] Wallet definitively rejected credit', {
         topupId,
         code,
@@ -462,6 +498,7 @@ export class TopupService {
     return 'unknown';
   }
 
+  // Xác minh request gửi đến thực sự từ VNPAY.
   private verifySignature(queryArgs: unknown): SignatureResult {
     if (!queryArgs || typeof queryArgs !== 'object') {
       return { ok: false, reason: 'missing query' };
@@ -486,6 +523,7 @@ export class TopupService {
     for (const [key, value] of Object.entries(raw)) {
       // Only canonical single vnp_* string parameters are part of the checksum.
       // Arrays (duplicated query keys) and non-VNPAY keys are rejected outright.
+      // Chống tấn công chèn tham số.
       if (!key.startsWith('vnp_')) return { ok: false, reason: `unexpected parameter ${key}` };
       if (typeof value !== 'string') return { ok: false, reason: `non-string parameter ${key}` };
       params[key] = value;
@@ -496,6 +534,7 @@ export class TopupService {
       return { ok: false, reason: 'missing required parameters' };
     }
 
+    // Kiểm tra định dang do VNPAY cấp.
     if (params['vnp_TmnCode'] !== this.requireConfig('VNP_TMN_CODE')) {
       return { ok: false, reason: 'unknown terminal' };
     }
@@ -503,6 +542,7 @@ export class TopupService {
     const expected = this.sign(this.sortObject(params), secretKey);
     const expectedBuf = Buffer.from(expected, 'utf8');
     const providedBuf = Buffer.from(secureHash.toLowerCase(), 'utf8');
+    // Tính năng chống tấn công Timing Attack.
     if (expectedBuf.length !== providedBuf.length || !crypto.timingSafeEqual(expectedBuf, providedBuf)) {
       return { ok: false, reason: 'checksum mismatch' };
     }
@@ -526,6 +566,7 @@ export class TopupService {
     return value;
   }
 
+  // Thuật toán chuẩn VNPAY,quy định các tham số phải được sắp xếp trước khi băm SHA-512s
   private sign(sortedParams: VnpayParams, secretKey: string): string {
     const signData = Object.entries(sortedParams)
       .map(([key, value]) => `${key}=${encodeURIComponent(value).replace(/%20/g, '+')}`)

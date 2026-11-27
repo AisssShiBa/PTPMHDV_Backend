@@ -14,6 +14,7 @@ router.use(requireGateway);
 router.use(requireRole('ADMIN'));
 router.use(attachRequestId);
 
+// Lấy danh sáhc yêu cầu nạp tiền trên toàn hệ thống.
 router.get('/', topupController.getAdminTopups);
 router.post('/:id/approve', validate(schemas.paramIdSchema), topupController.approveTopup);
 router.post('/:id/reject',  validate(schemas.rejectTopupSchema), topupController.rejectTopup);

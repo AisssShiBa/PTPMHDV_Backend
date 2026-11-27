@@ -21,6 +21,9 @@ export class WalletService {
     // System wallets are seeded via migration, no runtime creation
   }
 
+  // Tạo ví mới cho một userId một cách an toàn:
+  //    - Nếu ví đã tồn tại thì trả về ví cũ.
+  //    - NẾu chưa có thì mới tạo ví mới.
   async createWallet(dto: CreateWalletDto) {
     const ownerType = dto.ownerType ?? OwnerType.USER;
     if (ownerType === OwnerType.SYSTEM) {
@@ -120,6 +123,7 @@ export class WalletService {
   }
 
   async getMeLedger(userId: string, options: GetMeLedgerOptions) {
+    // Tìm ví theo userId.
     const wallet = await prisma.wallet.findFirst({
       where: { userId, ownerType: OwnerType.USER },
     });
@@ -127,6 +131,7 @@ export class WalletService {
       throw new DomainException(HttpStatus.NOT_FOUND, "WALLET_NOT_FOUND", "Wallet was not found");
     }
 
+    // Xử lý riêng type = "WITHDRAW"
     if (options.type === 'WITHDRAW') {
       return {
         items: [],
@@ -134,6 +139,7 @@ export class WalletService {
       };
     }
 
+    // Giải mã con trỏ phân trang.
     let parsedCursor: KeysetCursor | undefined;
     if (options.cursor) {
       parsedCursor = decodeCursor(options.cursor);
@@ -155,7 +161,7 @@ export class WalletService {
       whereConditions.push({ transferType: options.type });
     }
 
-    // Lọc theo thời điểm bắt và kết thúcđầu 
+    // Lọc theo thời điểm bắt và kết thúc đầu 
     if (options.startDate || options.endDate) {
       const dateFilter: Prisma.DateTimeFilter = {};
       if (options.startDate) {

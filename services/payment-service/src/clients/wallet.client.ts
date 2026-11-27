@@ -96,15 +96,16 @@ export class WalletClient {
   }
 
   /**
-   * Credits a user wallet for a VNPAY topup.
+   * Cộng tiền vào ví người dùng.
    *
-   * Three outcomes must be distinguishable by the caller:
-   *  - success  : wallet applied (or replayed) the credit; money moved exactly once.
-   *  - rejected : wallet deterministically refused; safe to keep the topup open for
-   *               reconciliation but never re-credit automatically.
-   *  - unknown  : transport failure, timeout, 5xx or malformed body. The wallet may
-   *               or may not have applied it, so the caller must NOT fail the topup.
-   * 408/429 are treated as unknown: they signal "try again", not "refused".
+   * Có 3 kết quả trả về:
+   *  - success  : Ví đã cộng tiền thành công (hoặc phát hiện giao dịch đã được cộng 
+   *              trước đó và trả lại kết quả cũ); tiền chỉ được chuyển đúng một lần duy nhất.
+   *  - rejected : Ví đã từ chối một cách chắc chắn/ dứt khoát; có thể an toàn giữ đơn 
+   *              nạp tiền ở trạng thái mở để đối soát, nhưng không tự động gọi cộng tiền lại.
+   *  - unknown  : Lỗi đường truyền, quá thời gian chờ(timeout), lỗi 5xx từ server hoặc body 
+   *              phản hồi sai định dạng => lúc này không được đánh dấu đơn nạp tiền là thất bại.
+   * Các mã lỗi 408/ 429 được xem là unknown: chúng báo hiệu "hãy tth lại", chứ không phải "bị từ chối".
    */
   async topupCredit(userId: string, amount: string, referenceId: string): Promise<TopupCreditResult> {
     let response: Response;
@@ -126,7 +127,7 @@ export class WalletClient {
     try {
       json = await response.json();
     } catch {
-      // A 2xx with an unparseable body still means the wallet may have credited.
+      // Một phản hồi c HTTP status 2xx nhưng phần body không parse được JSON vẫn có nghĩa là ví có thể đã côjng tiền rồi.
       return response.ok
         ? { outcome: 'unknown', status: response.status, code: 'INVALID_WALLET_RESPONSE' }
         : this.classifyRejection(response.status, null);

@@ -299,6 +299,7 @@ export class LedgerService {
     };
   }
 
+  // Tìm kiếm trên số cái (LedgerEntry) theo referenceId 
   async lookupByReferenceId(referenceId: string) {
     const entry = await prisma.ledgerEntry.findFirst({
       where: { referenceId },
