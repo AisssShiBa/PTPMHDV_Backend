@@ -48,6 +48,7 @@ export const vnpayReturn = async (req: Request, res: Response, next: NextFunctio
 
 export const getTopup = async (req: Request, res: Response, next: NextFunction) => {
     try {
+        // Lấy userId từ request auth nhằm đảm bảo danh tính người gọi đã được xác thực bằng chữ ký số và chống giả mạo.
         const userId = req.auth!.userId;   // ← từ req.auth
         const id = req.params.id as string;
 
@@ -60,6 +61,7 @@ export const getTopup = async (req: Request, res: Response, next: NextFunction) 
 
 export const getMyTopups = async (req: Request, res: Response, next: NextFunction) => {
     try {
+        // Lấy userId từ request auth nhằm đảm bảo danh tính người gọi đã được xác thực bằng chữ ký số và chống giả mạo.
         const userId = req.auth!.userId;   // ← từ req.auth
         const result = await topupService.getMyTopups(userId);
         res.status(200).json({ success: true, data: result });
@@ -70,6 +72,7 @@ export const getMyTopups = async (req: Request, res: Response, next: NextFunctio
 
 export const getAdminTopups = async (req: Request, res: Response, next: NextFunction) => {
     try {
+        // Có nhận thêm Status nhưng không bắt buộc
         const status = req.query.status as string;
         const result = await topupService.getAdminTopups(status);
         res.status(200).json({ success: true, data: result });
@@ -78,6 +81,7 @@ export const getAdminTopups = async (req: Request, res: Response, next: NextFunc
     }
 };
 
+// Dùng duyệt thủ công một đơn nạp tiền đang chờ và kích hoạt cộng tiền vào ví người dùng.
 export const approveTopup = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const adminId = req.auth!.userId;  // ← từ req.auth (đã verify là ADMIN qua requireRole)

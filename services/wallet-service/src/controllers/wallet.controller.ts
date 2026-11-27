@@ -12,6 +12,7 @@ const ledgerService = new LedgerService();
 const walletHoldService = new WalletHoldService(ledgerService);
 const limitService = new LimitService();
 
+// Dùng để tạo ra một ví mới.
 export const create = async (req: Request, res: Response) => {
   const result = await walletService.createWallet(req.body);
   res.status(result.created ? 201 : 200).json({ success: true, data: { ...walletView(result.wallet), created: result.created } });
@@ -100,6 +101,7 @@ function parseEndDate(raw: unknown): Date | undefined {
   return d;
 }
 
+// helper dùng để kiểm tra và chuẩn hóa tham số query type trước khi truyền xuống service
 function parseTransferType(raw: unknown): TransferType | 'WITHDRAW' | undefined {
   if (typeof raw !== 'string' || !raw.trim()) return undefined;
   const upper = raw.trim().toUpperCase();
@@ -116,6 +118,7 @@ function parseTransferType(raw: unknown): TransferType | 'WITHDRAW' | undefined 
   throw new DomainException(400, 'INVALID_TYPE', `Loại giao dịch không hợp lệ: ${raw}`);
 }
 
+// helper dùng để kiểm tra và chuẩn hóa tham số direction.
 function parseDirection(raw: unknown): LedgerDirection | undefined {
   if (typeof raw !== 'string' || !raw.trim()) return undefined;
   const upper = raw.trim().toUpperCase();
@@ -125,7 +128,9 @@ function parseDirection(raw: unknown): LedgerDirection | undefined {
   throw new DomainException(400, 'INVALID_DIRECTION', 'Direction phải là CREDIT hoặc DEBIT');
 }
 
+// Dùng để lấy lịch sử giao dịch/ biến động số dư của chính người dùng đang đăng nhập.
 export const getMeLedger = async (req: Request, res: Response) => {
+  // 1. Kiểm tra ngữ cảnh xác thực
   const auth = (req as any).auth;
   if (!auth?.userId) {
     console.warn(JSON.stringify({
@@ -139,6 +144,7 @@ export const getMeLedger = async (req: Request, res: Response) => {
     });
   }
 
+  // 2. Lấy 20 dòng, max là 100.
   let limit = 20;
   if (req.query.limit !== undefined) {
     const rawLimit = Number(req.query.limit);
@@ -154,19 +160,24 @@ export const getMeLedger = async (req: Request, res: Response) => {
     limit = Math.min(rawLimit, 100);
   }
 
+  // 3. Chuẩn hóa cursor 
+  // Chỉ nhận req.query.cursor nếu là chuỗi không rỗng, ngược lại để undefined (lấy trang đầu tiên)
   const cursor = typeof req.query.cursor === 'string' && req.query.cursor.trim() !== ''
     ? req.query.cursor.trim()
     : undefined;
 
+  // 4. Parse và kiểm tra khoảng ngày.
   const startDate = parseStartDate(req.query.startDate);
   const endDate = parseEndDate(req.query.endDate);
   if (startDate && endDate && startDate.getTime() > endDate.getTime()) {
     throw new DomainException(400, 'INVALID_DATE_RANGE', 'startDate không thể lớn hơn endDate');
   }
 
+  // 5. Parse bộ lọc type và direction
   const type = parseTransferType(req.query.type);
   const direction = parseDirection(req.query.direction);
 
+  //6. Gọi service và log ghi lịch sử số cái.
   try {
     const result = await walletService.getMeLedger(auth.userId, {
       cursor,
@@ -184,7 +195,7 @@ export const getMeLedger = async (req: Request, res: Response) => {
     console.warn(JSON.stringify({
       route: '/me/ledger',
       userId: auth.userId,
-      errorCode: err.code || 'UNKNOWN_ERROR',
+      errorCode: err.code || 'UNKNO WN_ERROR',
       message: err.message,
     }));
     throw err;
@@ -342,6 +353,7 @@ export const refund = async (req: Request, res: Response) => {
   });
 };
 
+//Kiểm tra xem một giao dịch sổ cái (LedgerEntry) theo referenceId đã được wallet-service thực hiện hay chưa.
 export const lookupTransaction = async (req: Request, res: Response) => {
   const referenceId = req.query.referenceId as string;
   if (!referenceId) {
